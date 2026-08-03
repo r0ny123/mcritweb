@@ -62,8 +62,8 @@ def register():
         if not username:
             error = 'Username is required.'
         elif re.match("^(?=[a-zA-Z0-9._]{3,20}$)(?!.*[_.]{2})[^_.].*[^_.]$", username) is None:
-            error = "Username has wrong format."
-        elif username in ["guest", "mcritweb", "mcrit"]:
+            error = "Username has wrong format. Must be 3-20 characters, alphanumeric with dots and underscores allowed, but cannot start or end with dots/underscores."
+        elif username.lower() in ["guest", "mcritweb", "mcrit", "admin", "root", "system", "test", "demo"]:
             error = "Username is reserved."
         elif not password:
             error = 'Password is required.'
@@ -88,18 +88,18 @@ def register():
                 server_info.server_version = current_app.config['MCRITWEB_VERSION']
                 try:
                     server_info.saveToDb()
-                except:
-                    raise
-                    error = f"Server values invalid."
-            user_info.registered = datetime.utcnow()
-            user_info.last_login = 'no login'
-            user_info.apitoken = hashlib.md5(uuid.uuid4().bytes).hexdigest()
-            try:
-                user_info.saveToDb()
-            except sqlite3.IntegrityError:
-                error = f"User {username} is already registered."
-            else:
-                return redirect(url_for("authentication.login"))
+                except Exception as e:
+                    error = f"Server values invalid: {str(e)}"
+            if error is None:
+                user_info.registered = datetime.utcnow()
+                user_info.last_login = 'no login'
+                user_info.apitoken = hashlib.md5(uuid.uuid4().bytes).hexdigest()
+                try:
+                    user_info.saveToDb()
+                except sqlite3.IntegrityError:
+                    error = f"User {username} is already registered."
+                else:
+                    return redirect(url_for("authentication.login"))
         flash(error, category='error')
     proposed_registration_token = ""
     if g.first_user:
