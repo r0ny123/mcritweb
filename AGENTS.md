@@ -116,7 +116,7 @@ Adding a **table column setting** additionally means updating `UserColumnSetting
 
 ## Testing
 
-`python -m pytest` runs the suite with **no backend and no network** — pagination, user filters, the app-factory fixtures in `tests/conftest.py`, and `testMigrations.py`, which upgrades databases built in historical schemas (transcribed from release tags, not read from git — a CI checkout has no tags). `pytest.ini` maps the existing `test*.py` naming; keep it rather than renaming to `test_foo.py`. The `Makefile` targets reference `nose` (dead on modern Python) and a `.pylintrc` that does not exist — treat the `Makefile` as stale.
+`python -m pytest` runs the suite with **no backend and no network** — pagination, user filters, the app-factory fixtures in `tests/conftest.py`, and `testMigrations.py`, which upgrades databases built in historical schemas (transcribed from release tags, not read from git — a CI checkout has no tags). `pytest.ini` maps the existing `test*.py` naming; keep it rather than renaming to `test_foo.py`. `make test` and `make lint` run exactly what CI runs (`python3 -m pytest`, `python3 -m ruff check .`) — they used to call `nose` and a `.pylintrc` that has never existed in this repository, fixed in v1.4.7.
 
 Three backends are available to tests, all offline. `fake_mcrit` is strict — an unknown method raises `NotImplementedError` naming itself, so gaps surface as actionable failures. `recording_mcrit` never raises, for asking "did this request write anything". `corpus_mcrit` serves real captured reports from `tests/fixtures/` and is what makes result pages renderable; see the README there.
 
@@ -128,7 +128,7 @@ Three backends are available to tests, all offline. `fake_mcrit` is strict — a
 
 Coverage is thin and nothing exercises a real backend, so for anything touching views or templates still **verify by exercising the app**: `flask run` against a reachable MCRIT backend and walk the affected pages. When changing shared template macros (`table/*.html`), check every page that imports them — a macro is typically used by 3–5 templates. Results are cached under `instance/cache/` and never invalidated, so clear it when validating result rendering.
 
-CI (`.github/workflows/test.yml`) runs `ruff check .` plus the suite on Python 3.11 and 3.12. There is deliberately **no `ruff format` check** — this codebase has never been formatted and reflowing it would bury the history of every file. Keep `ruff check .` clean; the rule set in `ruff.toml` mirrors mcrit's.
+CI (`.github/workflows/test.yml`) runs `ruff check .` plus the suite on Python 3.11, 3.12, 3.13 and 3.14 — the last two became reachable only once the Flask 2.2.5 pin was lifted in #27, since it calls `pkgutil.get_loader`, removed in 3.14. There is deliberately **no `ruff format` check** — this codebase has never been formatted and reflowing it would bury the history of every file. Keep `ruff check .` clean; the rule set in `ruff.toml` mirrors mcrit's.
 
 ## Versioning & releases
 
@@ -148,6 +148,18 @@ CI (`.github/workflows/test.yml`) runs `ruff check .` plus the suite on Python 3
 - **Do not** change matching or scoring semantics here — MCRITweb only presents what the backend computes. Score→color mappings (`ScoreColorProvider`, `cross_compare.score_to_color`) are presentation and may change; scores themselves may not.
 - When work depends on backend behavior, read `../mcrit` rather than guessing at `McritClient`'s surface.
 - Clear `instance/cache/` when validating changes to result rendering or diagram generation — otherwise you will be looking at stale output.
+
+## Outward-facing artifacts
+
+Issues, issue comments, PRs — anything carrying the project's name. Filing is hard to un-notify, so the bar is higher than for a local change.
+
+- **Search for duplicates first, and read the near-misses.** Most of this backlog was filed 2022-08 → 2022-11 in a private repository and migrated verbatim, and several items have since had scope silently absorbed by a v1.4.x release. A symptom you just diagnosed is more often a comment on an existing issue than a new issue, and the person who filed it is still waiting. Reading the backlog as if it described today's code will send you to fix what is already fixed.
+- **Read the migration footer before trusting a body's age or its issue references.** Every migrated issue ends with `<sub>Migrated from the project's previous, private repository danielplohmann/mcritweb (issue #NN), opened YYYY-MM-DD by …</sub>`, so the GitHub creation date (2026-08-04 for most of the backlog) is the migration date, not the filing date. References *within* those bodies are already safe — they are written as `` `danielplohmann/mcritweb#148` ``, repo-qualified and backticked so GitHub does not autolink them. The footer's own parenthetical is the one trap: it is a bare `#NN`, which GitHub autolinks to whatever live issue now holds that number (#49's footer points at #98, unrelated). Take it as provenance, not as a link.
+- **Verify every `file:line` mechanically against the revision you cite** — `git show <rev>:<path> | sed -n '<line>p'` — and name that revision in the comment when the line is load-bearing. A reference written while the working tree carries local edits will be wrong, and wrong line numbers make a reader distrust the whole document. Line numbers also rot: a fix in the same file invalidates them, so prefer naming the symbol and use the line as a pointer, not as the identifier.
+- **Tag each claim as measured or inferred**, and give a cheap way to confirm the inferred ones. `tests/` is deliberately offline, so "not reproduced against a real backend" is the normal state for anything past login — say that rather than eliding it. Undifferentiated confidence is how a plausible guess ends up treated as a finding.
+- **Say if an implementation already exists** and invite coordination instead of assuming a patch is wanted.
+- **Group trivia and low-confidence items into one issue.** Keep separate issues only for things that have to be closed separately.
+- **Match the house voice** — read two or three existing issues before writing. The established shape is a short statement of the problem, evidence with `file:line` in backticks, impact, then options or a suggested fix, and no more confidence than the evidence carries.
 
 ## Agent skills
 
