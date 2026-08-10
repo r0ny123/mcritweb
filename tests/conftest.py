@@ -97,6 +97,18 @@ class FakeMcritClient:
         self._record("addBinarySample", binary, **kwargs)
         return FAKE_JOB_ID
 
+    def requestMatchesForUnmappedBinary(self, binary, **kwargs):
+        """Where `analyze.query` ends for an ordinary upload, once the per-role size cap
+        in QUERY_UPLOAD_LIMITS has let it through. Returns a job id, like the other
+        submitters."""
+        self._record("requestMatchesForUnmappedBinary", binary, **kwargs)
+        return FAKE_JOB_ID
+
+    def requestMatchesForMappedBinary(self, binary, base_address, **kwargs):
+        """The 'dumped' and 'smda' branches of the same route."""
+        self._record("requestMatchesForMappedBinary", binary, base_address, **kwargs)
+        return FAKE_JOB_ID
+
     def addImportData(self, import_data):
         """The dropzone upload path: `data.import_view` parses the uploaded file and
         hands the parsed object straight here.

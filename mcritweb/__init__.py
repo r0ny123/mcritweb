@@ -31,6 +31,22 @@ def create_app(test_config=None, instance_path=None):
         # token, not a replacement for it - "Lax" still permits top-level GET.
         SESSION_COOKIE_SAMESITE='Lax',
         SESSION_COOKIE_HTTPONLY=True,
+        # the session cookie is the entire proof of identity, and the reference
+        # deployment (docker-mcrit) terminates TLS in NGINX in front of the app, so it
+        # should never travel in the clear. Not while debugging, though: `flask_env.sh`
+        # sets FLASK_DEBUG=1 for a local run over plain HTTP, where a secure-only cookie
+        # is never sent back and login fails with nothing to point at. Set it explicitly
+        # in instance/config.py to override either way.
+        SESSION_COOKIE_SECURE=not app.debug,
+        # Werkzeug rejects a larger body with 413 before buffering it. This is a ceiling
+        # on absurdity rather than a tuned limit: it applies to every route uniformly,
+        # and /data/import takes whole-corpus exports, so it has to clear those. The
+        # per-role cap below is the fine-grained control.
+        MAX_CONTENT_LENGTH=1024 * 2**20,
+        # Per-role ceiling on a query upload, in bytes. A role absent from the mapping is
+        # uncapped beyond MAX_CONTENT_LENGTH. Issue #19: this was hardcoded at 1 MiB for
+        # visitors, which is the right default but the wrong place for it.
+        QUERY_UPLOAD_LIMITS={'visitor': 1 * 2**20},
     )
 
     if test_config is None:

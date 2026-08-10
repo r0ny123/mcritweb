@@ -295,8 +295,9 @@ def query():
             base_address = int(request.form['base_addr'], 16)
 
         binary_content = f.read()
-        if g.user.role == 'visitor' and len(binary_content) > 1 * 2**20:
-            flash(f'Your account may only upload files for query that are up to {1 * 2**20} bytes in size.', category='error')
+        role_limit = current_app.config.get('QUERY_UPLOAD_LIMITS', {}).get(g.user.role)
+        if role_limit is not None and len(binary_content) > role_limit:
+            flash(f'Your account may only upload files for query that are up to {role_limit} bytes in size.', category='error')
             return "", 403 # Bad Request
         # persist the upload in binary format
 
