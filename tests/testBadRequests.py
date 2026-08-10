@@ -37,6 +37,27 @@ def test_cross_compare_without_usable_samples_redirects(client, as_role, query):
     assert "/analyze/cross_compare" in response.headers["Location"]
 
 
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("", b"select at least one sample"),
+        ("?samples=", b"select at least one sample"),
+        ("?samples=,1,2", b"not a list of sample ids"),
+        ("?samples=1,2,", b"not a list of sample ids"),
+        ("?samples=abc", b"not a list of sample ids"),
+    ],
+)
+def test_a_malformed_sample_list_says_so_rather_than_blaming_the_selection(client, as_role, query, expected):
+    """Both cases used to flash "select at least one sample", which is the wrong advice
+    for a list that was sent but unparseable - and it is what hid the leading comma
+    `cross_compare.html` had been sending since the initial commit. The leading and
+    trailing forms are exactly what that bug produced when one half of the selection
+    was empty."""
+    as_role("visitor")
+    response = client.get(f"/analyze/start_cross_compare{query}", follow_redirects=True)
+    assert expected in response.data
+
+
 class TestCrossCompareStillWorks:
     """The strict fake raises on requestMatchesCross and the permissive one answers
     None, which is not a job id the redirect can be built from. Teach it one."""

@@ -55,9 +55,23 @@ Compare
 
   });
 
+  // The full selection is what the URL carried (selected_ids) plus what has been clicked
+  // on this page (selected). Either can be empty, and joining the two halves with a bare
+  // comma then yields a leading or trailing one. `analyze.cross_compare` tolerates that -
+  // it strips commas and skips empty elements - but `analyze.start_cross_compare` parses
+  // with parse_integer_list_query_param, whose pattern requires the value to begin and
+  // end with a digit, so it refused the list outright and flashed "select at least one
+  // sample" on a page where samples were plainly selected. Ids clicked out of the table
+  // arrive as cell text, so they are trimmed here too.
+  function joinSampleIds() {
+    return [].concat({{ selected_ids|tojson }}, selected)
+      .map(function(id) { return String(id).trim(); })
+      .filter(function(id) { return id.length > 0; })
+      .join(",");
+  }
   function setSelected() {
     var params = fetchState();
-    params.samples = {{ selected_ids|tojson }}.join(",")+","+params.cache;
+    params.samples = joinSampleIds();
     params.cache = null;
     pagination_js_helper(window.location.href, params);
   }
@@ -72,7 +86,7 @@ Compare
   }
   function createJob() {
     var params = fetchState();
-    var samples_string = {{ selected_ids|tojson }}.join(",")+","+params.cache;
+    var samples_string = joinSampleIds();
     window.location.href="/analyze/start_cross_compare?samples="+samples_string+"&rematch="+params.rematch+"&onlySelected="+params.onlySelected+"&minhashBandRange="+params.minhashBandRange;
   }
   function fetchState() {

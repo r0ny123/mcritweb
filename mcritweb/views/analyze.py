@@ -192,7 +192,14 @@ def start_cross_compare():
     # also rejects a non-numeric list, which used to raise from int(). See #94.
     selected_list = parse_integer_list_query_param(request, 'samples')
     if not selected_list:
-        flash('Please select at least one sample to cross compare.', category='error')
+        # the two cases were reported identically, and the wrong one of the two: a
+        # malformed `samples` told the user to select a sample on a page where several
+        # were selected, which is how the leading comma in cross_compare.html's
+        # createJob() went unnoticed from the initial commit until v1.4.8
+        if request.args.get('samples'):
+            flash('The samples to cross compare were not a list of sample ids.', category='error')
+        else:
+            flash('Please select at least one sample to cross compare.', category='error')
         return redirect(url_for('analyze.cross_compare'))
     job_id = client.requestMatchesCross(selected_list, force_recalculation=rematch, sample_group_only=only_selected, band_matches_required=minhash_band_range)
     return redirect(url_for('data.job_by_id', job_id=job_id, refresh=3))
