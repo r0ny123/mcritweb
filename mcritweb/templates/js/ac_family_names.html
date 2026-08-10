@@ -1,11 +1,12 @@
 <script>
-    var families = "{{ family_names | safe }}";
-    families = families.replace('[', '');
-    families = families.replace(']', '');
-    families = families.split(", ");
+    // |tojson emits a real array, so the repr-parsing this used to do - strip the
+    // brackets, split on ", ", shave a quote off each end - is gone with it. A family
+    // name is chosen by whoever submits or renames a family, and one containing a quote
+    // used to escape the string literal entirely.
+    var families = {{ family_names|tojson }};
     families_ac = [];
     for (let i in families) {
-        families_ac.push({label:families[i].substring(1, families[i].length-1), value:families[i].substring(1, families[i].length-1)})
+        families_ac.push({label:families[i], value:families[i]})
     }
     const sample_field = document.getElementById('sample_family_name');
     if(sample_field) {

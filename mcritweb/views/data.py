@@ -205,7 +205,9 @@ def match_functions(function_id_a, function_id_b):
             pichash_matches_a=pichash_matches_a,
             pichash_matches_b=pichash_matches_b,
             match_result=matched_function_entry,
-            node_colors=json.dumps(node_colors)
+            # the template serialises this with |tojson, which escapes for a script
+            # context - pre-serialising here would hand it a string to re-encode
+            node_colors=node_colors
         )
     flash("One of the function_ids is not valid.", category='error')
     return render_template("index.html")

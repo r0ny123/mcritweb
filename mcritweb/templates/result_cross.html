@@ -77,7 +77,7 @@ Results for Job: {{ job_info.job_id }}
     var array2 = []
     for (let i = 0; i < array1.length; i++) {
         array2.push(array1[i].innerHTML.split(' ')[0]);} 
-    var result = "{{ job_info.job_id|safe }}";
+    var result = {{ job_info.job_id|tojson }};
     window.location.href="/data/result/"+result+"?custom="+array2;
 
   }

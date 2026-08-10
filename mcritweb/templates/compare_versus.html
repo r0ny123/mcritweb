@@ -60,7 +60,7 @@ $(document).ready(function(){
     args = fetchState();
     args.selected_a = null;
     args._anchor = "Search_a";
-    null_keys = {{ pagination_a.params_list|safe }};
+    null_keys = {{ pagination_a.params_list|tojson }};
     for(var i = 0, size = null_keys.length; i < size ; i++){
       args[null_keys[i]] = null;
     }
@@ -77,7 +77,7 @@ $(document).ready(function(){
     args = fetchState();
     args.selected_b = null;
     args._anchor = "Search_b";
-    null_keys = {{ pagination_b.params_list|safe }};
+    null_keys = {{ pagination_b.params_list|tojson }};
     for(var i = 0, size = null_keys.length; i < size ; i++){
       args[null_keys[i]] = null;
     }
@@ -106,7 +106,7 @@ function fetchState() {
 }
 
 function handleSliderChange(val) {
-  const mapping = {{ minhash_slider_mapping | safe }};
+  const mapping = {{ minhash_slider_mapping|tojson }};
   document.getElementById("minhashBandRange-currentSelection").innerHTML = "&nbsp;"+mapping[val];
 }
 

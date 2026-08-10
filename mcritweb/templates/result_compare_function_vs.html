@@ -39,7 +39,7 @@ Function: {{ function_id_a }} vs {{ function_id_b }}
     window.onload = function() {
         var js_function_id_a = {{ function_id_a }};
         var js_function_id_b = {{ function_id_b }};
-        var js_node_colors = {{ node_colors|safe }};
+        var js_node_colors = {{ node_colors|tojson }};
         loadWithDotGraphAndFunctionIdA(js_function_id_a, js_node_colors)
         loadWithDotGraphAndFunctionIdB(js_function_id_b, js_node_colors)
     };
