@@ -2,6 +2,7 @@ import functools
 import hashlib
 import os
 import re
+import secrets
 import sqlite3
 import uuid
 from datetime import datetime
@@ -21,6 +22,25 @@ bp = Blueprint('authentication', __name__, url_prefix='/')
 #: reach nothing and no page explains why. Anything writing `user.role` validates
 #: against this first. See issue #95.
 KNOWN_ROLES = ('pending', 'visitor', 'contributor', 'admin')
+
+#: One message for both halves of a failed login. Saying which half was wrong tells an
+#: unauthenticated caller whether an account exists, one request at a time. See #101.
+LOGIN_FAILED = 'Incorrect username or password.'
+
+#: A real hash to check a password against when the username does not exist, so that
+#: "no such user" costs what "wrong password" costs. The message alone does not close
+#: the hole: password hashing is deliberately slow, so skipping it is measurable.
+#: Built on first use rather than at import, because every app start - and every test
+#: that builds one - would otherwise pay for a hash nobody needs.
+_ABSENT_USER_PASSWORD_HASH = None
+
+
+def _spend_a_password_check(password):
+    """Do the work a real password check would, and throw the answer away."""
+    global _ABSENT_USER_PASSWORD_HASH
+    if _ABSENT_USER_PASSWORD_HASH is None:
+        _ABSENT_USER_PASSWORD_HASH = generate_password_hash(secrets.token_urlsafe(32))
+    check_password_hash(_ABSENT_USER_PASSWORD_HASH, password)
 
 
 @bp.before_app_request
@@ -133,9 +153,10 @@ def login():
         user_info = UserInfo.fromDb(username=username)
         error = None
         if user_info is None:
-            error = 'Incorrect username.'
+            _spend_a_password_check(password)
+            error = LOGIN_FAILED
         elif not check_password_hash(user_info.password, password):
-            error = 'Incorrect password.'
+            error = LOGIN_FAILED
         if error is None:
             session.clear()
             session['user_id'] = user_info.user_id
