@@ -1,5 +1,4 @@
 import functools
-import hashlib
 import os
 import re
 import sqlite3
@@ -10,7 +9,7 @@ from flask import Blueprint, abort, current_app, flash, g, redirect, render_temp
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from mcritweb import db
-from mcritweb.db import ServerInfo, UserColumnSettings, UserFilters, UserInfo
+from mcritweb.db import ServerInfo, UserColumnSettings, UserFilters, UserInfo, generate_apitoken
 from mcritweb.views.utility import get_session_user_id
 
 bp = Blueprint('authentication', __name__, url_prefix='/')
@@ -101,7 +100,7 @@ def register():
             if error is None:
                 user_info.registered = datetime.utcnow()
                 user_info.last_login = 'no login'
-                user_info.apitoken = hashlib.md5(uuid.uuid4().bytes).hexdigest()
+                user_info.apitoken = generate_apitoken()
                 try:
                     user_info.saveToDb()
                 except sqlite3.IntegrityError:
