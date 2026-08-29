@@ -47,6 +47,29 @@ def test_linkhunt_renders_for_every_matching_report(client, as_role, report):
     assert response.status_code == 200
 
 
+@pytest.mark.parametrize("report", ["cross_compare", "unique_blocks"])
+def test_linkhunt_reports_a_report_it_cannot_read_instead_of_500ing(client, as_role, report):
+    """A job id is part of the URL, so any of them can be asked for a link hunt.
+
+    Only the matching reports carry one. The other job types used to reach the end of
+    the dispatch in `data.linkhunt` and return None, which Flask answers with a 500.
+    """
+    as_role("visitor")
+    response = client.get(f"/data/linkhunt/{job_id_of(report)}")
+    assert response.status_code == 200, f"{report} did not render"
+    # the sentence in result_incompatible.html
+    assert b"incompatible with the requested interpretation" in response.data
+
+
+def test_linkhunt_for_a_job_id_nobody_knows_says_it_was_not_found(client, as_role):
+    """Unknown job id and wrong report type are different answers, and were swapped:
+    the unknown case rendered "incompatible with the requested interpretation"."""
+    as_role("visitor")
+    response = client.get("/data/linkhunt/ffffffffffffffffffffffff")
+    assert response.status_code == 200
+    assert b"was not found in the system" in response.data
+
+
 def test_result_page_applies_a_score_filter(client, as_role):
     """The filter parameters drive MatchingResult.applyFilterValues, which is where a
     report gets narrowed - rendering it unfiltered proves much less."""
