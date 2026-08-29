@@ -29,25 +29,32 @@ reproduced sink to the bottom regardless of their claimed severity.
 
 ## Ranked table
 
+One row was added to this table after triage: the CI failure that turned out to block
+every PR. It is not an upstream issue - see `work/LOG.md`, 22:05Z.
+
 | # | prio | summary | reproduced | severity | effort | status |
 |---|---|---|---|---|---|---|
-| — | 1 | `/data/linkhunt/<job_id>` returns HTTP 500 for every job type that is not one of the four matching methods | **yes** | crash | S | PR opened |
-| 73 | 2 | Finished job with an empty result is reported as an unknown job id | **yes** | wrong behaviour | S | PR opened |
-| 98 | 3 | `datetime.utcnow()` + implicit sqlite3 datetime adapter: 405 deprecation warnings on 3.13, plus a latent read crash | **yes** | wrong behaviour (latent crash) | S | PR opened |
-| 54 | 4 | A search that matches nothing renders a heading and no message | **yes** | UX | S | PR opened |
-| 101 | 5 | Login says "Incorrect username." vs "Incorrect password.", confirming which accounts exist | **yes** | security | S (enumeration half) / L (rate limiting) | PR opened, partial |
-| 100 | 6 | API tokens generated with MD5; no way to rotate one | **yes** (code) | security | M | PR opened |
-| 78 | 7 | Search shows an entry twice when the term is also its id | **partially** | wrong behaviour | S | PR opened |
-| 79 | 8 | "Ups, search for `<hash>` ... failed!" when a sha256 is simply not in the DB | **partially** | UX | S | see notes — root cause is in `mcrit`, not here |
-| 89 | 9 | `mcrit_server_required` makes a blocking HTTP probe on every request to 36 routes | **yes** (code) | UX (latency) | M | not started — design decision belongs to the maintainer |
-| 51 | 10 | Job search is dead code | **yes** | UX | M | blocked — needs a backend search parameter |
+| — | 0 | Every CI unit job fails with `No module named pytest`; the suite has not run since `mcrit` moved it behind its `dev` extra | **yes** | blocks everything | S | PR opened — [#9](https://github.com/r0ny123/mcritweb/pull/9) |
+
+
+| # | prio | summary | reproduced | severity | effort | status |
+|---|---|---|---|---|---|---|
+| — | 1 | `/data/linkhunt/<job_id>` returns HTTP 500 for every job type that is not one of the four matching methods | **yes** | crash | S | PR opened — [#2](https://github.com/r0ny123/mcritweb/pull/2) |
+| 73 | 2 | Finished job with an empty result is reported as an unknown job id | **yes** | wrong behaviour | S | PR opened — [#3](https://github.com/r0ny123/mcritweb/pull/3) |
+| 98 | 3 | `datetime.utcnow()` + implicit sqlite3 datetime adapter: 405 deprecation warnings on 3.13, plus a latent read crash | **yes** | wrong behaviour (latent crash) | S | PR opened — [#4](https://github.com/r0ny123/mcritweb/pull/4) |
+| 54 | 4 | A search that matches nothing renders a heading and no message | **yes** | UX | S | PR opened — [#5](https://github.com/r0ny123/mcritweb/pull/5) |
+| 101 | 5 | Login says "Incorrect username." vs "Incorrect password.", confirming which accounts exist | **yes** | security | S (enumeration half) / L (rate limiting) | PR opened (partial) — [#6](https://github.com/r0ny123/mcritweb/pull/6) |
+| 100 | 6 | API tokens generated with MD5; no way to rotate one | **yes** (code) | security | M | PR opened — [#7](https://github.com/r0ny123/mcritweb/pull/7) |
+| 78 | 7 | Search shows an entry twice when the term is also its id | **partially** | wrong behaviour | S | PR opened — [#8](https://github.com/r0ny123/mcritweb/pull/8) |
+| 79 | 8 | "Ups, search for `<hash>` ... failed!" when a sha256 is simply not in the DB | **partially** | UX | S | not fixed — `work/notes/issue-79.md`; root cause looks like `mcrit`, not here |
+| 89 | 9 | `mcrit_server_required` makes a blocking HTTP probe on every request to 36 routes | **yes** (code) | UX (latency) | M | not fixed — `work/notes/issue-89.md`; the issue says the call is the maintainer's |
+| 51 | 10 | Job search is dead code (the form is inside a Jinja comment) | **yes** | UX | M | blocked — `work/notes/issue-51.md`; needs a backend filter parameter |
 | 65 | 11 | 'No data in table' message is the same everywhere | no (cosmetic, no repro needed) | UX | M | not started |
 | 52 | 12 | Line breaks in table headers and export/analyze buttons | can't (screenshot only) | cosmetic | S | not started |
 | 41 | 13 | Long job names need line breaks | can't (screenshot only) | cosmetic | S | not started |
 | 61 | 14 | Undeclared JS globals | partially | cosmetic | M | not started |
 | 35 | 15 | "Analyze" on a function row starts a 1vsN for the parent *sample* | **yes** (code) | wrong behaviour | L | not started — needs a function-analysis flow that does not exist |
 | 66 | 16 | Import page gives no progress indication | no | UX | M | not started |
-| 54.1 | — | *(see #54)* | | | | |
 | 99 | 17 | Result template rendering only covered for five report types | n/a (meta) | — | L | not started |
 | 93 | 18 | Configurable Unique Blocks page under Analyze | n/a (feature) | — | L | not started |
 | 80 | 19 | Block isolation table improvements | can't | — | M | not started |
