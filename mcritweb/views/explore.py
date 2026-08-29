@@ -357,6 +357,10 @@ def search():
         return render_template("search.html", search_types=types)
     client = get_client()
 
+    # a backend that answered None is a failed search, not an empty one, and the two
+    # have to look different on the page - see issue #54
+    search_failed = False
+
     #TODO: show id/sha matches in extra place
     families = []
     family_pagination = None
@@ -365,6 +369,7 @@ def search():
         results = client.search_families(query, **family_pagination.getSearchParams(), limit=family_pagination.limit)
         family_pagination.read_cursor_from_result(results)
         if results is None:
+            search_failed = True
             flash(f"Ups, search for {query} in MCRIT's families failed!", category="error")
         else:
             id_match = results['id_match']
@@ -382,6 +387,7 @@ def search():
         results = client.search_samples(query, **sample_pagination.getSearchParams(), limit=sample_pagination.limit)
         sample_pagination.read_cursor_from_result(results)
         if results is None:
+            search_failed = True
             flash(f"Ups, search for {query} in MCRIT's samples failed!", category="error")
         else:
             sha_match = results['sha_match']
@@ -407,6 +413,7 @@ def search():
         results = client.search_functions(query, **function_pagination.getSearchParams(), limit=function_pagination.limit)
         function_pagination.read_cursor_from_result(results)
         if results is None:
+            search_failed = True
             flash(f"Ups, search for {query} in MCRIT's functions failed!", category="error")
         else:
             id_match = results['id_match']
@@ -428,6 +435,7 @@ def search():
         function_pagination=function_pagination,
         query=query,
         search_types=types,
+        search_failed=search_failed,
         family_column_setup=family_column_setup,
         sample_column_setup=sample_column_setup,
         function_column_setup=function_column_setup

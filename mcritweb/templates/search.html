@@ -49,7 +49,14 @@ Search
      <input type='submit' hidden>
   </form>
 
+  {# tracked so a search that matched nothing can say so instead of rendering a
+     heading and then silence - see issue #54. Set inside the three blocks rather than
+     recomputed afterwards, so the conditions stay the single description of what
+     counts as a result. #}
+  {% set rendered = namespace(anything=False) %}
+
   {% if families |length > 0 or (family_pagination and family_pagination.hasCurrent) %}
+    {% set rendered.anything = True %}
     <h3 id="family-results">Families</h3>
     {{ set_pagination_params(family_pagination, _anchor="family-results") }}
     {{ family_table(families, sort_pagination=family_pagination, column_setup=family_column_setup) }}
@@ -59,6 +66,7 @@ Search
   {% endif %}
 
   {% if samples |length > 0 or (sample_pagination and sample_pagination.hasCurrent) %}
+    {% set rendered.anything = True %}
     <h3 id="sample-results">Samples</h3>
     {{ set_pagination_params(sample_pagination, _anchor="sample-results") }}
     {{ sample_table(samples, sort_pagination=sample_pagination, column_setup=sample_column_setup) }}
@@ -68,12 +76,20 @@ Search
   {% endif %}
 
   {% if functions |length > 0 or (function_pagination and function_pagination.hasCurrent) %}
+    {% set rendered.anything = True %}
     <h3 id="function-results">Functions</h3>
     {{ set_pagination_params(function_pagination, _anchor="function-results") }}
     {{ function_table(functions, sort_pagination=function_pagination, column_setup=function_column_setup) }}
     {% if functions %}
     {{ pagination_widget(function_pagination) }}
     {% endif %}
+  {% endif %}
+
+  {% if query and not rendered.anything and not search_failed %}
+    <div class="alert alert-info mt-3" role="alert">
+      Nothing matched <strong>{{ query }}</strong> in the categories ticked above.
+      Check the <a class="alert-link" href="{{ url_for('help') }}#search">search syntax</a>, or try a different term.
+    </div>
   {% endif %}
 
 {% endblock %}
