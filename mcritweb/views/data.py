@@ -609,12 +609,18 @@ def linkhunt(job_id):
         elif job_info.parameters.startswith("getMatchesForUnmappedBinary"):
             matching_result = MatchingResult.fromDict(result_json)
             return linkhunt_for_sample_or_query(job_info, matching_result)
+        else:
+            # link hunting reads a MatchingResult, so only a matching report can answer
+            # it. Every other finished job - cross compare, unique blocks, minhashing,
+            # a collection change - used to fall off the end of this chain, and a view
+            # that returns None is a 500 rather than an answer.
+            return render_template("result_incompatible.html", job_id=job_id)
     elif job_info:
         # if we are not done processing, list job data
         return render_template("job_in_progress.html", job_info=job_info)
     else:
         # if we can't find job or result, we have to assume the job_id was invalid
-        return render_template("result_incompatible.html", job_id=job_id)
+        return render_template("result_invalid.html", job_id=job_id)
 
 def linkhunt_for_sample_or_query(job_info, matching_result: MatchingResult):
     client = get_client()
