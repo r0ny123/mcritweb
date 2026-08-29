@@ -59,7 +59,15 @@ Settings
       {% if user_info.role == "admin" or user_info.role == "contributor" %}
       <tr>
         <td>apitoken:</td>
-        <td>{{user_info.apitoken}} {{ clipboard_btn(user_info.apitoken) }}</td>
+        <td>
+          {{user_info.apitoken}} {{ clipboard_btn(user_info.apitoken) }}
+          {# a write, so it is a button that POSTs rather than a link - see post_action.js #}
+          <button type="button" class="btn btn-outline-dark btn-sm"
+                  data-post="{{ url_for('admin.regenerate_apitoken') }}"
+                  title="Issue a new token. Anything using the old one stops working.">
+            <i class="fa-solid fa-arrows-rotate"></i>
+          </button>
+        </td>
       </tr>
       {% endif %}
     </table>
