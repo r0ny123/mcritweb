@@ -327,3 +327,37 @@ green on all four interpreters.
 - `work/notes/issue-51.md` — job search. The issue's migration note has drifted: the
   search form is inside a `{# ... #}` comment, so there is no search box at all. A
   working one needs a filter parameter on `getQueueData`, which is a `mcrit` change.
+
+## 2026-08-29T20:51Z — CI green on all eight PRs
+
+The queued webhook backlog (79 events) was entirely CI failures on **pre-fix heads** —
+`f2ab1aa`, `f1c247f`, `6e94552`, `2be4587`, `d013a09`, `c829473`, `3a3b2b9` — i.e. the
+commits before the CI fix was cherry-picked onto each branch, plus CodeRabbit's
+"Review skipped, auto reviews are disabled on this repository" notices, which need no
+action. Nothing in the backlog was a finding.
+
+On the current heads, every completed check is `success`:
+
+| PR | head | Ruff | 3.11 | 3.12 | 3.13 | 3.14 |
+|---|---|---|---|---|---|---|
+| #9 | 8268666 | ok | ok | ok | ok | ok |
+| #2 | 6b35e1e | ok | ok | ok | ok | ok |
+| #3 | 5439350 | ok | ok | ok | ok | ok |
+| #4 | 2120c23 | ok | ok | ok | ok | ok |
+| #5 | 812ff8a | ok | ok | ok | ok | ok |
+| #6 | 0bd417d | ok | ok | ok | ok | ok |
+| #7 | 65168d0 | ok | ok | ok | ok | ok |
+| #8 | 8b240b9 | ok | ok | ok | ok | ok |
+
+(A handful of duplicate jobs from the paired push/pull_request runs were still queued at
+the time of writing; no job on any post-fix head has failed.)
+
+A self check-in is scheduled hourly (`trig_01TBQpE69HGB2HUCmwkEkttN`) to re-check the
+eight PRs until they are merged or closed: any new failure is a real one, since the
+base-branch failure is now accounted for. It re-arms silently when nothing has changed.
+
+**Note for the next session:** the CI failure is the single most consequential thing
+found today, and it was invisible from the inside — Ruff stayed green throughout, so the
+pipeline read as healthy while the suite had not executed a line since `mcrit` moved
+pytest behind its `dev` extra. Worth checking, on any repo, that a green pipeline is
+actually running the tests it claims to.
