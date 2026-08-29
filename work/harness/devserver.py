@@ -22,7 +22,10 @@ import shutil
 import sys
 import tempfile
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
+# The repository this harness drives. Defaults to the checkout it lives in, but a
+# fix branch does not carry work/ - so a copy kept outside the tree can point at the
+# checkout with MCRITWEB_REPO and keep working across branch switches.
+REPO = pathlib.Path(os.environ.get("MCRITWEB_REPO") or pathlib.Path(__file__).resolve().parents[2]).resolve()
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "tests"))
 
