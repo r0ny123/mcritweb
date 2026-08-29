@@ -212,3 +212,118 @@ one-flag-over-three-sections change needs, including one asserting the echoed se
 term is escaped.
 
 → https://github.com/r0ny123/mcritweb/pull/5
+
+## 2026-08-29T21:20Z — PR 5: issue #101 (enumeration half)
+
+`/login` said `'Incorrect username.'` or `'Incorrect password.'`. Measured, before:
+
+```
+existing account   median  101.4 ms   message: ...Incorrect password.
+no such account    median    1.8 ms   message: ...Incorrect username.
+```
+
+**Decision:** shipped the timing fix alongside the message. A message-only fix would
+have *looked* closed while leaving a 56x timing oracle on the same endpoint — the two
+numbers above are from this codebase, not from a textbook. An absent username now
+costs a `check_password_hash` against a hash of a random secret. After: ~101 ms both
+ways, one message both ways.
+
+**Decision:** the rate limiting the issue is titled for is **not** shipped. The issue
+itself leaves the deciding question open ("per-account, enabling deliberate user
+denial-of-service, or per-IP only"), and two more it does not raise — where the counter
+lives, and that `request.remote_addr` behind NGINX is the proxy — are deployment
+decisions. Written up in `work/notes/issue-101.md`. PR title and body scope it to the
+half that shipped.
+
+**Self-review round 1** removed a test that asserted `elapsed > 0`, i.e. one that could
+never fail. The timing claim is asserted by counting `check_password_hash` calls
+instead — same claim, no wall-clock flake on a shared runner.
+
+→ https://github.com/r0ny123/mcritweb/pull/6
+
+## 2026-08-29T21:40Z — PR 6: issue #100
+
+Both halves the issue asks for. `hashlib.md5(uuid.uuid4().bytes).hexdigest()` at two
+call sites → one `db.generate_apitoken()` = `secrets.token_hex(32)`. New POST-only
+`admin.regenerate_apitoken`, reached from a `data-post` button, with a `routePolicy`
+row. Verified live:
+
+```
+POST /admin/regenerate_apitoken -> 302 ; token becomes a303356d...6342 (64 hex)
+GET  /admin/regenerate_apitoken -> 405
+POST without a CSRF token       -> 400
+```
+
+**Decision:** installed a test asserting a legacy 32-char md5 token still
+authenticates, because the risk of this change is somebody later adding a length check
+and locking out every pre-existing token.
+
+**Also fixed in the same commit:** the v0.12.0 backfill migration printed each token it
+generated to stdout — a live credential in the container log of every instance that
+upgraded through that version. Same call site, same issue.
+
+**Not done:** hashed-at-rest storage, which the issue explicitly sequences after these.
+
+→ https://github.com/r0ny123/mcritweb/pull/7
+
+## 2026-08-29T21:55Z — PR 7: issue #78
+
+The sample path the issue's title names is **already fixed** (deduplicated by
+`sample_id`). Families and functions still appended `id_match` and then every
+`search_results` entry to a plain list.
+
+**Decision:** rather than close #78 as fixed, apply the same fix to the two branches
+that were left behind, and say plainly in the PR that the reported symptom is the one
+that no longer occurs. The corpus cannot render the duplicate (its function names are
+empty strings, no family name contains its own id), so the tests build a backend that
+returns the same entry in both fields — which is exactly what mcrit does.
+
+**Self-review:** a dedup that also dropped distinct rows would pass every "appears
+once" test, so there is a fifth test asserting a multi-hit query still lists every row.
+
+→ https://github.com/r0ny123/mcritweb/pull/8
+
+## 2026-08-29T22:05Z — CI was red on every PR, and it was not the PRs
+
+All seven PRs came back with every `Unit tests (Python 3.x)` job failing:
+
+```
+/opt/hostedtoolcache/Python/3.11.16/x64/bin/python: No module named pytest
+##[error]Process completed with exit code 1
+```
+
+Ruff green throughout, which is what makes this look like a working pipeline.
+
+Root cause, measured:
+
+```
+$ python -c "import importlib.metadata as m; print([r for r in m.requires('mcrit') if 'pytest' in r])"
+['pytest; extra == "dev"', 'pytest-cov; extra == "dev"']
+```
+
+The Makefile said "pytest and pytest-cov arrive with mcrit, so requirements.txt covers
+both". They no longer do. The suite has not run in CI since mcrit moved them behind the
+`dev` extra. (The same thing bit me locally at 19:50 — I installed pytest by hand and
+did not stop to ask why, which I should have.)
+
+**Decision:** this is a base-branch failure, not any PR's, and no fix for it existed —
+so I wrote one (PR #9: install pytest pinned in the workflow, like ruff already is,
+rather than adding a test dependency to the runtime `requirements.txt`), and
+cherry-picked that same commit onto all seven branches so their CI can run before it
+merges. It no-ops once master carries it. One comment on each PR saying so. PR #9 is
+green on all four interpreters.
+
+## 2026-08-29T22:15Z — not fixed, written up instead
+
+- `work/notes/issue-79.md` — the "Ups, search failed!" message is not mis-worded; it
+  fires on a failed backend call. The reason a sha256 lookup produces it looks like an
+  unchecked `None` in `mcrit`'s `MinHashIndex.getSampleSearchResults`. **Inferred from
+  source, not executed** — there is no backend here. Softening the wording in MCRITweb
+  would hide a real error, so nothing shipped.
+- `work/notes/issue-89.md` — the probe. The issue says the decision belongs to the
+  error-handling owner and it is right; `MCRIT_SERVER_PROBE` already lets an operator
+  install a caching probe from `instance/config.py` without touching the decorator,
+  and the note carries that recipe.
+- `work/notes/issue-51.md` — job search. The issue's migration note has drifted: the
+  search form is inside a `{# ... #}` comment, so there is no search box at all. A
+  working one needs a filter parameter on `getQueueData`, which is a `mcrit` change.
