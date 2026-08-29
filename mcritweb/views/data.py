@@ -273,12 +273,25 @@ def result(job_id):
             return redirect(url_for('explore.families'))
         elif job_info.parameters in ["rebuildIndex()", "recalculatePicHashes()", "recalculateMinHashes()"]:
             return render_template("result_maintenance.html", result=result_json, job_info=job_info)
-    elif job_info and not (job_info.is_finished or job_info.is_failed or job_info.is_terminated):
-        # if we are not done processing, list job data
-        return render_template("job_in_progress.html", job_info=job_info)
-    else:
-        # if we can't find job or result, we have to assume the job_id was invalid
+        else:
+            # a job type this dispatch has never been taught. Falling off the end of the
+            # chain returned None, which Flask answers with a 500 rather than a page.
+            return render_template("result_incompatible.html", job_id=job_id)
+    # no report to show. Which of the reasons for that it is decides what to say, and
+    # `if result_json:` above cannot tell an empty report from an absent one - {} is
+    # falsy - so a finished job with an empty result used to land in the unknown-job-id
+    # page below. See issue #73.
+    if job_info is None:
+        # nothing knows this job id, so there is no missing result to explain
         return render_template("result_invalid.html", job_id=job_id)
+    if job_info.is_failed or job_info.is_terminated:
+        # checked ahead of is_finished so a job that is both keeps the answer it had
+        return render_template("result_invalid.html", job_id=job_id)
+    if job_info.is_finished:
+        # it ran to completion and the report it produced is empty. That is a result
+        return render_template("result_empty.html", job_id=job_id)
+    # if we are not done processing, list job data
+    return render_template("job_in_progress.html", job_info=job_info)
 
 def build_yara_rule(job_info, blocks_result, blocks_statistics):
     ubr = UniqueBlocksResult.fromDict(blocks_result)
