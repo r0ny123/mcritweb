@@ -130,13 +130,6 @@ def exact_match_marks(results, id_field):
     return marks
 
 
-# Row decorations for the two exact hits mcrit reports alongside a search (#53). See
-# templates/table/row_decoration.html for the shape; the variant names a Bootstrap
-# badge colour, which is why it is a name and not a class.
-ID_MATCH_DECORATION = {"badges": [{"text": "ID match", "variant": "success"}]}
-SHA_MATCH_DECORATION = {"badges": [{"text": "SHA256 match", "variant": "success"}]}
-
-
 #: The queue methods a sample listing can show. `table/sample_row.html` asks the
 #: collection for `matching_only=True` and for `method="getMatchesForSample"`, and
 #: `Job.has_sample_id` answers only for the methods that carry a sample id as an
@@ -598,7 +591,7 @@ def fetchDotGraph(function_id):
     function_entry = client.getFunctionById(function_id, with_xcfg=True)
     # An entry can reach us without its control flow graph: mcrit deletes the xcfg after
     # minhashing when STORAGE_DROP_DISASSEMBLY is set, and an export copies that empty
-    # graph on to whoever imports it (see docs/adr/0003 and the NotImplemented
+    # graph on to whoever imports it (see docs/adr/0011 and the NotImplemented
     # getFunctionGraph in mcrit's MinHashIndex). toSmdaFunction() raises on that, which
     # took the whole request down with a 500 and left the CFG panel blank without ever
     # saying why. picblockhashes can come back empty or null for the same reason.
@@ -686,12 +679,6 @@ def search():
     search_failed = set()
 
     #TODO: show id/sha matches in extra place
-    # #53: the exact hit is mixed into the ordinary result rows, so it needs marking
-    # where it lands. A decoration is keyed by the row id the table macro renders.
-    family_decorations = {}
-    sample_decorations = {}
-    function_decorations = {}
-
     families = {}
     family_exact_matches = {}
     family_pagination = None
@@ -707,7 +694,6 @@ def search():
             if id_match is not None:
                 family = FamilyEntry.fromDict(id_match)
                 families[family.family_id] = family
-                family_decorations[family.family_id] = ID_MATCH_DECORATION
             for family_entry in results['search_results'].values():
                 family = FamilyEntry.fromDict(family_entry)
                 families[family.family_id] = family
@@ -732,14 +718,12 @@ def search():
             if sha_match is not None:
                 sample_entry = SampleEntry.fromDict(sha_match)
                 samples[sample_entry.sample_id] = sample_entry
-                sample_decorations[sample_entry.sample_id] = SHA_MATCH_DECORATION
             id_match = results['id_match']
             if id_match is not None:
                 # both of these arrive as dicts off the wire, like sha_match above -
                 # which is the one branch here that deserialises before reading a field
                 sample_entry = SampleEntry.fromDict(id_match)
                 samples[sample_entry.sample_id] = sample_entry
-                sample_decorations[sample_entry.sample_id] = ID_MATCH_DECORATION
             for sample_dict in results['search_results'].values():
                 sample_entry = SampleEntry.fromDict(sample_dict)
                 samples[sample_entry.sample_id] = sample_entry
@@ -762,7 +746,6 @@ def search():
             if id_match is not None:
                 function_entry = FunctionEntry.fromDict(id_match)
                 functions[function_entry.function_id] = function_entry
-                function_decorations[function_entry.function_id] = ID_MATCH_DECORATION
             for function_dict in results['search_results'].values():
                 function_entry = FunctionEntry.fromDict(function_dict)
                 functions[function_entry.function_id] = function_entry
@@ -796,7 +779,4 @@ def search():
         family_exact_matches=family_exact_matches,
         sample_exact_matches=sample_exact_matches,
         function_exact_matches=function_exact_matches,
-        family_decorations=family_decorations,
-        sample_decorations=sample_decorations,
-        function_decorations=function_decorations,
     )

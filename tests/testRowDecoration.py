@@ -187,7 +187,15 @@ def test_badge_text_is_escaped(app, fake_mcrit):
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered
 
 
-# --- example 1: an id match, badged (issue #53) -----------------------------------
+# --- example 1: an id match, badged ----------------------------------------------
+#
+# The badge these two assert is issue #56's "Match" column, not a row decoration. Both
+# issues marked mcrit's exact hit on the search page and merging them rendered the mark
+# twice, side by side; #56's is the one kept, because it is labelled and it also marks
+# the family, sample and function listings, which decorations never reached. What is
+# asserted here - that the search page tells an exact hit apart from a text match - is
+# unchanged, and the decoration mechanism itself is covered by the macro-level tests
+# above and by the cross-compare tints below.
 
 def test_the_search_page_badges_an_id_match(client, as_role, fake_mcrit):
     """`explore.search` mixes mcrit's exact hit into the ordinary result rows, where
@@ -197,7 +205,7 @@ def test_the_search_page_badges_an_id_match(client, as_role, fake_mcrit):
 
     page = client.get(f"/explore/search?query={sample.sample_id}&type=sample").get_data(as_text=True)
 
-    assert '<span class="badge bg-success">ID match</span>' in page
+    assert "<span class=\"badge bg-primary\" title=\"Exact match on this record's ID\">ID</span>" in page
 
 
 def test_the_search_page_badges_a_sha256_match(client, as_role, fake_mcrit):
@@ -206,7 +214,7 @@ def test_the_search_page_badges_a_sha256_match(client, as_role, fake_mcrit):
 
     page = client.get(f"/explore/search?query={sample.sha256}&type=sample").get_data(as_text=True)
 
-    assert '<span class="badge bg-success">SHA256 match</span>' in page
+    assert "<span class=\"badge bg-primary\" title=\"Exact match on this record's SHA-256\">SHA-256</span>" in page
 
 
 def test_a_search_without_an_exact_hit_carries_no_badge(client, as_role, fake_mcrit):
