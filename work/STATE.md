@@ -92,7 +92,7 @@ every PR. It is not an upstream issue - see `work/LOG.md`, 22:05Z.
 | 64 | 50 | McritClient should return objects | can't (backend) | — | M | not started — `mcrit` issue |
 | 70 | 51 | Dark mode (labelled `wait`) | n/a (feature) | — | L | not started |
 | 74 | 52 | FunctionVs: graph sync, combined view | n/a (feature) | — | L | not started |
-| 76 | 53 | Function search ~30s when nothing matches | can't (needs a large real DB) | — | ? | not started — `mcrit` issue |
+| 76 | 53 | Function search ~30s when nothing matches | can't (needs a large real DB) | — | ? | **mcritweb half done in `fix/77-explore-page-backend-calls`** (`DEFAULT_SEARCH_TYPES`, explore.py:32) — the scan itself stays `mcrit`'s |
 | 77 | 54 | Sample search is slow too | can't (needs a large real DB); no body | — | ? | not started — `mcrit` issue |
 | 7 | 55 | Verify the nonlib frequency score calculation | can't (scoring lives in the backend) | — | ? | not started — out of scope per AGENTS.md |
 
@@ -398,3 +398,16 @@ fiction — `RecordingMcritClient` will happily record a call the real client ca
 **Caveat, stated:** `fkie-cad/mcrit`'s unreleased branch could not be read from here
 (the org is unreachable through this proxy). The evidence above is the newest published
 release. The three-layer list is the checklist to re-verify against if that changes.
+
+
+## A note for the next coverage audit
+
+Matching triaged issues against `fix/<n>-*` branch names finds one apparent gap, **#76**,
+and it is a naming artefact rather than a gap. Its mcritweb half - `/explore/search`
+defaulting to all three types, so a navbar search charges every user a function scan they
+did not ask for - ships on `fix/77-explore-page-backend-calls` as `DEFAULT_SEARCH_TYPES`,
+with a comment at `explore.py:429-434` naming #76. The scan's own cost is `mcrit`'s.
+
+So all 54 triaged issues are covered by a branch; several branches carry more than one
+issue, and one issue's fix lives under another issue's branch name. Audit by reading the
+branches, not by counting them.
