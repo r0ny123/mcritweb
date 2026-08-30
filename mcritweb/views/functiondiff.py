@@ -11,6 +11,7 @@ import struct
 from rapidfuzz.distance import Levenshtein
 from smda.intel.IntelInstructionEscaper import IntelInstructionEscaper
 
+from mcritweb.backend_errors import require_result
 from mcritweb.views.client import get_client
 
 
@@ -30,8 +31,8 @@ def get_all_picblock_matches(function_a, function_b):
     client = get_client()
     smda_function_a = function_a.toSmdaFunction()
     smda_function_b = function_b.toSmdaFunction()
-    sample_a = client.getSampleById(function_a.sample_id)
-    sample_b = client.getSampleById(function_b.sample_id)
+    sample_a = require_result(client.getSampleById(function_a.sample_id), "the sample the first function belongs to")
+    sample_b = require_result(client.getSampleById(function_b.sample_id), "the sample the second function belongs to")
     node_colors = {"a": {}, "b": {}}
     all_phbs_a = []
     for block in smda_function_a.getBlocks():
