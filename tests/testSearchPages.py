@@ -327,3 +327,32 @@ def test_descending_order_reverses_the_page(corpus_mcrit):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_an_empty_type_parameter_does_not_claim_nothing_matched(client, as_role):
+    """`?type=` splits to [""], which is truthy - so the page said "Nothing matched" for
+    a request in which no category was searched at all. Only reachable by hand-writing
+    the URL: unticking every box in the form sends no `type` at all, which correctly
+    falls back to all three."""
+    as_role("visitor")
+
+    page = client.get("/explore/search?query=foo&type=").get_data(as_text=True)
+
+    assert "Nothing matched" not in page
+
+
+def test_an_unknown_type_is_ignored_rather_than_counted(client, as_role):
+    as_role("visitor")
+
+    page = client.get("/explore/search?query=foo&type=notacategory").get_data(as_text=True)
+
+    assert "Nothing matched" not in page
+
+
+def test_the_form_default_still_searches_all_three(client, as_role):
+    """The guard must not break the ordinary case: no `type` at all means all three."""
+    as_role("visitor")
+
+    page = client.get("/explore/search?query=zzzznomatchzzzz").get_data(as_text=True)
+
+    assert "Nothing matched" in page
