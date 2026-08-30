@@ -37,8 +37,12 @@ This repository owns **no analysis data of its own**. Families, samples, functio
 The README states Python 3.8+; the reference deployment (`docker-mcrit`) runs **Python 3.12**. Target 3.11/3.12 for anything new.
 
 ```bash
-pip install -r requirements.txt
+make init   # requirements.txt, plus pytest/pytest-cov/ruff at the versions CI pins
 ```
+
+`pytest`, `pytest-cov` and `ruff` are not runtime dependencies, so they are not in
+`requirements.txt`; `mcrit` declares the first two under its `dev` extra, so they do
+not arrive with it either.
 
 A running MCRIT backend (server + worker + MongoDB) is required for essentially every page beyond login/register. Without it, `mcrit_server_required` flashes an error and redirects to the index.
 
@@ -61,7 +65,7 @@ Optional: set `PROFILER=True` in `instance/config.py` while `FLASK_DEBUG=1` to e
 - **App factory + blueprints.** `create_app()` builds the app, calls `db.init_app` and `db.migrate`, then registers the six blueprints. There is no ORM and no Flask extension for auth — everything is hand-rolled around `sqlite3` and `flask.session`.
 - **One seam for the backend client.** Views call `get_client()` from `views/client.py`; never construct a `McritClient` directly. The no-argument case is cached on `g` for the request, so a page of views reads the server URL and token from SQLite once. Passing kwargs (the API passthrough needs `raw_responses=True` and its own header-derived username) always returns a fresh instance. Tests substitute a backend through the `MCRIT_CLIENT_FACTORY` config key, which is why the seam exists.
 - **Request → job → result.** Long-running operations (matching, cross-compare, unique blocks, submissions) return a `job_id`; views redirect to `data.job_by_id` with a `refresh=N` parameter, and the job page polls until the result is ready. Result rendering dispatches on the `job_info.parameters` prefix in `data.result()`.
-- **Result caching.** Fetched result JSON is written to `instance/cache/results/`, and match diagrams are rendered once to `instance/cache/diagrams/<job_id>[-famid_N|-samid_N|-funid_N].png`. Both are keyed by `job_id` and never invalidated — a changed renderer needs the cache cleared to be visible.
+- **Result caching.** Fetched result JSON is written to `instance/cache/results/`, and match diagrams are rendered once to `instance/cache/diagrams/<job_id>[-famid_N|-samid_N|-funid_N].png`. Both are keyed by `job_id` and never invalidated — a changed renderer needs the cache cleared to be visible. Both are written through `write_atomically`, which parks the file in `instance/cache/incomplete/` and renames it into place, so a reader never catches half of one; that third directory is deliberately *beside* the two rather than inside either, because `data.diagram_file` serves every name under `cache/diagrams`.
 - **Filtering happens client-of-backend side.** `MatchingResult.setFilterValues()` / `.applyFilterValues()` (from `mcrit`) are driven by query parameters, falling back to the user's stored `UserFilters` when no filter params are present.
 
 ## Key concepts
