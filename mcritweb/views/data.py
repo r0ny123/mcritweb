@@ -372,8 +372,42 @@ def assign_matched_offsets(client, function_matches):
     return is_complete
 
 
+def recover_score_divisors(matching_result):
+    """The two totals the sample score columns are percentages of.
+
+    mcrit normalises the plain columns against the reference sample's *matchable*
+    bytes and the `nonlib_` ones against that total minus its library-matching
+    functions, and puts neither on the wire - so the hover text used to divide by
+    `binweight`, which is a third number, and state a percentage that was not the
+    quotient it had just shown (issue #7, docs/adr/0003-nonlib-frequency-score.md).
+
+    Both are exactly recoverable as `100 * bytes / percent` from any row that scored
+    above zero, because the divisor is a property of the reference sample rather than
+    of the match. Recovered from the unfiltered matches so that a filtered page shows
+    the same totals as the unfiltered one.
+
+    A report whose every row scores zero in one group leaves that group's divisor
+    unrecoverable. The fallbacks keep the fraction consistent with the percentage
+    anyway, since a zero numerator reads as 0% over any total.
+    """
+    divisors = {}
+    for group, prefix in (("matchable", ""), ("nonlibrary", "nonlib_")):
+        for sample_match in matching_result.sample_matches:
+            for kind in ("unweighted", "score_weighted", "frequency_weighted"):
+                percent = getattr(sample_match, f"matched_percent_{prefix}{kind}", 0)
+                if percent:
+                    divisors[group] = 100.0 * getattr(sample_match, f"matched_bytes_{prefix}{kind}") / percent
+                    break
+            if group in divisors:
+                break
+    divisors.setdefault("matchable", matching_result.reference_sample_entry.binweight)
+    divisors.setdefault("nonlibrary", divisors["matchable"])
+    return divisors
+
+
 def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult):
     score_color_provider = ScoreColorProvider()
+    score_divisors = recover_score_divisors(matching_result)
     filtered_family_id = parse_integer_query_param(request, "famid")
     filtered_sample_id = parse_integer_query_param(request, "samid")
     filtered_function_id = parse_integer_query_param(request, "funid")
@@ -483,7 +517,7 @@ def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult
         create_match_diagram(current_app, job_info.job_id, matching_result, filtered_family_id=filtered_family_id)
         sample_pagination = Pagination(request, matching_result.num_sample_matches, limit=10, query_param="samp", limit_param="sampl")
         function_pagination = Pagination(request, len(matching_result.getAggregatedFunctionMatches()), limit=100, query_param="funp", limit_param="funl")
-        return render_template("result_compare_family.html", famid=filtered_family_id, job_info=job_info, samp=sample_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_all) 
+        return render_template("result_compare_family.html", divisors=score_divisors, famid=filtered_family_id, job_info=job_info, samp=sample_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_all) 
     # filtered for sample
     elif filtered_sample_id is not None and client.isSampleId(filtered_sample_id):
         matching_result.filterToSampleId(filtered_sample_id)
@@ -495,7 +529,7 @@ def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult
             return render_template("result_corrupted.html", reason=MISSING_ENTRIES_REASON, job_info=job_info)
         sample_pagination = Pagination(request, 1, limit=10, query_param="samp", limit_param="sampl")
         function_pagination = Pagination(request, len(matching_result.getAggregatedFunctionMatches()), limit=100, query_param="funp", limit_param="funl")
-        return render_template("result_compare_sample.html", samid=filtered_sample_id, job_info=job_info, samp=sample_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_sample) 
+        return render_template("result_compare_sample.html", divisors=score_divisors, samid=filtered_sample_id, job_info=job_info, samp=sample_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_sample) 
     # filter for function - treat family/sample part as if there was no filter
     elif filtered_function_id is not None and filtered_function_id in matching_result.function_id_to_family_ids_matched:
         if not matching_result.is_query:
@@ -516,14 +550,14 @@ def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult
             return render_template("result_corrupted.html", reason=MISSING_ENTRIES_REASON, job_info=job_info)
         # we need to slice function matches ourselves based on pagination
         function_pagination = Pagination(request, matching_result.num_function_matches, limit=100, query_param="funp", limit_param="funl")
-        return render_template("result_compare_vs.html", job_info=job_info, matching_result=matching_result, funp=function_pagination, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_sample)
+        return render_template("result_compare_vs.html", divisors=score_divisors, job_info=job_info, matching_result=matching_result, funp=function_pagination, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_sample)
     # unfiltered / default -> also 1 vs group
     else:
         create_match_diagram(current_app, job_info.job_id, matching_result)
         family_pagination = Pagination(request, matching_result.num_family_matches, limit=10, query_param="famp", limit_param="fampl")
         library_pagination = Pagination(request, matching_result.num_library_matches, limit=10, query_param="libp", limit_param="libl")
         function_pagination = Pagination(request, len(matching_result.getAggregatedFunctionMatches()), limit=100, query_param="funp", limit_param="funl")
-        return render_template("result_compare_all.html", job_info=job_info, famp=family_pagination, libp=library_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_all)
+        return render_template("result_compare_all.html", divisors=score_divisors, job_info=job_info, famp=family_pagination, libp=library_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_all)
 
 
 def result_matches_for_cross(job_info, result_json):

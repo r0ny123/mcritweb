@@ -275,5 +275,56 @@ def test_score_columns_round_rather_than_truncate(client, as_role, renders, repo
     assert not not_rounded, f"{report}{query}: score cells not rounded: {not_rounded}"
 
 
+# the same hover text states a fraction above its percentage, and the percentage has to
+# be that fraction:  ... Bytes: 130682.88 / 152337.00 &#10;Percent: 85.79%
+SCORE_TOOLTIP = re.compile(r"Bytes:\s*(-?\d+\.\d+)\s*/\s*(\d+\.\d+)\s*&#10;Percent:\s*(-?\d+\.\d+)%")
+
+#: Both numbers in the fraction and the percentage itself are rendered to two decimals,
+#: so the quotient can miss the stated percentage by the percentage's own rounding. The
+#: numerator's rounding contributes ~4e-8 relative on these reports and is ignored.
+TWO_DECIMALS = 0.005 + 1e-6
+
+
+@pytest.mark.parametrize("report,query,template", SAMPLE_SCORE_PAGES)
+def test_score_tooltips_divide_by_the_total_their_percentage_uses(client, as_role, renders, report, query, template):
+    """The hover text used to print the sample's binweight as the divisor while
+    stating a percentage taken against a different total - the matchable bytes, or
+    for the `nonlib_` columns the matchable bytes minus the library-matching ones.
+    On the top match of `matches_for_sample` it offered 130682.88 / 155065 = 84.28
+    and then said 85.79%.
+
+    That is what sets a reader's expectation, and issue #7 is a report of the value
+    being "too far from the expected value" - so an inconsistency here is the defect,
+    not a cosmetic one. See docs/adr/0003-nonlib-frequency-score.md.
+    """
+    as_role("visitor")
+    response = client.get(f"/data/result/{job_id_of(report)}{query}")
+    assert response.status_code == 200
+    assert renders and renders[-1][0] == template, f"{report}{query} did not render {template}"
+
+    page = response.data.decode()
+    tooltips = SCORE_TOOLTIP.findall(page)
+    assert tooltips, f"{report}{query} rendered no score tooltip to check"
+
+    inconsistent = [
+        (numerator, divisor, percent)
+        for numerator, divisor, percent in (
+            (float(a), float(b), float(c)) for a, b, c in tooltips
+        )
+        if abs(100.0 * numerator / divisor - percent) > TWO_DECIMALS
+    ]
+    assert not inconsistent, (
+        f"{report}{query}: hover text states a fraction that is not its percentage: {inconsistent}"
+    )
+
+    # A report whose functions were all matchable and none library-matched would make
+    # the check above pass against the binweight too, so pin that the divisor actually
+    # moved off it. None of the three fixtures is that report.
+    binweight = renders[-1][1]["matching_result"].reference_sample_entry.binweight
+    assert any(float(divisor) != binweight for _, divisor, _ in tooltips), (
+        f"{report}{query}: every score tooltip still divides by the sample binweight {binweight}"
+    )
+
+
 if __name__ == "__main__":
     unittest.main()
