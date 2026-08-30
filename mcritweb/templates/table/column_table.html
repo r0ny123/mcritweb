@@ -150,6 +150,20 @@
         {% endfor %}
       </tr>
       <tr>
+        <td valign="middle">MinHash: </td>
+        {% for name_fe_se_ph in varargs %}
+          {# a function below the backend's size thresholds never gets one, and can
+             then only ever be found by PicHash - see issue #34 #}
+          <td valign="middle">
+            {% if name_fe_se_ph[1].minhash|length > 0 %}
+              <i style="color:green;" class="fa-solid fa-square-check" title="MinHash present"></i> present
+            {% else %}
+              <i style="color:darkred;" class="fa-solid fa-times-circle" title="MinHash missing"></i> missing
+            {% endif %}
+          </td>
+        {% endfor %}
+      </tr>
+      <tr>
         <td valign="middle">PicHash: </td>
         {% for name_fe_se_ph in varargs %}
           <td valign="middle">
