@@ -20,10 +20,19 @@ regression, not an improvement, and a search that quietly stops looking at funct
 is one too.
 """
 
+import copy
+import json
 import logging
 import re
 
 import pytest
+from mcrit.queue.LocalQueue import Job
+
+from mcritweb.views.explore import (
+    FAMILY_NAME_SUGGESTIONS,
+    SAMPLE_ROW_JOB_METHODS,
+    sample_row_job_collection,
+)
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
@@ -42,6 +51,15 @@ def calls_to(fake_mcrit, name):
     return [(args, kwargs) for called, args, kwargs in fake_mcrit.calls if called == name]
 
 
+#: The methods a job badge can ever count, taken from the installed mcrit rather than
+#: from mcritweb: `sample_row` asks for `matching_only=True` and gets an answer only
+#: where `Job.has_sample_id` has one, which is the matching methods that carry a sample
+#: id as an argument. `combineMatchesToCross` is matching but is not one of them.
+MATCHING_SAMPLE_METHODS = sorted(
+    set(Job({}, None).method_types["matching"]) & set(Job({}, None).method_types["sample_id"])
+)
+
+
 def badges(response):
     """sample_id -> the number in its job badge, for every row that has one."""
     found = {}
@@ -49,6 +67,68 @@ def badges(response):
         if "color:green" in match.group(0):
             found[int(match.group(1))] = int(re.search(r"&nbsp;(\d+)", match.group(0)).group(1))
     return found
+
+
+def rows_on(response):
+    """The sample ids the page rendered a row for, badge or no badge."""
+    return [int(sample_id) for sample_id in re.findall(r'id="sample_(-?\d+)_analyze"', response.get_data(as_text=True))]
+
+
+def expected_badges(queue, page_sample_ids):
+    """sample_id -> the badge count `sample_row` owes each row, read off the raw queue.
+
+    Written out here rather than taken from `JobCollection`, which is what the view
+    builds and the macro asks: an expectation computed by the code under test cannot
+    disagree with it. The rule is the one the listing implements - it keeps the jobs
+    whose *own* sample id (their first argument) is on the page, and each of those then
+    badges every sample it names, which for a `...Vs` job is two of them.
+    """
+    counts = {}
+    for document in queue:
+        method = document["payload"]["method"]
+        if method not in MATCHING_SAMPLE_METHODS:
+            continue
+        arguments = json.loads(document["payload"]["params"])
+        named = [int(arguments["0"])]
+        if method == "getMatchesForSampleVs":
+            named.append(int(arguments["1"]))
+        if named[0] not in page_sample_ids:
+            continue
+        for sample_id in named:
+            if sample_id in page_sample_ids:
+                counts[sample_id] = counts.get(sample_id, 0) + 1
+    return counts
+
+
+def requeued(document, number, sample_id):
+    """A captured queue document moved to another position in the queue.
+
+    The shape comes from the corpus rather than from a literal here, so a job that
+    the deserialiser stops accepting fails this the way it fails everything else.
+    Only the two fields the ordering rests on are rewritten: the submission counter
+    and the first argument, which is what `Job.sample_id` reads.
+    """
+    moved = copy.deepcopy(document)
+    moved["number"] = number
+    moved["_id"] = {"$oid": f"{number:024x}"}
+    params = json.loads(moved["payload"]["params"])
+    params["0"] = sample_id
+    moved["payload"]["params"] = json.dumps(params)
+    return Job(moved, None)
+
+
+class QueueByMethod:
+    """A backend that answers `getQueueData(method=...)` from a prepared queue.
+
+    Deliberately not the corpus client: the captured queue holds exactly one job per
+    matching method, which cannot distinguish any ordering from any other.
+    """
+
+    def __init__(self, jobs_by_method):
+        self.jobs_by_method = jobs_by_method
+
+    def getQueueData(self, method=None, **kwargs):
+        return list(self.jobs_by_method[method])
 
 
 # --- the queue is fetched by method, not wholesale --------------------------------
@@ -70,6 +150,18 @@ def test_a_listing_asks_the_queue_only_for_the_methods_its_rows_can_show(client,
     )
 
 
+def test_the_named_methods_are_the_ones_a_row_can_show():
+    """`SAMPLE_ROW_JOB_METHODS` is a hand-copy of an intersection that lives in mcrit,
+    and the two are tied together by nothing but this. Today the queue's
+    `getMatchesForSampleVsGroup` jobs are dropped either way, because `Job` does not
+    know the method at all and answers `sample_id` with None - so if mcrit ever teaches
+    `Job` about it, the badge would silently stop counting it and the row would go
+    blank, with no other test to say so. A version bump should fail here instead."""
+    assert sorted(SAMPLE_ROW_JOB_METHODS) == MATCHING_SAMPLE_METHODS, (
+        "the installed mcrit's matching methods that carry a sample id have changed"
+    )
+
+
 def test_a_listing_with_no_rows_asks_the_queue_for_nothing(client, as_role, fake_mcrit):
     """`/explore/families/1` is the example because the offline fake makes it one: it
     models search as a substring match, not mcrit's `field:value` parser, so the
@@ -85,20 +177,64 @@ def test_a_listing_with_no_rows_asks_the_queue_for_nothing(client, as_role, fake
 
 
 def test_the_listing_still_shows_which_samples_have_matching_jobs(client, as_role, fake_mcrit):
-    """The counterweight to the test above. The captured queue holds one
-    `getMatchesForSample(0)` and one `getMatchesForSampleVs(1, 3)`, and the second one
-    annotates both of its samples - `has_sample_id` looks at both arguments."""
+    """The counterweight to the test above: the narrowed fetch has to reach every job
+    the whole-queue fetch reached. The expectation is read off the captured queue, so a
+    regenerated fixture moves it rather than breaking it."""
     as_role("visitor")
 
     response = client.get("/explore/samples")
 
-    assert badges(response) == {0: 1, 1: 1, 3: 1}
+    # against the whole corpus rather than against the rows that came back: an
+    # expectation read off the page under test would shrink with it, and a listing that
+    # lost the annotated row would agree with itself
+    expected = expected_badges(fake_mcrit._queue, sorted(fake_mcrit._samples))
+    assert expected, "the captured queue annotates no sample in the corpus - nothing is being asserted"
+    assert set(expected) <= set(rows_on(response)), "a sample the queue annotates is not on this page"
+    assert badges(response) == expected
+
+
+def test_fetching_the_queue_per_method_still_answers_newest_first(corpus_mcrit):
+    """One request per method returns each method's jobs newest-first, so simply
+    concatenating the answers is newest-first only *within* a method - the whole-queue
+    order the single request used to answer in is gone. `sample_row_job_collection`
+    sorts it back, and this is the test the page-level ones cannot be: the captured
+    queue holds exactly one job per matching method, so `[0]` of it is the same job
+    whatever the order.
+
+    Driven at the function rather than through a page because nothing in a rendered
+    listing depends on the order today - `sample_row.html` re-filters by `method=` and
+    takes `[0]` of that - so the guard has to sit where the ordering is decided.
+    """
+    on_page = corpus_mcrit.getSampleById(0)
+    captured = {
+        method: next(doc for doc in corpus_mcrit._queue if doc["payload"]["method"] == method)
+        for method in SAMPLE_ROW_JOB_METHODS
+    }
+    # one old job and one new one per method, interleaved across the methods, each
+    # method answered newest-first the way the backend answers it
+    jobs_by_method = {
+        method: [requeued(captured[method], 100 + offset, on_page.sample_id),
+                 requeued(captured[method], offset, on_page.sample_id)]
+        for offset, method in enumerate(SAMPLE_ROW_JOB_METHODS)
+    }
+    concatenated = [job.number for method in SAMPLE_ROW_JOB_METHODS for job in jobs_by_method[method]]
+    assert concatenated != sorted(concatenated, reverse=True), (
+        "the prepared queue cannot tell a concatenation from a newest-first merge"
+    )
+
+    jobs = sample_row_job_collection(QueueByMethod(jobs_by_method), [on_page]).getJobs()
+
+    numbers = [job.number for job in jobs]
+    assert numbers == sorted(numbers, reverse=True), f"the merged queue came back as {numbers}"
+    assert sorted(numbers) == sorted(concatenated), "the merge lost or duplicated a job"
 
 
 def test_the_listing_still_links_the_last_matching_job(client, as_role, fake_mcrit):
-    """The dropdown's "Last 1:N Job" is the other thing the queue feeds. It takes the
-    first entry of the filtered list, so the newest-first order the backend answers in
-    is load-bearing - fetching per method must not reorder it."""
+    """The dropdown's "Last 1:N Job" is the other thing the queue feeds. It re-filters
+    by `method=` and takes `[0]`, so what this can show is that the link is still
+    rendered and still points at a real job; the ordering the `[0]` rests on is pinned
+    by `test_fetching_the_queue_per_method_still_answers_newest_first` instead, since
+    the captured queue holds only one job of this method."""
     as_role("visitor")
     job_id = next(
         job["_id"]["$oid"] for job in fake_mcrit._queue
@@ -166,15 +302,21 @@ def test_the_single_sample_page_forwards_its_sample_id_as_a_filter(client, as_ro
 def test_the_single_sample_page_still_lists_every_job_of_the_sample(client, as_role, fake_mcrit):
     """mcrit matches `filter` as a substring of the job's `method(args...)` string,
     which is a superset of the jobs whose own `sample_id` is this one - `Job.sample_id`
-    is read from those very arguments - so `filterToSampleIds` still lands exactly."""
+    is read from those very arguments - so `filterToSampleIds` still lands exactly.
+
+    The expectation is what the unnarrowed fetch would have found: every job in the
+    whole captured queue that `filterToSampleIds` keeps for this sample. Nothing in it
+    is written down here, so regenerating the fixture moves the target rather than
+    breaking the test."""
     as_role("visitor")
+    of_this_sample = [job for job in (Job(document, None) for document in fake_mcrit._queue) if job.sample_id == 0]
 
     page = client.get("/explore/samples/0").get_data(as_text=True)
 
-    assert "Sample has <a href=\"#jobs\">2 Jobs" in page
-    for job in fake_mcrit._queue:
-        if job["payload"]["method"] in ("getMatchesForSample", "getUniqueBlocks"):
-            assert job["_id"]["$oid"] in page, f"{job['payload']['method']} vanished from the job table"
+    assert of_this_sample, "the captured queue holds no job for sample 0"
+    assert f'Sample has <a href="#jobs">{len(of_this_sample)} Job' in page
+    for job in of_this_sample:
+        assert job.job_id in page, f"{job.method} vanished from the job table"
 
 
 def test_the_single_sample_page_survives_a_failed_function_search(client, as_role, fake_mcrit):
@@ -207,11 +349,22 @@ def test_the_fake_applies_the_queue_filter_after_paging_like_mcrit_does(corpus_m
     """`QueueRemoteCalls.getQueueData` filters the *already paged* slice, so a `filter`
     combined with a `limit` silently returns fewer rows than the limit asked for
     instead of the first `limit` matches. Nothing may lean on `filter` for paging, and
-    the fake has to make that visible rather than hide it."""
-    unpaged = corpus_mcrit.getQueueData(filter="addBinarySample")
-    paged = corpus_mcrit.getQueueData(filter="addBinarySample", limit=5)
+    the fake has to make that visible rather than hide it.
 
-    assert len(unpaged) == 7
+    `addBinarySample` is the demonstration because the captured queue's submissions are
+    its oldest jobs, so none of them is on the newest-first first page - which is what
+    makes an empty answer to a filter that matches plenty the visible symptom. Both of
+    those premises are asserted rather than assumed, so a regenerated fixture that no
+    longer has them says so."""
+    limit = 5
+    first_page = corpus_mcrit.getQueueData(limit=limit)
+    unpaged = corpus_mcrit.getQueueData(filter="addBinarySample")
+    paged = corpus_mcrit.getQueueData(filter="addBinarySample", limit=limit)
+
+    assert len(unpaged) > limit, "the captured queue has too few submissions to page past"
+    assert not any(job.method == "addBinarySample" for job in first_page), (
+        "the captured queue now opens with a submission - filter-after-paging would find it"
+    )
     assert paged == [], "the fake paged the matches instead of matching the page"
 
 
@@ -232,12 +385,18 @@ def test_a_page_with_an_edit_modal_does_not_download_every_family(client, as_rol
 
 
 def test_the_type_ahead_answers_a_bounded_number_of_names(client, as_role, fake_mcrit):
+    """The names arrive as *names*: `search_families` answers entry dicts, and a view
+    that forwarded those would fill the datalist with objects. Which names is read off
+    the corpus, so a regenerated fixture moves the expectation with it."""
     as_role("visitor")
+    matching = [family.family_name for family in fake_mcrit._families.values() if "cit" in family.family_name.lower()]
 
     response = client.get("/explore/familyNames?q=cit")
 
     assert response.status_code == 200
-    assert response.json == {"family_names": ["win.citadel"]}
+    assert 0 < len(matching) <= FAMILY_NAME_SUGGESTIONS, "the prefix no longer picks a testable slice of the corpus"
+    assert set(response.json) == {"family_names"}
+    assert sorted(response.json["family_names"]) == sorted(matching)
     assert [kwargs.get("limit") for _args, kwargs in calls_to(fake_mcrit, "search_families")] == [10]
 
 

@@ -48,6 +48,15 @@ def sample_row_job_collection(client, samples):
     "Last 1:N Job" link comes from only one of the two methods - so a partial result
     is not a smaller true answer, it is a wrong one, shown with no indication that it
     is wrong. An empty collection at least matches what the message says.
+
+    Concatenating the per-method answers would leave the result newest-first only
+    *within* a method, so the merge is sorted back into one order. `Job.number` is the
+    queue's own submission counter - `MongoQueue.put` takes it from a mongo counter,
+    `LocalQueue.put` from an instance one - so descending `number` is the newest-first
+    order an unqualified `getQueueData()` answered in. A job old enough to predate the
+    counter carries no number, which `Job.number` reports as -1; those sort last, as
+    the oldest, and python's stable sort leaves them in the order the backend listed
+    them.
     """
     if not samples:
         return JobCollection([])
@@ -58,6 +67,7 @@ def sample_row_job_collection(client, samples):
             flash("Ups, reading MCRIT's job queue failed - rows are shown without their job annotations.", category="error")
             return JobCollection([])
         jobs.extend(jobs_for_method)
+    jobs.sort(key=lambda job: job.number if isinstance(job.number, int) else -1, reverse=True)
     job_collection = JobCollection(jobs)
     job_collection.filterToSampleIds([sample.sample_id for sample in samples])
     return job_collection
