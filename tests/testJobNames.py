@@ -21,6 +21,7 @@ See issue #39.
 
 import collections
 import inspect
+import json
 import logging
 import pathlib
 import re
@@ -70,6 +71,25 @@ def test_every_job_method_the_backend_can_produce_has_a_name():
     rather than the new type quietly showing up as a raw RPC name in the interface."""
     unnamed = [method for method in every_queued_method() if method not in JOB_METHOD_NAMES]
     assert unnamed == [], f"no display name for {unnamed}"
+
+
+def test_every_method_in_the_captured_queue_has_a_name():
+    """A second ratchet, grounded in real captured data rather than in a declaration.
+
+    The queue fixture holds five `getMatchesForSampleVsGroup` jobs - the children of the
+    captured cross compare - so this method is not hypothetical: mcritweb submits cross
+    compares that produce it, and its headings were rendering as the raw RPC name. The
+    check above should have caught that and did not, because it ratcheted against a list
+    mcrit maintains by hand. This one cannot drift from reality the same way: it reads
+    what the backend actually put in the queue.
+    """
+    queue = json.loads((pathlib.Path(__file__).parent / "fixtures" / "queue.json").read_text())
+    documents = queue if isinstance(queue, list) else queue.get("data", [])
+    methods = {document.get("payload", {}).get("method") for document in documents}
+    methods.discard(None)
+
+    assert methods, "the queue fixture holds no jobs, so this proves nothing"
+    assert [method for method in sorted(methods) if method not in JOB_METHOD_NAMES] == []
 
 
 def test_the_ratchet_is_wider_than_the_queue_own_list():
