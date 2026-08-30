@@ -749,6 +749,25 @@ def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult
         return render_template("result_compare_all.html", diagram_size=diagram_size, job_info=job_info, famp=family_pagination, libp=library_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_all)
 
 
+def order_samples(samples, order):
+    """`samples` in the order `order` names them, or None if it names one that is not there.
+
+    The ordering used to scan `samples` for every id in `order`, which made laying
+    out n samples cost O(n^2) - and the cross-compare page does it once per matching
+    method, so six times over. Both sides are compared as strings because `order` is
+    either the report's clustered sequence or the `custom` query parameter, neither
+    of which is guaranteed to arrive as an int. See issue #68.
+    """
+    samples_by_id = {str(sample.sample_id): sample for sample in samples}
+    ordered_samples = []
+    for order_sample_id in order:
+        sample = samples_by_id.get(str(order_sample_id))
+        if sample is None:
+            return None
+        ordered_samples.append(sample)
+    return ordered_samples
+
+
 def result_matches_for_cross(job_info, result_json):
     client = get_client()
     samples = []
@@ -772,14 +791,10 @@ def result_matches_for_cross(job_info, result_json):
             order = None
         ordered_samples = []
         if order:
-            for order_sample_id in order:
-                for sample in samples:
-                    if str(sample.sample_id) == str(order_sample_id):
-                        ordered_samples.append(sample)
-                        break
-                else:
-                    reason = "MCRIT was not able to produce the chosen custom ordering, as some sample_ids are not part of the cross compare originally specified."
-                    return render_template("result_corrupted.html", reason=reason, job_info=result_json)
+            ordered_samples = order_samples(samples, order)
+            if ordered_samples is None:
+                reason = "MCRIT was not able to produce the chosen custom ordering, as some sample_ids are not part of the cross compare originally specified."
+                return render_template("result_corrupted.html", reason=reason, job_info=result_json)
         if ordered_samples != []:
             samples_by_method[method] = ordered_samples
         else:
