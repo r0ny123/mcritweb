@@ -713,6 +713,30 @@ def utc_now():
     return datetime.utcnow().replace(microsecond=0)
 
 
+def dependency_progress(child_jobs):
+    """How far a job waiting on dependencies actually is, or None if that is unknowable.
+
+    `Job.progress` is the parent's own counter, and a parent does not start until its
+    last child is done - so for the whole time the children run it reads 0, which is the
+    other half of what issue #46 calls meaningless. The children each carry a real
+    progress, and the page that shows this has already fetched them, so averaging costs
+    no additional backend call.
+
+    A finished child counts as done whatever its counter says: a worker that finishes
+    without ticking progress to 1.0 would otherwise hold the parent below 100% forever.
+    A child that has been deleted is skipped rather than counted as 0 - it is not
+    "no progress", it is "no longer knowable", and counting it as zero would make the
+    bar go backwards when a dependency is cleaned up.
+    """
+    known = [job for job in (child_jobs or []) if job is not None]
+    if not known:
+        return None
+    total = 0.0
+    for job in known:
+        total += 1.0 if job.finished_at else min(max(job.progress or 0, 0.0), 1.0)
+    return total / len(known)
+
+
 def job_timestamp_as_datetime(value):
     """One of Job's timestamps as a datetime, or None if it is unreadable.
 
@@ -899,7 +923,7 @@ def job_by_id(job_id):
         for job in child_jobs:
             if job.family_id is not None:
                 families_by_id[job.family_id] = client.getFamily(job.family_id)
-    return render_template('job_overview.html', families=families_by_id, samples=samples_by_id, job_info=job_info, auto_refresh=auto_refresh, child_jobs=child_jobs)
+    return render_template('job_overview.html', families=families_by_id, samples=samples_by_id, job_info=job_info, auto_refresh=auto_refresh, child_jobs=child_jobs, child_progress=dependency_progress(child_jobs))
 
 
 @bp.route('/jobs/<job_id>/delete', methods=('POST',))

@@ -23,7 +23,7 @@ from fixtureData import CorpusMcritClient, job_id_of, load
 from mcrit.queue.LocalQueue import Job
 
 from mcritweb.views import data
-from mcritweb.views.data import total_duration
+from mcritweb.views.data import dependency_progress, total_duration
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
@@ -138,9 +138,13 @@ class TestWhileTheDependenciesAreStillRunning:
 
         assert response.status_code == 200
         page = response.data.decode()
-        # the two numbers the job carries itself, neither of which says anything
         assert job_table_row(page, "Duration") == "This job hasn't finished yet"
-        assert job_table_row(page, "Progress") == "0.00%"
+        # `Job.progress` is the parent's own counter and reads 0 for the whole time the
+        # children run, which is the other half of what #46 calls meaningless. The row
+        # reports the dependencies instead: this fixture's five children are all done,
+        # so the parent is waiting on nothing and says so.
+        assert job_table_row(page, "Progress") == (
+            '100.00% <span class="text-muted">(across 5 dependencies)</span>')
         assert job_table_row(page, "Total (since queued)") == "0:01:30 and counting"
 
     def test_the_in_progress_page_reports_it_too(self, client, as_role, frozen_clock):
@@ -229,6 +233,42 @@ def test_total_duration_has_nothing_to_show(job):
     """Every shape that cannot produce a number renders as no row rather than a 500."""
     assert total_duration(job) is None
 
+
+
+class _Child:
+    """The two attributes `dependency_progress` reads, and nothing else."""
+
+    def __init__(self, progress=0.0, finished=False):
+        self.progress = progress
+        self.finished_at = "2026-08-06T10:46:18.000Z" if finished else None
+
+
+def test_dependency_progress_averages_the_children():
+    assert dependency_progress([_Child(0.0), _Child(0.5), _Child(1.0)]) == pytest.approx(0.5)
+
+
+def test_a_finished_child_counts_as_done_whatever_its_counter_says():
+    """A worker that finishes without ticking progress to 1.0 must not hold the parent
+    below 100% forever."""
+    assert dependency_progress([_Child(0.0, finished=True)]) == 1.0
+
+
+def test_a_deleted_dependency_is_skipped_not_counted_as_zero():
+    """Counting it as zero would make the number go *backwards* when a dependency is
+    cleaned up, which is worse than the 0% this row replaces."""
+    assert dependency_progress([_Child(1.0, finished=True), None]) == 1.0
+
+
+def test_no_knowable_children_means_no_number():
+    assert dependency_progress([]) is None
+    assert dependency_progress([None]) is None
+    assert dependency_progress(None) is None
+
+
+def test_a_counter_outside_zero_to_one_is_clamped():
+    """The counter is written by a worker; the row must not render -300% or 4200%."""
+    assert dependency_progress([_Child(5.0)]) == 1.0
+    assert dependency_progress([_Child(-2.0)]) == 0.0
 
 if __name__ == "__main__":
     unittest.main()
