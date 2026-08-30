@@ -1,6 +1,8 @@
 import json
 import re
 
+import requests
+
 from flask import Blueprint, current_app, flash, g, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -219,7 +221,15 @@ def backend_version(client):
     rendering it directly put `{'version': '1.4.3'}` on the page. It answers None when
     the backend could not be reached or refused, which is not a version either.
     """
-    version = client.getVersion()
+    try:
+        version = client.getVersion()
+    except requests.RequestException:
+        # An unreachable backend is exactly when an admin needs this page: it carries the
+        # form for correcting the server URL, and `backend_unavailable.html` sends them
+        # here to do it. Letting the transport failure out turns that instruction into a
+        # dead end - the one page that can fix the outage is the one the outage breaks.
+        # Only the transport family is caught; anything else here is our own bug.
+        return "unknown"
     if isinstance(version, dict):
         version = version.get("version")
     return version if isinstance(version, str) and version else "unknown"
