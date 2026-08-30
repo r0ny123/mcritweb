@@ -148,6 +148,35 @@ def test_a_job_that_has_not_finished_is_not_offered_a_rerun(client, as_role, fak
     assert not rerun_button_for(page, job_id)
 
 
+@pytest.mark.parametrize(
+    "state, fields",
+    [
+        ("queued", {"finished_at": None, "started_at": None, "progress": 0}),
+        ("in progress", {"finished_at": None, "progress": 0.5}),
+    ],
+    ids=["queued", "in progress"],
+)
+def test_posting_a_rerun_for_an_unfinished_job_queues_nothing(client, as_role, fake_mcrit, state, fields):
+    """Withholding the button only hides the door. The POST is reachable without it -
+    by hand, or from a page rendered a moment before the job started - and forcing a
+    recalculation then queues the same work alongside the run already in progress.
+
+    So the terminal-state check belongs in the route, not only in what decides whether
+    to draw the button. Found by Codex review of the first version, which had it in
+    is_rerunnable() alone.
+    """
+    as_role("visitor")
+    unfinished = altered_job("matches_for_sample", "aaaaaaaaaaaaaaaaaaaaaaa2")
+    unfinished.update(fields)
+    job_id = inject_job(fake_mcrit, unfinished)
+
+    response = client.post(f"/data/jobs/{job_id}/rerun", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert queued_calls(fake_mcrit) == [], f"a {state} job was rerun anyway"
+    assert b"has not finished yet" in response.data
+
+
 def test_a_failed_job_is_offered_a_rerun(client, as_role, fake_mcrit):
     """The case the button is most wanted for - a job that fell over and has to be
     tried again."""
