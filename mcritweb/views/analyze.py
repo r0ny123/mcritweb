@@ -10,7 +10,7 @@ from mcritweb.views.authentication import visitor_required
 from mcritweb.views.client import get_client
 from mcritweb.views.cursor_pagination import CursorPagination
 from mcritweb.views.pagination import Pagination
-from mcritweb.views.params import parse_band_range, parse_checkbox_query_param, parse_integer_list_query_param
+from mcritweb.views.params import parse_band_range, parse_base_addr_form_param, parse_checkbox_query_param, parse_integer_list_query_param
 from mcritweb.views.utility import mcrit_server_required
 
 bp = Blueprint('analyze', __name__, url_prefix='/analyze')
@@ -299,7 +299,10 @@ def query():
         if is_dump_or_smda:
             # the form also carries a bitness field, but McritClient has no parameter for it -
             # the server derives bitness from the mapped binary itself
-            base_address = int(request.form['base_addr'], 16)
+            base_address = parse_base_addr_form_param(request)
+            if base_address is None:
+                flash("Please enter the base address of the sample as a hexadecimal number, e.g. 0x400000.", category='error')
+                return "", 400 # Bad Request
 
         binary_content = f.read()
         role_limit = current_app.config.get('QUERY_UPLOAD_LIMITS', {}).get(g.user.role)
