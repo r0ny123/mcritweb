@@ -42,12 +42,15 @@ LOG = logging.getLogger(__name__)
 #: the text shown - which stays true either way, and the row is on the page regardless.
 SEARCH_FIELDS = ("family_name", "filename", "family", "component", "version", "sha256", "function_name")
 
-#: Operators whose value occurs literally inside the field it matched. "?" is the
-#: case-insensitive substring search, "" and "=" are equality - equally markable,
-#: they just end up marking the whole cell. Deliberately absent: the range
+#: Operators whose value occurs literally inside the field it matched, mapped to
+#: whether the value has to be the *whole* field. "?" is the case-insensitive
+#: substring search; "" and "=" are equality, and an equality term must only be
+#: marked when the field equals it - a row can be on the page because some other
+#: half of an OR matched, and marking a substring of a field that was never equal
+#: would claim a match the backend did not make. Deliberately absent: the range
 #: operators, whose value is not a substring of anything, and the negations
 #: ("!=", "!?"), which are satisfied by the value being *missing*.
-MARKABLE_OPERATORS = ("", "=", "?")
+MARKABLE_OPERATORS = {"": True, "=": True, "?": False}
 
 #: Both built on first use, and both imported there rather than at module scope so
 #: that `import mcritweb` stays cheap - the same reason create_app defers its own
@@ -80,15 +83,20 @@ def _get_node_types():
     return _NODE_TYPES
 
 
-def _add_term(terms_by_field, field, value):
-    """Record `value` as markable in `field`, keeping order and dropping duplicates."""
+def _add_term(terms_by_field, field, value, is_exact=False):
+    """Record `value` as markable in `field`, keeping order and dropping duplicates.
+
+    `is_exact` carries the operator through to the matcher: an equality term marks
+    the field only when the field *is* that value.
+    """
     if not isinstance(value, str) or not value.strip():
         # an empty needle is in every string at every position: it would mark the
         # whole table, and a find() loop over it would not advance
         return
     values = terms_by_field.setdefault(field, [])
-    if value not in values:
-        values.append(value)
+    term = (value, bool(is_exact))
+    if term not in values:
+        values.append(term)
 
 
 def _collect_terms(node, is_negated, terms_by_field):
@@ -104,7 +112,7 @@ def _collect_terms(node, is_negated, terms_by_field):
                 _add_term(terms_by_field, field, node.value)
     elif isinstance(node, SearchConditionNode):
         if not is_negated and node.operator in MARKABLE_OPERATORS:
-            _add_term(terms_by_field, node.field, node.value)
+            _add_term(terms_by_field, node.field, node.value, MARKABLE_OPERATORS[node.operator])
 
 
 def get_highlight_terms(query):
@@ -149,16 +157,29 @@ def _fold_case(text):
 
 
 def _match_spans(text, terms):
-    """The (begin, end) ranges of `text` covered by any of `terms`, merged."""
+    """The (begin, end) ranges of `text` covered by any of `terms`, merged.
+
+    A term is a `(value, is_exact)` pair. A bare string is accepted as a substring
+    term as well, so a template passing its own list of words still works.
+    """
     folded_text = _fold_case(text)
     spans = []
     for term in terms:
         # `split_search_matches` is a template global, so `terms` is whatever a template
-        # passed; anything that is not a string is skipped rather than raised over
-        if not isinstance(term, str):
+        # passed; anything of another shape is skipped rather than raised over
+        if isinstance(term, str):
+            value, is_exact = term, False
+        elif isinstance(term, (tuple, list)) and len(term) == 2 and isinstance(term[0], str):
+            value, is_exact = term[0], bool(term[1])
+        else:
             continue
-        needle = _fold_case(term)
+        needle = _fold_case(value)
         if not needle:
+            continue
+        if is_exact:
+            # an equality condition is about the whole field, not a part of it
+            if folded_text == needle:
+                spans.append((0, len(text)))
             continue
         start = 0
         while True:
