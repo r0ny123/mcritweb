@@ -172,7 +172,10 @@
     <tbody>
       <tr>
         <td valign="middle">Task:</td>
-        <td valign="middle">{{ job_info.parameters }}</td>
+        {# the same raw parameters string the jobs list wraps - it reaches the job
+           overview and every result page through this macro, so it needs the class
+           here too or the fix stops at the list. See issue #41. #}
+        <td valign="middle" class="job-description">{{ job_info.parameters }}</td>
       </tr>
       <tr>
         <td valign="middle">Job ID:</td>

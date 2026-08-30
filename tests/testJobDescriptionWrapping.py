@@ -79,5 +79,27 @@ def test_an_unrecognised_job_method_still_renders_its_raw_parameters(client, as_
     assert "job-description" in page
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/data/jobs/{job_id}",          # job_overview.html -> job_column_table
+        "/data/result/{job_id}",        # result pages -> matching_result_job_column_table
+        "/data/linkhunt/{job_id}",
+    ],
+)
+def test_the_task_row_wraps_wherever_it_is_shown(client, as_role, path):
+    """The jobs list is not the only place the raw parameters string appears. The
+    "Task:" row of job_column_table prints the same string, and that macro reaches the
+    job overview and - through matching_result_job_column_table - every result page. A
+    120-character filename in an addBinarySample job widens those tables past the
+    viewport exactly as it used to widen the list."""
+    as_role("visitor")
+
+    page = client.get(path.format(job_id=job_id_of("matches_for_sample"))).get_data(as_text=True)
+
+    assert "getMatchesForSample(0, 2)" in page, "the Task row is not on this page"
+    assert 'class="job-description">getMatchesForSample(0, 2)' in page
+
+
 if __name__ == "__main__":
     unittest.main()
