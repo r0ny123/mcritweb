@@ -19,6 +19,7 @@ def create_app(test_config=None, instance_path=None):
     from .secret_key import INSECURE_DEFAULT, load_or_create_secret_key
     from .views import administration, analyze, api, authentication, data, explore
     from .views.client import get_client
+    from .views.matching_statistics import matching_statistics
     from .views.params import get_minhash_matching_label
     from .views.utility import ensure_local_data_paths, forget_server_probe, get_mcritweb_version_from_setup
 
@@ -171,6 +172,10 @@ def create_app(test_config=None, instance_path=None):
     # it was found in. See mcritweb/search_highlighting.py.
     app.add_template_filter(get_highlight_terms, 'search_terms')
     app.add_template_global(split_search_matches, 'split_search_matches')
+    # the backend's match_aggregation describes the whole job and is never revised by
+    # filtering, so a result page narrowed to one family or sample has to recompute it
+    # over the matches it is showing - see the module docstring and issue #38
+    app.add_template_global(matching_statistics, "matching_statistics")
 
     # the user manual. Public, and deliberately not under /admin: it was the only
     # route in that blueprint without an admin gate, which made the prefix a lie.
