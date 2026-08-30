@@ -15,6 +15,7 @@ import time
 import unittest
 
 import pytest
+import requests
 
 from mcritweb.views import utility
 
@@ -62,8 +63,9 @@ def test_the_answer_is_reused_within_the_ttl():
 
 
 def test_a_down_backend_is_cached_too():
-    """Not caching "down" would leave the pathological case - an unreachable backend -
-    paying full price on every request, which is the case that hurts most."""
+    """A backend that answers but refuses our token. One round-trip, then reused - the
+    unreachable backend, which is the more expensive case, is covered separately by
+    test_an_unreachable_backend_is_probed_at_most_once_per_ttl."""
     probe = CountingProbe(answer=False)
 
     for _ in range(3):
@@ -81,17 +83,72 @@ def test_a_different_backend_url_is_probed_again():
     assert probe.calls == 2
 
 
-def test_a_raise_is_not_cached():
-    """A connection error is the answer most likely to change on its own, and the
-    caller turns it into a different message than up-or-down. Caching it would make a
-    backend that has just come back look down for the rest of the TTL."""
-    probe = CountingProbe(answer=ConnectionError("down"))
+def test_an_error_that_is_not_the_backends_is_not_cached():
+    """Only a `requests` failure is a report about the backend.
+
+    A builtin ConnectionError - or anything else out of the probe, such as a failed
+    read of the server settings - is a fault in this application, and repeating a
+    wrong answer for the length of the TTL is not an improvement on raising it.
+    """
+    probe = CountingProbe(answer=ConnectionError("not a requests error"))
 
     for _ in range(3):
         with pytest.raises(ConnectionError):
             utility.probe_server(probe, 60, "http://backend")
 
     assert probe.calls == 3
+
+
+def test_an_unreachable_backend_is_probed_at_most_once_per_ttl():
+    """The case issue #89 opens with, and the one the cache is worth most on.
+
+    A backend that answers 401 costs one round-trip. A backend that blackholes the
+    connection costs the whole 3.05s connect timeout, on every request to each of the
+    36 decorated routes - so an outage made every page in the application slow, and
+    caching only the answers that arrived left exactly that case paying full price.
+    """
+    probe = CountingProbe(answer=requests.exceptions.ConnectTimeout("blackholed"))
+
+    for _ in range(4):
+        with pytest.raises(requests.exceptions.ConnectTimeout):
+            utility.probe_server(probe, 60, "http://backend")
+
+    assert probe.calls == 1, "four requests, one connect timeout waited out"
+
+
+def test_a_cached_failure_is_dropped_when_the_settings_change():
+    """An operator who has just corrected an unreachable URL should not have to wait
+    out the TTL, which is as true of a cached failure as of a cached answer."""
+    probe = CountingProbe(answer=requests.exceptions.ConnectionError("down"))
+    for _ in range(2):
+        with pytest.raises(requests.exceptions.ConnectionError):
+            utility.probe_server(probe, 60, "http://backend")
+    assert probe.calls == 1, "the failure is being reused, or this proves nothing below"
+
+    utility.forget_server_probe()
+    with pytest.raises(requests.exceptions.ConnectionError):
+        utility.probe_server(probe, 60, "http://backend")
+
+    assert probe.calls == 2
+
+
+def test_replaying_a_cached_failure_does_not_grow_its_traceback():
+    """One stored exception object is raised again on every request for the length of
+    the TTL, and a plain `raise` appends the raising frame to its traceback each time -
+    so the object handed to the logger would get one frame longer per request."""
+    probe = CountingProbe(answer=requests.exceptions.ConnectionError("down"))
+    depths = []
+    for _ in range(5):
+        try:
+            utility.probe_server(probe, 60, "http://backend")
+        except requests.exceptions.ConnectionError as replayed:
+            depth, frame = 0, replayed.__traceback__
+            while frame is not None:
+                depth, frame = depth + 1, frame.tb_next
+            depths.append(depth)
+
+    # depths[0] is the probe's own raise, which has a frame the replays do not.
+    assert len(set(depths[1:])) == 1, f"the traceback grew across replays: {depths}"
 
 
 def test_forgetting_makes_the_next_call_probe():
@@ -129,6 +186,24 @@ def test_a_page_load_does_not_probe_once_per_request(app, client, as_role):
         client.get("/explore/families")
 
     assert probe.calls == 1, "four requests, one round-trip"
+
+
+def test_an_outage_does_not_cost_a_round_trip_per_page(app, client, as_role):
+    """The same reuse, through the decorator, for a backend that cannot be reached.
+
+    Each of these probes would have sat out the (3.05, 10) connect timeout before the
+    failure was cached, so this is the reuse that is worth whole seconds rather than
+    milliseconds.
+    """
+    probe = CountingProbe(answer=requests.exceptions.ConnectTimeout("blackholed"))
+    app.config["MCRIT_SERVER_PROBE"] = probe
+    as_role("visitor")
+
+    for _ in range(4):
+        response = client.get("/explore/families")
+        assert response.status_code == 302, "the gate still refuses"
+
+    assert probe.calls == 1, "four requests, one connect timeout waited out"
 
 
 def test_the_check_still_refuses_when_the_backend_is_down(app, client, as_role):
