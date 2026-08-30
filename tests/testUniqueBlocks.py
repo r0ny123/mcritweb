@@ -393,3 +393,71 @@ class TestAMultiSampleResult:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- an id the selection page never checked ---------------------------------------
+#
+# The selection page looks up only the ten ids it is currently rendering, so an id that
+# has scrolled off it, one whose sample was deleted since the page was drawn, or a
+# hand-written query string all used to reach the backend and queue a job that could
+# only fail. Reported by Codex on the PR.
+
+class TestSamplesThatDoNotExist:
+
+    @pytest.fixture
+    def fake_mcrit(self, corpus_mcrit):
+        return corpus_mcrit
+
+    def queued(self, fake):
+        return [args for name, args, _ in fake.calls if name == "requestUniqueBlocksForSamples"]
+
+    def test_an_unknown_id_is_reported_and_nothing_is_queued(self, client, as_role, fake_mcrit):
+        as_role("visitor")
+
+        response = client.get("/analyze/start_unique_blocks?samples=0,999999", follow_redirects=True)
+
+        assert b"No sample with id 999999" in response.data
+        assert self.queued(fake_mcrit) == [], "queued a job naming a sample that does not exist"
+
+    def test_the_ids_that_do_exist_are_kept_in_the_selection(self, client, as_role, fake_mcrit):
+        """Dropping the whole selection would punish the user for one stale row."""
+        as_role("visitor")
+
+        response = client.get("/analyze/start_unique_blocks?samples=0,999999")
+
+        assert response.status_code == 302
+        assert "samples=0" in response.headers["Location"]
+
+    def test_every_id_is_checked_not_just_the_first(self, client, as_role, fake_mcrit):
+        """The unknown id is last, so a check that stopped early would still submit.
+
+        It also keeps the route from reaching `requestUniqueBlocksForSamples`, which
+        the corpus client deliberately does not implement - teaching it would mean
+        answering a sample-set request with the captured *family* job id.
+        """
+        as_role("visitor")
+
+        client.get("/analyze/start_unique_blocks?samples=0,1,999999")
+
+        checked = {args[0] for name, args, _ in fake_mcrit.calls if name == "isSampleId"}
+        assert checked == {0, 1, 999999}
+
+    def test_a_selection_of_only_unknown_ids_still_reaches_the_page(self, client, as_role, fake_mcrit):
+        as_role("visitor")
+
+        response = client.get("/analyze/start_unique_blocks?samples=999998,999999", follow_redirects=True)
+
+        assert response.status_code == 200
+        assert self.queued(fake_mcrit) == []
+
+
+def test_the_submit_url_is_built_by_url_for(client, as_role, corpus_mcrit, app):
+    """Mounted under a SCRIPT_NAME or a reverse-proxy prefix, a root-relative literal
+    leaves the application entirely. Reported by Codex on the PR."""
+    app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: corpus_mcrit
+    as_role("visitor")
+
+    page = client.get("/analyze/unique_blocks", base_url="http://localhost/mcrit").get_data(as_text=True)
+
+    assert '"/mcrit/analyze/start_unique_blocks"' in page
+    assert '"/analyze/start_unique_blocks"' not in page
