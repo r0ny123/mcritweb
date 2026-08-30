@@ -36,9 +36,13 @@ def job_table_row(page, label):
 
     The rows are label/value cell pairs:
     <td valign="middle">Duration: </td><td valign="middle"> 0:00:00 </td>
+
+    The label cell may carry markup of its own - a row whose meaning needs explaining
+    wraps it in a `hint--right` span - so the label is matched inside the cell rather
+    than as the whole of it.
     """
     match = re.search(
-        r"<td valign=\"middle\">" + re.escape(label) + r": </td>\s*<td valign=\"middle\">\s*(.*?)\s*</td>",
+        r"<td valign=\"middle\"[^>]*>(?:<[^>]+>)?" + re.escape(label) + r": (?:</[^>]+>)?\s*</td>\s*<td valign=\"middle\"[^>]*>\s*(.*?)\s*</td>",
         page,
         re.S,
     )
@@ -57,7 +61,7 @@ def test_cross_job_page_reports_the_time_its_dependencies_took(client, as_role):
     assert response.status_code == 200
     page = response.data.decode()
     assert job_table_row(page, "Duration") == "0:00:00"
-    assert job_table_row(page, "Total (with dependencies)") == "0:00:08"
+    assert job_table_row(page, "Total (since queued)") == "0:00:08"
 
 
 def test_cross_result_page_reports_the_total_too(client, as_role):
@@ -66,7 +70,7 @@ def test_cross_result_page_reports_the_total_too(client, as_role):
     response = client.get(f"/data/result/{job_id_of('cross_compare')}")
 
     assert response.status_code == 200
-    assert job_table_row(response.data.decode(), "Total (with dependencies)") == "0:00:08"
+    assert job_table_row(response.data.decode(), "Total (since queued)") == "0:00:08"
 
 
 def test_a_job_without_dependencies_reports_only_its_own_duration(client, as_role):
@@ -77,7 +81,7 @@ def test_a_job_without_dependencies_reports_only_its_own_duration(client, as_rol
     assert response.status_code == 200
     page = response.data.decode()
     assert job_table_row(page, "Duration") == "0:00:03"
-    assert job_table_row(page, "Total (with dependencies)") is None
+    assert job_table_row(page, "Total (since queued)") is None
 
 
 # --- data.total_duration, over the timestamp shapes a Job can carry ----------------
