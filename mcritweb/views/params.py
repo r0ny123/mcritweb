@@ -10,7 +10,10 @@ import logging
 import re
 
 # slider position -> band_matches_required, as submitted to mcrit. Bijective, which
-# is what lets a finished job be read back to the setting it was submitted with.
+# is what lets a finished job be read back to the setting it was submitted with: the
+# analyze routes turn a position into a value, and a link back to one of those pages
+# turns a value the job recorded into the position that shows it (#32, #55). One table
+# rather than two that can drift apart.
 BAND_RANGE_ARG_TO_VALUE = {
     # deactivate minhash bands
     0: 0,
@@ -32,6 +35,20 @@ BAND_RANGE_LABELS = ["Off", "Fast", "Standard", "Complete"]
 # every candidate for band_matches_required <= 1), but they are distinct selections
 # and this reports what was selected.
 BAND_VALUE_TO_LABEL = {value: BAND_RANGE_LABELS[arg] for arg, value in BAND_RANGE_ARG_TO_VALUE.items()}
+
+
+def slider_position_for_band_range(band_matches_required):
+    """The slider position that asks for this `band_matches_required`, or None.
+
+    None means the slider cannot express the value, so a page preselected with it
+    would show a different comparison than the one it was reached from.
+    """
+    if isinstance(band_matches_required, bool) or not isinstance(band_matches_required, int):
+        return None
+    for position, value in BAND_RANGE_ARG_TO_VALUE.items():
+        if value == band_matches_required:
+            return position
+    return None
 
 
 def parse_band_range(request, from_form=False):
