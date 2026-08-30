@@ -174,3 +174,60 @@ def test_the_message_is_escaped(client, as_role, app, empty_mcrit):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- tables that sit under a search box --------------------------------------
+#
+# These three were missed on the first pass, and they are the worst offenders: each has
+# a search field immediately above it, so "No samples available. Click here to upload
+# your first sample" is shown to someone whose *search* missed on a full collection. The
+# message is not merely unhelpful there, it is false.
+
+@pytest.mark.parametrize(
+    "path,query_param",
+    [
+        ("/analyze/compare", "query"),
+        ("/analyze/compare_versus", "query_a"),
+        ("/analyze/compare_versus", "query_b"),
+    ],
+)
+def test_a_selection_page_search_that_missed_does_not_blame_an_empty_collection(client, as_role, path, query_param):
+    as_role("visitor")
+
+    page = client.get(f"{path}?{query_param}=zzznothingmatchesthis").get_data(as_text=True)
+
+    assert "upload your first sample" not in page
+    assert "No sample matches &#34;zzznothingmatchesthis&#34;." in page
+
+
+@pytest.mark.parametrize("path", ["/analyze/compare", "/analyze/compare_versus"])
+def test_the_same_page_without_a_search_still_offers_the_upload(client, as_role, path, monkeypatch, fake_mcrit):
+    """The old message is right when the collection really is empty - the point is to
+    stop saying it when it is not."""
+    as_role("visitor")
+    # a plain dict, not hasattr(fake_mcrit, ...): the strict fake's catch-all
+    # __getattr__ raises rather than answering False
+    monkeypatch.setattr(fake_mcrit, "search_samples", lambda *args, **kwargs: {
+        "search_results": {}, "cursor": {"forward": None, "backward": None},
+        "id_match": None, "sha_match": None,
+    })
+
+    page = client.get(path).get_data(as_text=True)
+
+    assert "upload your first sample" in page
+
+
+def test_paging_past_the_end_of_a_search_says_so(client, as_role, fake_mcrit, monkeypatch):
+    """A search section renders whenever the request carried a cursor, whether or not
+    the slice behind it has rows - so the "next" link on the last page lands on empty
+    tables under live headings."""
+    as_role("visitor")
+    monkeypatch.setattr(fake_mcrit, "search_samples", lambda *args, **kwargs: {
+        "search_results": {}, "cursor": {"current": "c", "forward": None, "backward": "b"},
+        "id_match": None, "sha_match": None,
+    })
+
+    page = client.get("/explore/search?query=citadel&type=sample&sample_cursor=c").get_data(as_text=True)
+
+    assert "upload your first sample" not in page
+    assert "No more samples match &#34;citadel&#34; on this page." in page
