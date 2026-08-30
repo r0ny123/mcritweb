@@ -133,6 +133,18 @@
   // factor away from fitted, and the same pan as a fraction of that pane's own graph
   // extent. Two identical graphs fit alike, so this reduces to an exact 1:1 mirror -
   // the common case on a comparison page.
+  //
+  // Worth being precise about *which* point the two panes agree on, because it is not
+  // the obvious one. The arithmetic below holds t/(s*W) equal across the panes, which
+  // is the graph-space coordinate at screen x = 0 - so it is the viewport's top-left
+  // corner that shows the same relative part of each function, not its centre. The two
+  // coincide exactly when the panes' fitted extents match (k = 1), which is the case
+  // for identical graphs and per-axis whenever both panes are limited by the same
+  // axis. They diverge when one pane is width-fitted and the other height-fitted.
+  // Measured on four function pairs in both orderings, wheel and drag: the visible
+  // fractions track each other throughout and there is no case where the passive pane
+  // goes off screen while the active one stays usable. Anchoring the centre instead
+  // would be a defensible change; it is not what this does.
   function syncGraphPanes(source_id, translate, scale){
     if(isSyncingGraphPanes || !isGraphSyncEnabled){
       return;
@@ -143,8 +155,13 @@
     if(!source || !target){
       return;
     }
-    // A function stored without its control flow graph renders an empty box, whose
-    // fitted scale is Infinity or NaN. Never let that leak into the other pane.
+    // Defensive, and deliberately not motivated by a case anyone has produced. A
+    // function stored without an xcfg does not reach here at all: `fetchDotGraph`
+    // raises before it answers, so `showGraph` never runs and the pane never
+    // registers. (With issue #67's one-node placeholder it does render, and its
+    // fitted scale is finite - measured 0.7752817603312121.) The guard stays because
+    // a degenerate extent would be silently mirrored as NaN into a pane the user was
+    // looking at, which is worse than doing nothing.
     if(!isUsableExtent(source.baseScale) || !isUsableExtent(target.baseScale)
       || !isUsableExtent(source.width) || !isUsableExtent(target.width)
       || !isUsableExtent(source.height) || !isUsableExtent(target.height)
