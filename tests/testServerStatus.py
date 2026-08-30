@@ -21,6 +21,7 @@ import re
 import unittest
 
 import pytest
+import requests
 from fixtureData import load
 
 LOG = logging.getLogger(__name__)
@@ -149,3 +150,30 @@ def test_a_version_that_cannot_be_read_says_so_rather_than_rendering_a_shape(app
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_the_server_page_still_opens_when_the_backend_is_unreachable(client, as_role, fake_mcrit, monkeypatch):
+    """The one page that can fix an outage must not be broken by the outage.
+
+    `/admin/server` carries the form for correcting the backend URL, and
+    `backend_unavailable.html` tells an admin to come here to do exactly that. Until now
+    `getVersion()` was called unguarded, so a genuinely unreachable backend raised
+    straight out of the view - turning that instruction into a dead end, on the only
+    page that could have ended the outage.
+    """
+    as_role("admin")
+
+    def unreachable(*args, **kwargs):
+        raise requests.exceptions.ConnectionError("connection refused")
+
+    monkeypatch.setattr(fake_mcrit, "getVersion", unreachable, raising=False)
+
+    response = client.get("/admin/server")
+
+    assert response.status_code == 200
+    page = response.get_data(as_text=True)
+    assert "unknown" in page, "the version it could not read should say so"
+    # matched on the id, which is double-quoted; the name attribute next to it uses
+    # single quotes, so asserting on `name="..."` would fail for the spelling rather
+    # than for the behaviour
+    assert 'id="mcrit_server_url"' in page, "the form that fixes the outage has to be here"
