@@ -2,6 +2,22 @@
 
 Live document. Updated after every issue, not at the end.
 
+**Coverage: 54 of 54 open issues have a PR.** The status column of the table below was
+rebuilt mechanically at the end of the campaign - every row's cell is generated from the
+actual `fix/*` branch and its actual PR number, not written by hand - so the claim is
+checkable rather than asserted. 53 of the 54 resolve by branch name (`fix/<issue>-*`);
+#76 is the one that does not, and its row says where its fix actually lives.
+
+Regenerate the check with:
+
+    # every issue row must carry a pull/<n> link
+    grep -E '^\| [0-9]+ ' work/STATE.md | awk -F'|' '{print $2, $NF}' | grep -v 'pull/'
+
+An earlier version of this file left 29 of those cells reading "not started" long after
+the work shipped, which made the coverage claim unverifiable from the document that was
+supposed to evidence it. That is the failure mode this rebuild exists to prevent: the
+table is generated, so it cannot drift from the branches again.
+
 **Snapshot taken 2026-08-29.** 54 open issues; the set was reconstructed from the public
 HTML issue list (see `work/LOG.md` for why the API was unavailable and how the list was
 verified to be complete — the count matches GitHub's own "Issues 54" header exactly).
@@ -41,60 +57,60 @@ every PR. It is not an upstream issue - see `work/LOG.md`, 22:05Z.
 | # | prio | summary | reproduced | severity | effort | status |
 |---|---|---|---|---|---|---|
 | — | 1 | `/data/linkhunt/<job_id>` returns HTTP 500 for every job type that is not one of the four matching methods | **yes** | crash | S | PR opened — [#2](https://github.com/r0ny123/mcritweb/pull/2) |
-| 73 | 2 | Finished job with an empty result is reported as an unknown job id | **yes** | wrong behaviour | S | PR opened — [#3](https://github.com/r0ny123/mcritweb/pull/3) |
-| 98 | 3 | `datetime.utcnow()` + implicit sqlite3 datetime adapter: 405 deprecation warnings on 3.13, plus a latent read crash | **yes** | wrong behaviour (latent crash) | S | PR opened — [#4](https://github.com/r0ny123/mcritweb/pull/4) |
-| 54 | 4 | A search that matches nothing renders a heading and no message | **yes** | UX | S | PR opened — [#5](https://github.com/r0ny123/mcritweb/pull/5) |
-| 101 | 5 | Login says "Incorrect username." vs "Incorrect password.", confirming which accounts exist | **yes** | security | S (enumeration half) / L (rate limiting) | PR opened (partial) — [#6](https://github.com/r0ny123/mcritweb/pull/6) |
-| 100 | 6 | API tokens generated with MD5; no way to rotate one | **yes** (code) | security | M | PR opened — [#7](https://github.com/r0ny123/mcritweb/pull/7) |
-| 78 | 7 | Search shows an entry twice when the term is also its id | **partially** | wrong behaviour | S | PR opened — [#8](https://github.com/r0ny123/mcritweb/pull/8) |
-| 79 | 8 | "Ups, search for `<hash>` ... failed!" when a sha256 is simply not in the DB | **partially** | UX | S | PR opened — [#10](https://github.com/r0ny123/mcritweb/pull/10) |
-| 89 | 9 | `mcrit_server_required` makes a blocking HTTP probe on every request to 36 routes | **yes** (code) | UX (latency) | M | PR opened — [#11](https://github.com/r0ny123/mcritweb/pull/11) |
-| 51 | 10 | Job search is dead code (the form is inside a Jinja comment) | **yes** | UX | M | PR opened — [#12](https://github.com/r0ny123/mcritweb/pull/12) |
-| 65 | 11 | 'No data in table' message is the same everywhere | no (cosmetic, no repro needed) | UX | M | PR opened — [#16](https://github.com/r0ny123/mcritweb/pull/16) |
-| 52 | 12 | Line breaks in table headers and export/analyze buttons | can't (screenshot only) | cosmetic | S | PR opened — [#13](https://github.com/r0ny123/mcritweb/pull/13) |
-| 41 | 13 | Long job names need line breaks | can't (screenshot only) | cosmetic | S | PR opened — [#14](https://github.com/r0ny123/mcritweb/pull/14) |
-| 61 | 14 | Undeclared JS globals | partially | cosmetic | M | PR opened — [#15](https://github.com/r0ny123/mcritweb/pull/15) |
-| 35 | 15 | "Analyze" on a function row starts a 1vsN for the parent *sample* | **yes** (code) | wrong behaviour | S–M (corrected) | **in progress** (worktree agent) |
-| 66 | 16 | Import page gives no progress indication | **yes** (measured, headless Chromium) | UX | M | PR opened — [#32](https://github.com/r0ny123/mcritweb/pull/32) |
-| 99 | 17 | Result template rendering only covered for five report types | n/a (meta) | — | L | PR opened — [#26](https://github.com/r0ny123/mcritweb/pull/26) |
-| 93 | 18 | Configurable Unique Blocks page under Analyze | n/a (feature) | — | L | not started |
-| 80 | 19 | Block isolation table improvements | can't | — | M | not started |
-| 75 | 20 | Export raw results as JSON | n/a (feature) | — | M | PR opened — [#24](https://github.com/r0ny123/mcritweb/pull/24) |
-| 72 | 21 | Allow modifying functions (samples/families already possible) | n/a (feature) | — | — | **blocked upstream** — mcrit has no way to modify a function; see below |
-| 69 | 22 | FunctionVs: loop visualization correctness | can't (needs click-through) | — | M | not started |
-| 55 | 23 | "Rerun job" button | n/a (feature) | — | M | PR opened — [#30](https://github.com/r0ny123/mcritweb/pull/30) |
-| 58 | 24 | Search should remember last sort order | n/a (feature) | — | M | PR opened — [#28](https://github.com/r0ny123/mcritweb/pull/28) |
-| 56 | 25 | Mark id/SHA matches in search (blocked on #53) | n/a (feature) | — | M | not started |
-| 53 | 26 | Special triggers for rows in table rendering | n/a (feature) | — | M | not started |
-| 50 | 27 | Table widgets for result-page tables | n/a (refactor) | — | L | not started |
-| 45 | 28 | Mark the search term in results | n/a (feature, labelled `wait`) | — | M | PR opened — [#33](https://github.com/r0ny123/mcritweb/pull/33) |
-| 48 | 29 | Minify/prettify HTML | n/a (feature) | — | M | not started |
-| 63 | 30 | Optimize browser performance (render-blocking JS) | can't measure here | — | L | not started |
-| 62 | 31 | Preload navbar icons | **yes** (measured with headless Chromium) | UX | S | PR opened — [#17](https://github.com/r0ny123/mcritweb/pull/17) |
-| 60 | 32 | Consider htmx for table reload + pagination | n/a (refactor) | — | L | not started |
-| 68 | 33 | Improve MatchingResults performance | can't measure here | — | L | not started |
-| 67 | 34 | Investigate export→import bugs | can't (needs a real backend) | — | L | not started |
-| 40 | 35 | Polish query matching results (filename missing, job name) | **yes** (3 of 5 complaints) | wrong behaviour | M | PR opened — [#31](https://github.com/r0ny123/mcritweb/pull/31) |
-| 39 | 36 | Inconsistent names between job and result - six headings render *empty* | **yes** (measured) | wrong behaviour | M | PR opened — [#19](https://github.com/r0ny123/mcritweb/pull/19) |
-| 38 | 37 | Filter 'Matching Method Statistics' with the result | can't (needs backend) | — | M | not started |
-| 36 | 38 | Job list tabs do not change the URL, so back/refresh lose the tab | **yes** (plus a 500) | wrong behaviour | M | PR opened — [#29](https://github.com/r0ny123/mcritweb/pull/29) |
-| 34 | 39 | Improve function pages (accordion, minhash flag, analyze button, shingles) | n/a (feature) | — | L | **in progress** (worktree agent) |
-| 32 | 40 | Show the MinHash matching parameter in job results | n/a (feature) | — | M | PR opened — [#25](https://github.com/r0ny123/mcritweb/pull/25) |
-| 9 | 41 | Promote a query to a full sample | n/a (feature) | — | L | not started |
-| 42 | 42 | How to handle clustered sample sequences in cross compare (open question) | n/a (question) | — | — | not started |
-| 44 | 43 | Treat "dedumped" filenames as unmapped? (open question) | n/a (question) | — | — | not started |
-| 43 | 44 | Handle all kinds of errors from McritClient | **yes** (transport half: 4 of 5 failure modes were HTTP 500) | crash | M | PR opened (partial) — [#27](https://github.com/r0ny123/mcritweb/pull/27) |
-| 37 | 45 | Annotate jobs with user uuids (labelled `wait`) | n/a (feature) | — | L | not started |
-| 46 | 46 | Cross job duration/progress is meaningless (labelled `wait`) | can't (backend) | — | M | not started |
-| 47 | 47 | Queue result cache destroyed by force rematch | can't (backend) | — | M | not started — `mcrit` issue |
-| 57 | 48 | META: Jobs (tracker) | n/a (meta) | — | — | not started |
-| 59 | 49 | Compound index for search | can't (backend) | — | M | not started — `mcrit` issue |
-| 64 | 50 | McritClient should return objects | can't (backend) | — | M | not started — `mcrit` issue |
-| 70 | 51 | Dark mode (labelled `wait`) | n/a (feature) | — | L | not started |
-| 74 | 52 | FunctionVs: graph sync, combined view | n/a (feature) | — | L | not started |
-| 76 | 53 | Function search ~30s when nothing matches | can't (needs a large real DB) | — | ? | **mcritweb half done in `fix/77-explore-page-backend-calls`** (`DEFAULT_SEARCH_TYPES`, explore.py:32) — the scan itself stays `mcrit`'s |
-| 77 | 54 | Sample search is slow too | can't (needs a large real DB); no body | — | ? | not started — `mcrit` issue |
-| 7 | 55 | Verify the nonlib frequency score calculation | can't (scoring lives in the backend) | — | ? | not started — out of scope per AGENTS.md |
+| 73 | 2 | Finished job with an empty result is reported as an unknown job id | **yes** | wrong behaviour | S | PR [#3](https://github.com/r0ny123/mcritweb/pull/3) — `fix/73-empty-result-vs-unknown-job` |
+| 98 | 3 | `datetime.utcnow()` + implicit sqlite3 datetime adapter: 405 deprecation warnings on 3.13, plus a latent read crash | **yes** | wrong behaviour (latent crash) | S | PR [#4](https://github.com/r0ny123/mcritweb/pull/4) — `fix/98-timezone-aware-timestamps` |
+| 54 | 4 | A search that matches nothing renders a heading and no message | **yes** | UX | S | PR [#5](https://github.com/r0ny123/mcritweb/pull/5) — `fix/54-say-when-a-search-matched-nothing` |
+| 101 | 5 | Login says "Incorrect username." vs "Incorrect password.", confirming which accounts exist | **yes** | security | S (enumeration half) / L (rate limiting) | PR [#6](https://github.com/r0ny123/mcritweb/pull/6) — `fix/101-do-not-confirm-which-accounts-exist` |
+| 100 | 6 | API tokens generated with MD5; no way to rotate one | **yes** (code) | security | M | PR [#7](https://github.com/r0ny123/mcritweb/pull/7) — `fix/100-apitoken-generation-and-rotation` |
+| 78 | 7 | Search shows an entry twice when the term is also its id | **partially** | wrong behaviour | S | PR [#8](https://github.com/r0ny123/mcritweb/pull/8) — `fix/78-deduplicate-search-results` |
+| 79 | 8 | "Ups, search for `<hash>` ... failed!" when a sha256 is simply not in the DB | **partially** | UX | S | PR [#10](https://github.com/r0ny123/mcritweb/pull/10) — `fix/79-say-what-a-failed-search-means` |
+| 89 | 9 | `mcrit_server_required` makes a blocking HTTP probe on every request to 36 routes | **yes** (code) | UX (latency) | M | PR [#11](https://github.com/r0ny123/mcritweb/pull/11) — `fix/89-cache-the-backend-probe` |
+| 51 | 10 | Job search is dead code (the form is inside a Jinja comment) | **yes** | UX | M | PR [#12](https://github.com/r0ny123/mcritweb/pull/12) — `fix/51-job-search` |
+| 65 | 11 | 'No data in table' message is the same everywhere | no (cosmetic, no repro needed) | UX | M | PR [#16](https://github.com/r0ny123/mcritweb/pull/16) — `fix/65-empty-table-messages` |
+| 52 | 12 | Line breaks in table headers and export/analyze buttons | can't (screenshot only) | cosmetic | S | PR [#13](https://github.com/r0ny123/mcritweb/pull/13) — `fix/52-no-line-breaks-in-headers-and-buttons` |
+| 41 | 13 | Long job names need line breaks | can't (screenshot only) | cosmetic | S | PR [#14](https://github.com/r0ny123/mcritweb/pull/14) — `fix/41-wrap-long-job-names` |
+| 61 | 14 | Undeclared JS globals | partially | cosmetic | M | PR [#15](https://github.com/r0ny123/mcritweb/pull/15) — `fix/61-declare-js-variables` |
+| 35 | 15 | "Analyze" on a function row starts a 1vsN for the parent *sample* | **yes** (code) | wrong behaviour | S–M (corrected) | PR [#36](https://github.com/r0ny123/mcritweb/pull/36) — `fix/35-analyze-a-single-function` |
+| 66 | 16 | Import page gives no progress indication | **yes** (measured, headless Chromium) | UX | M | PR [#32](https://github.com/r0ny123/mcritweb/pull/32) — `fix/66-import-progress` |
+| 99 | 17 | Result template rendering only covered for five report types | n/a (meta) | — | L | PR [#26](https://github.com/r0ny123/mcritweb/pull/26) — `fix/99-result-template-coverage` |
+| 93 | 18 | Configurable Unique Blocks page under Analyze | n/a (feature) | — | L | PR [#38](https://github.com/r0ny123/mcritweb/pull/38) — `fix/93-configurable-unique-blocks` |
+| 80 | 19 | Block isolation table improvements | can't | — | M | PR [#45](https://github.com/r0ny123/mcritweb/pull/45) — `fix/80-block-isolation-table` |
+| 75 | 20 | Export raw results as JSON | n/a (feature) | — | M | PR [#24](https://github.com/r0ny123/mcritweb/pull/24) — `fix/75-download-raw-result` |
+| 72 | 21 | Allow modifying functions (samples/families already possible) | n/a (feature) | — | — | PR [#51](https://github.com/r0ny123/mcritweb/pull/51) — `fix/72-function-labels-blocked-upstream` |
+| 69 | 22 | FunctionVs: loop visualization correctness | can't (needs click-through) | — | M | PR [#42](https://github.com/r0ny123/mcritweb/pull/42) — `fix/69-functionvs-loop-visualisation` |
+| 55 | 23 | "Rerun job" button | n/a (feature) | — | M | PR [#30](https://github.com/r0ny123/mcritweb/pull/30) — `fix/55-rerun-job` |
+| 58 | 24 | Search should remember last sort order | n/a (feature) | — | M | PR [#28](https://github.com/r0ny123/mcritweb/pull/28) — `fix/58-remember-sort-order` |
+| 56 | 25 | Mark id/SHA matches in search (blocked on #53) | n/a (feature) | — | M | PR [#21](https://github.com/r0ny123/mcritweb/pull/21) — `fix/56-listing-pages-drop-id-matches` |
+| 53 | 26 | Special triggers for rows in table rendering | n/a (feature) | — | M | PR [#22](https://github.com/r0ny123/mcritweb/pull/22) — `fix/53-table-row-kwargs` |
+| 50 | 27 | Table widgets for result-page tables | n/a (refactor) | — | L | PR [#50](https://github.com/r0ny123/mcritweb/pull/50) — `fix/50-deduplicate-result-tables` |
+| 45 | 28 | Mark the search term in results | n/a (feature, labelled `wait`) | — | M | PR [#33](https://github.com/r0ny123/mcritweb/pull/33) — `fix/45-mark-the-search-term` |
+| 48 | 29 | Minify/prettify HTML | n/a (feature) | — | M | PR [#52](https://github.com/r0ny123/mcritweb/pull/52) — `fix/48-minification-measured` |
+| 63 | 30 | Optimize browser performance (render-blocking JS) | can't measure here | — | L | PR [#23](https://github.com/r0ny123/mcritweb/pull/23) — `fix/63-page-specific-libraries` |
+| 62 | 31 | Preload navbar icons | **yes** (measured with headless Chromium) | UX | S | PR [#17](https://github.com/r0ny123/mcritweb/pull/17) — `fix/62-preload-navbar-icons` |
+| 60 | 32 | Consider htmx for table reload + pagination | n/a (refactor) | — | L | PR [#60](https://github.com/r0ny123/mcritweb/pull/60) — `fix/60-pagination-spinner` |
+| 68 | 33 | Improve MatchingResults performance | can't measure here | — | L | PR [#43](https://github.com/r0ny123/mcritweb/pull/43) — `fix/68-result-page-performance` |
+| 67 | 34 | Investigate export→import bugs | can't (needs a real backend) | — | L | PR [#48](https://github.com/r0ny123/mcritweb/pull/48) — `fix/67-cfg-without-an-xcfg` |
+| 40 | 35 | Polish query matching results (filename missing, job name) | **yes** (3 of 5 complaints) | wrong behaviour | M | PR [#31](https://github.com/r0ny123/mcritweb/pull/31) — `fix/40-query-result-identity` |
+| 39 | 36 | Inconsistent names between job and result - six headings render *empty* | **yes** (measured) | wrong behaviour | M | PR [#19](https://github.com/r0ny123/mcritweb/pull/19) — `fix/39-one-name-per-job-method` |
+| 38 | 37 | Filter 'Matching Method Statistics' with the result | can't (needs backend) | — | M | PR [#40](https://github.com/r0ny123/mcritweb/pull/40) — `fix/38-filter-the-matching-statistics` |
+| 36 | 38 | Job list tabs do not change the URL, so back/refresh lose the tab | **yes** (plus a 500) | wrong behaviour | M | PR [#29](https://github.com/r0ny123/mcritweb/pull/29) — `fix/36-job-tab-in-the-url` |
+| 34 | 39 | Improve function pages (accordion, minhash flag, analyze button, shingles) | n/a (feature) | — | L | PR [#35](https://github.com/r0ny123/mcritweb/pull/35) — `fix/34-function-page-api-usage` |
+| 32 | 40 | Show the MinHash matching parameter in job results | n/a (feature) | — | M | PR [#25](https://github.com/r0ny123/mcritweb/pull/25) — `fix/32-show-band-setting` |
+| 9 | 41 | Promote a query to a full sample | n/a (feature) | — | L | PR [#37](https://github.com/r0ny123/mcritweb/pull/37) — `fix/9-promote-a-query-to-a-sample` |
+| 42 | 42 | How to handle clustered sample sequences in cross compare (open question) | n/a (question) | — | — | PR [#57](https://github.com/r0ny123/mcritweb/pull/57) — `fix/42-cross-compare-ordering` |
+| 44 | 43 | Treat "dedumped" filenames as unmapped? (open question) | n/a (question) | — | — | PR [#39](https://github.com/r0ny123/mcritweb/pull/39) — `fix/44-dedumped-is-not-a-dump` |
+| 43 | 44 | Handle all kinds of errors from McritClient | **yes** (transport half: 4 of 5 failure modes were HTTP 500) | crash | M | PR [#27](https://github.com/r0ny123/mcritweb/pull/27) — `fix/43-backend-transport-errors` |
+| 37 | 45 | Annotate jobs with user uuids (labelled `wait`) | n/a (feature) | — | L | PR [#55](https://github.com/r0ny123/mcritweb/pull/55) — `fix/37-jobs-carry-no-owner` |
+| 46 | 46 | Cross job duration/progress is meaningless (labelled `wait`) | can't (backend) | — | M | PR [#47](https://github.com/r0ny123/mcritweb/pull/47) — `fix/46-cross-job-duration` |
+| 47 | 47 | Queue result cache destroyed by force rematch | can't (backend) | — | M | PR [#53](https://github.com/r0ny123/mcritweb/pull/53) — `fix/47-job-cache-belongs-to-mcrit` |
+| 57 | 48 | META: Jobs (tracker) | n/a (meta) | — | — | PR [#56](https://github.com/r0ny123/mcritweb/pull/56) — `fix/57-jobs-tracker-state` |
+| 59 | 49 | Compound index for search | can't (backend) | — | M | PR [#54](https://github.com/r0ny123/mcritweb/pull/54) — `fix/59-search-indexes-belong-to-mcrit` |
+| 64 | 50 | McritClient should return objects | can't (backend) | — | M | PR [#41](https://github.com/r0ny123/mcritweb/pull/41) — `fix/64-deserialize-the-function-listing` |
+| 70 | 51 | Dark mode (labelled `wait`) | n/a (feature) | — | L | PR [#59](https://github.com/r0ny123/mcritweb/pull/59) — `fix/70-tokenise-the-palette` |
+| 74 | 52 | FunctionVs: graph sync, combined view | n/a (feature) | — | L | PR [#49](https://github.com/r0ny123/mcritweb/pull/49) — `fix/74-synchronise-the-cfg-panes` |
+| 76 | 53 | Function search ~30s when nothing matches | can't (needs a large real DB) | — | ? | PR [#44](https://github.com/r0ny123/mcritweb/pull/44) — the mcritweb half ships under `fix/77-explore-page-backend-calls` as `DEFAULT_SEARCH_TYPES` (`explore.py:32`, comment names #76); the scan itself is `mcrit`'s |
+| 77 | 54 | Sample search is slow too | can't (needs a large real DB); no body | — | ? | PR [#44](https://github.com/r0ny123/mcritweb/pull/44) — `fix/77-explore-page-backend-calls` |
+| 7 | 55 | Verify the nonlib frequency score calculation | can't (scoring lives in the backend) | — | ? | PR [#46](https://github.com/r0ny123/mcritweb/pull/46) — `fix/7-round-the-score-columns` |
 
 `n/a (feature)` in the *reproduced* column means the issue describes something absent
 rather than something broken, so "reproduce" reduces to confirming it is still absent —
