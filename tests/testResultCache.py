@@ -16,7 +16,7 @@ import unittest
 
 import pytest
 
-from mcritweb.views.data import load_cached_result
+from mcritweb.views.data import cache_result, load_cached_result
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
@@ -82,8 +82,11 @@ def test_a_job_id_that_looks_like_a_timestamp_matches_nothing(app):
 
 @pytest.mark.parametrize("job_id", ["*", "?" * 24, "[a-z]" * 4, "../../../etc/passwd", "a/b", "", None, 42])
 def test_a_job_id_that_is_not_a_job_id_is_refused(app, job_id):
-    """It arrives straight from the URL, and it is pasted into a filesystem path and
-    into a glob pattern."""
+    """It arrives straight from the URL, and it is pasted into a filesystem path -
+    so the characters it may contain are the ones that cannot leave the cache
+    directory. The glob metacharacters are here because they are the shape a reader
+    expects to see refused, not because anything globs: `load_cached_result` matches
+    names itself."""
     write_cached(app, f"20260806-104636-{JOB_ID}.json", {"report": "someone else's"})
     with app.app_context():
         assert load_cached_result(app, job_id) == {}
@@ -96,6 +99,14 @@ def test_an_unreadable_cache_file_falls_back_instead_of_failing_the_page(app):
     write_cached(app, f"20250101-000000-{JOB_ID}.json", {"report": "older but readable"})
     with app.app_context():
         assert load_cached_result(app, JOB_ID) == {"report": "older but readable"}
+
+
+def test_an_unreadable_cache_file_does_not_need_an_app_context(app):
+    """`load_cached_result` is handed the app, which is the signature saying it needs
+    no request context - so the fallback path must log through that app rather than
+    reach for `current_app`."""
+    write_cached(app, f"20260806-104636-{JOB_ID}.json", '{"report": "truncat')
+    assert load_cached_result(app, JOB_ID) == {}
 
 
 def test_only_the_report_for_this_job_is_read(app, monkeypatch):
@@ -121,10 +132,8 @@ def test_only_the_report_for_this_job_is_read(app, monkeypatch):
     assert len(opened) == 1, f"read {len(opened)} cache files to answer for one job"
 
 
-def test_a_cached_result_is_written_completely_or_not_at_all(client, as_role, app, corpus_mcrit):
-    """cache_result names its file by the second, so two requests for the same job can
-    aim at the same path. Renaming a finished file into place keeps a reader from
-    seeing half of one."""
+def test_a_result_page_caches_the_report_it_rendered(client, as_role, app, corpus_mcrit):
+    """One file, named for this job, holding a report that reads back."""
     from fixtureData import job_id_of
     as_role("visitor")
     job_id = job_id_of("matches_for_sample")
@@ -134,6 +143,32 @@ def test_a_cached_result_is_written_completely_or_not_at_all(client, as_role, ap
     assert len(cached) == 1 and cached[0].endswith(f"-{job_id}.json"), cached
     with open(os.sep.join([results_dir(app), cached[0]])) as fin:
         assert json.load(fin), "the cached report did not survive a round trip"
+
+
+class JobStub:
+    """The two attributes cache_result reads off a job."""
+
+    def __init__(self, job_id):
+        self.job_id = job_id
+        self.result = "a result id"
+
+
+def test_a_cached_result_is_written_completely_or_not_at_all(app):
+    """cache_result names its file by the second, so two requests for the same job can
+    aim at the same path - and json.dump writes as it goes, so a reader can arrive at
+    a file that stops mid-token. Renaming a finished file into place is what keeps
+    that from happening; writing in place would leave exactly it behind.
+
+    A report that fails to serialise part way through is how that gets provoked here.
+    It is not the way it happens in production - a full disk is - but it is the same
+    failure: the handle has bytes in it and the write never finishes.
+    """
+    report = {"padding": "x" * 4096, "not_serialisable": object()}
+
+    with pytest.raises(TypeError):
+        cache_result(app, JobStub(JOB_ID), report)
+
+    assert os.listdir(results_dir(app)) == [], "a half-serialised report was left under its final name"
 
 
 @pytest.fixture
