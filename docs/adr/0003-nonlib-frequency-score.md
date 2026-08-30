@@ -1,7 +1,7 @@
 # The nonlib frequency score is calculated correctly
 
 ---
-status: accepted — verification for #7; the remaining fixes are upstream in mcrit
+status: accepted — verification for #7; the hover text is fixed here, the rest is upstream in mcrit
 ---
 
 Issue #7 asks for the calculation of the nonlib frequency score to be verified,
@@ -49,8 +49,9 @@ On the top match of `matches_for_sample` it is 85.7854 against 85.6635.
 
 ## Why it looks too far off, in descending order of size
 
-**1. The hover text divides by the wrong number — and this is ours.** All twenty
-score tooltips across `result_compare_{all,family,sample,vs}.html` render
+**1. The hover text divided by the wrong number — and that one is ours, so it is
+fixed here.** All twenty score tooltips across
+`result_compare_{all,family,sample,vs}.html` rendered
 
     Bytes: {matched_bytes_*} / {reference_sample_entry.binweight}
     Percent: {matched_percent_*}%
@@ -58,12 +59,19 @@ score tooltips across `result_compare_{all,family,sample,vs}.html` render
 The percent on the second line is not the quotient on the first. For sample 1 of
 `matches_for_sample` the tooltip offers 130682.88 / 155065 = **84.28** and then
 states **85.79**, a gap of 1.51 points; the plain frequency column's gap is 0.88.
-A reader who checks the arithmetic in front of them finds it does not hold, on the
-`nonlib_` column worst — exactly the complaint in #7.
+A reader who checked the arithmetic in front of them found it did not hold, on the
+`nonlib_` column worst — exactly the complaint in #7. Issue #7 reports a value being
+too far from the *expected* value; since the arithmetic is right, the expectation is
+what was wrong, and this is what set it.
 
-The gap is not bounded. It scales as `binweight / (matchable − library)`, so it grows
+The gap was not bounded. It scales as `binweight / (matchable − library)`, so it grows
 with the library share of the sample: 1.0% relative at this corpus's 0.7% library
 bytes, 12% at a 10% library share, 44% at 30%, 102% at half.
+
+`recover_score_divisors()` in `mcritweb/views/data.py` now recovers both totals as
+`100 * matched_bytes_X / matched_percent_X` and the templates print those. It reads
+the *unfiltered* matches, so a `?famid=`/`?samid=` page shows the same totals as the
+unfiltered one, and it needs no threshold logic of its own — see "Consequences".
 
 **2. Four columns, two divisors, one header.** The `direct`/`frequency` pairs sit
 side by side with nothing saying they are normalised against different totals, and
@@ -124,25 +132,43 @@ matches keeps whichever score iterated last rather than its best.
 
 ## Consequences
 
-`Closes #7` is honest on the verification: the calculation was checked and is
-correct, and the reasons it reads wrong are named and sized.
+`Closes #7` is honest: the calculation was checked and is correct, the reasons it
+read wrong are named and sized, and the one of them that was ours — the hover text
+that set the reader's expectation — is fixed in the same change.
 
-The presentation fix is **not** available in this repository alone. Neither divisor
-is in the wire format — `SampleEntry` carries `binweight` and SMDA statistics, and
-nothing carries the matchable or nonlibrary totals — and the function list mcritweb
-receives holds no instruction counts and omits unmatched functions entirely, so it
-cannot be recomputed. mcrit should export `own_sample_num_matchable_bytes` and
-`own_sample_num_nonlibrary_bytes` on the report.
+Neither divisor is on the wire — `SampleEntry` carries `binweight` and SMDA
+statistics and nothing carries the matchable or nonlibrary totals, and the function
+list mcritweb receives holds no instruction counts and omits unmatched functions
+entirely, so neither can be *recomputed* here. mcrit should still export
+`own_sample_num_matchable_bytes` and `own_sample_num_nonlibrary_bytes` on the report,
+and this ADR is the argument for it.
 
-Until then the divisor is still recoverable per column, exactly, as
-`100 * matched_bytes_X / matched_percent_X` — verified against both totals above —
-guarded for the zero-percent rows. That is enough to make the tooltip honest without
-duplicating mcrit's threshold logic, and it is the smallest correct fix for (1).
-It touches twenty cells across four templates and wants the browser walk AGENTS.md
-asks for, so it is left as its own change rather than folded into a rounding PR.
+What made the fix possible without them is that the divisor need not be recomputed,
+only recovered: it is a property of the reference sample, identical on every row, and
+`100 * matched_bytes_X / matched_percent_X` inverts it exactly from any row that
+scored above zero. Verified against both totals on all three fixtures, where every
+qualifying row recovers the same value to the last bit. So the page duplicates none
+of mcrit's threshold logic and does not go stale if `MINHASH_FN_MIN_INS` changes.
 
-The verification is pinned by `tests/testScoreArithmetic.py`. It guards a finding
-rather than a behaviour, so it passes both before and after this ADR — what it
-catches is a re-captured fixture (`tests/fixtures/regenerate.py`) that no longer
-agrees with the formula documented here, which is precisely when this document needs
-revisiting.
+**The one case it cannot invert is a group where every row scored zero**, since the
+numerator is then zero and the quotient is 0/0. There is no such column in the three
+fixtures. The fallbacks are the matchable total, then the binweight; a zero numerator
+reads as 0% over any total, so the fraction stays consistent with its percentage
+rather than going inconsistent with the cells beside it. No cell is left unrecovered
+in a way a reader could see.
+
+The two decimals the tooltip prints are its only remaining imprecision: the stated
+percentage can differ from the stated fraction by up to 0.005, which is what the
+tolerance in both tests allows and nothing wider.
+
+Three tests hold this down. `tests/testScoreArithmetic.py` pins the verification
+itself; it guards a finding rather than a behaviour, so it passes both before and
+after, and what it catches is a re-captured fixture
+(`tests/fixtures/regenerate.py`) that no longer agrees with the formula documented
+here — precisely when this document needs revisiting.
+`testResultPages.test_score_tooltips_divide_by_the_total_their_percentage_uses`
+guards the fix, and fails on any one of the twenty cells reverted individually.
+`tests/testBrowser.py` walks the four templates in Chromium, because the offline
+tests read HTML as text and cannot see that `&#10;` becomes a newline in the
+attribute or that `hint.css` draws the text at all; it skips where playwright is
+absent, which includes CI.
