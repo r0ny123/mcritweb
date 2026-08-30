@@ -1178,3 +1178,54 @@ instinct in general and the wrong call here: this PR's headline is "an empty bas
 was a 500, now a 400", and leaving a sibling 500 in the same route is inconsistent. Fixed,
 with five unreadable bodies across both routes now answering 400 and reaching no backend
 call; mutation-checked.
+
+### The last three, and a brief of mine that was wrong
+
+| PR | what shipped | suite |
+|---|---|---|
+| #43 | cache files keep the umask's permissions again; `write_atomically` finally has tests that can see it; temp files leave the served directory; a non-canonical filter id stops doing uncacheable work | 326 → 345 |
+| #45 | both headline fixes get a lint that always runs plus a browser test that drives them; `families.json` recaptured so the family shortcut is not dead in the suite | 245 → 251 |
+| #44 | the per-method queue reads are sorted back into newest-first; four fixture-coupled assertions derive what they mean; `SAMPLE_ROW_JOB_METHODS` tied to the installed mcrit | 262 → 264 |
+| #50 | the column shape the refactor preserves is pinned two ways | 242 → 243 |
+
+**My brief for #50 was wrong on a number and, more importantly, on the mutation that
+matters.** I told the agent "9 call sites × 2 = 36"; it is **18** call sites × 2. And the
+reviewer's one-at-a-time sweep cannot reach the edit a person would actually make -
+dropping `unique_match_known=False` from *both* vs call sites at once. That keeps the
+table rectangular, adds a whole real column, and was **fully green**. So a shape check
+alone would not have been enough; the agent added a second guard reading the column list
+`data.py` hands to both templates.
+
+**Two more agents improved on the brief rather than following it.**
+
+- For #43 I suggested `os.chmod(0o666 & ~umask)`. The agent found the better answer:
+  never read the umask. `open(2)` masks its mode argument in the kernel, so opening with
+  `opener=` and mode 0666 reproduces master's `open(path, "w")` exactly - no
+  `os.umask(0)` window to race, no chmod. It also rejected a hardcoded 0644 because that
+  would *widen* a hardened deployment, and closed an fd leak `mkstemp` had left.
+- For #44 I offered "make the test bite, or make the docstring honest". The agent took
+  the third option I had listed as preferable-if-cheap and made the concatenated list
+  actually newest-first, then rejected two obvious sort keys with reasons: `job_id`
+  descending is what `get_jobs` does, but `LocalQueue.put` sets `_id` to a uuid4 with no
+  ordering; `created_at` is a `str` on the wire and a `datetime` locally, so a mixed list
+  raises.
+
+**One agent corrected my own PR's headline claim.** #43's "-77%" is page latency, and the
+title says "stop doing the work twice". Counted end to end the work is *flat and slightly
+higher*: master handed the diagram route the page's already-deserialised report, so a cold
+view cost one `MatchingResult.fromDict`; now it costs two. Posted as a correction on the
+PR.
+
+**A cross-PR check the agents could not do.** #45 changes `tests/fixtures/families.json`,
+which ten open PRs read. Dropping the new fixture into `fix/77-explore-page-backend-calls`
+(262 passed) and `fix/68-result-page-performance` (345 passed) *without* #45's
+`fixtureData.py` change leaves both green, so it is additive and there is no merge-order
+hazard. Verified the shape against the installed backend rather than trusting the
+reconstruction: `FamilyResource.on_get` does `family.samples[sample.sample_id] = sample`
+and `FamilyEntry.toDict` writes `{id: sample.toDict()}`, which JSON renders with string
+keys - which is what the fixture has.
+
+**Where PR bodies were rewritten and where they were commented on.** #37, #38, #40, #41,
+#42, #46, #48, #49 and #36 got their descriptions corrected in place. #39, #43 and #45 got
+comments instead, because the API returned those bodies truncated or with a mangled regex
+block, and overwriting text I could not read in full would have destroyed content.
