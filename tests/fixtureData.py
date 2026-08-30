@@ -220,6 +220,55 @@ class CorpusMcritClient:
         self._record("isFunctionId", function_id, *args, **kwargs)
         return int(function_id) in self._functions
 
+    def getMatchesForPicHash(self, pichash, summary=False, *args, **kwargs):
+        """Every function sharing a PicHash, as the backend reports them.
+
+        mcrit answers a set of (family_id, sample_id, function_id) triples, or - for
+        `summary` - how many distinct ids of each kind that set holds
+        (`QueryResource.on_get_query_pichash_summary`). The counts here are over the
+        captured corpus only, so they are smaller than a live instance would give;
+        what they preserve is the shape and the invariant that
+        families <= samples <= functions.
+        """
+        self._record("getMatchesForPicHash", pichash, summary=summary)
+        matches = [
+            (entry.family_id, entry.sample_id, entry.function_id)
+            for entry in self._functions.values()
+            if entry.pichash == pichash
+        ]
+        if not summary:
+            return matches
+        return {
+            "families": len({match[0] for match in matches}),
+            "samples": len({match[1] for match in matches}),
+            "functions": len({match[2] for match in matches}),
+        }
+
+    def getMatchesForPicBlockHash(self, picblockhash, summary=False, *args, **kwargs):
+        """Every basic block sharing a PicBlockHash, as the backend reports them.
+
+        A quadruple per matching block - (family_id, sample_id, function_id, offset) -
+        so one function contributes several rows when a block repeats inside it. The
+        summary counts distinct ids per kind plus the number of matching blocks
+        (`QueryResource.on_get_query_picblockhash_summary`). This is what the CFG
+        viewer's block tooltip asks for.
+        """
+        self._record("getMatchesForPicBlockHash", picblockhash, summary=summary)
+        matches = [
+            (entry.family_id, entry.sample_id, entry.function_id, block["offset"])
+            for entry in self._functions.values()
+            for block in entry.picblockhashes
+            if block["hash"] == picblockhash
+        ]
+        if not summary:
+            return matches
+        return {
+            "families": len({match[0] for match in matches}),
+            "samples": len({match[1] for match in matches}),
+            "functions": len({match[2] for match in matches}),
+            "offsets": len(matches),
+        }
+
     # --- jobs and results --------------------------------------------------------
 
     def getJobData(self, job_id, *args, **kwargs):
