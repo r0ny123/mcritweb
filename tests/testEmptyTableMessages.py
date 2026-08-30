@@ -231,3 +231,51 @@ def test_paging_past_the_end_of_a_search_says_so(client, as_role, fake_mcrit, mo
 
     assert "upload your first sample" not in page
     assert "No more samples match &#34;citadel&#34; on this page." in page
+
+
+# --- an invitation a reader cannot accept is worse than no invitation ----------------
+#
+# `data.submit` is contributor-only; the navbar has always hidden "Submit binary" from a
+# visitor for that reason. An empty table telling a visitor to "click here to upload
+# your first sample" and then answering 403 is a worse experience than one that simply
+# says the table is empty - so the message stays and the link goes.
+
+SUBMIT_LINK = 'href="/data/submit"'
+
+
+def test_a_visitor_is_invited_but_not_linked_to_a_page_they_cannot_open(client, as_role, app, empty_mcrit):
+    app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: empty_mcrit
+    as_role("visitor")
+
+    page = client.get("/explore/samples").get_data(as_text=True)
+
+    assert GENERIC_SAMPLE_PROMPT in page, "the message itself is still worth saying"
+    assert SUBMIT_LINK not in page, "offered a visitor a link that answers 403"
+
+
+@pytest.mark.parametrize("role", ["contributor", "admin"])
+def test_someone_who_can_submit_still_gets_the_link(client, as_role, app, empty_mcrit, role):
+    app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: empty_mcrit
+    as_role(role)
+
+    page = client.get("/explore/samples").get_data(as_text=True)
+
+    assert SUBMIT_LINK in page
+
+
+def test_the_link_a_visitor_is_denied_really_would_have_been_denied(client, as_role):
+    """Pins the premise rather than trusting it: if `data.submit` ever opened up to
+    visitors, the gate above becomes wrong and this test says so."""
+    as_role("visitor")
+
+    assert client.get("/data/submit").status_code == 403
+
+
+@pytest.mark.parametrize("path", ["/explore/families", "/explore/functions", "/analyze/compare"])
+def test_every_other_empty_state_hides_it_too(client, as_role, app, empty_mcrit, path):
+    """The gate is in `_empty_state`, not at the call sites, so this holds for all of
+    them - including the ones that were already there before issue #65."""
+    app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: empty_mcrit
+    as_role("visitor")
+
+    assert SUBMIT_LINK not in client.get(path).get_data(as_text=True)
