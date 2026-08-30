@@ -103,3 +103,43 @@ def test_the_task_row_wraps_wherever_it_is_shown(client, as_role, path):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- the other two places the same string widens the page ---------------------
+#
+# Measured with Chromium against a job whose filename is one 120-character unbroken
+# token, at a 1280x800 viewport, on /data/jobs/<id>:
+#
+#     h1 rule disabled (master):        document.scrollWidth = 3649
+#     h1 rule as shipped here:          document.scrollWidth = 1638
+#
+# A heading that overflows does not enlarge its own bounding box - it only pushes
+# scrollWidth out - so it is invisible to an element-overflow scan and very visible to a
+# reader. That is why it survived the first pass.
+
+def test_the_content_headings_can_break_a_long_token():
+    """job_overview.html and job_in_progress.html print the raw job.parameters as their
+    <h1>. Scoped to section.content so the navbar brand and the manual are untouched."""
+    css = STYLESHEET.read_text()
+
+    assert "section.content h1 {" in css
+    rule = css.split("section.content h1 {", 1)[1].split("}", 1)[0]
+    assert "overflow-wrap: anywhere" in rule
+
+
+def test_the_error_message_is_not_wrapped_in_invalid_markup():
+    """The template carried `<div white-space: pre-wrap;>` - three bogus attributes, not
+    a style - around a <pre>, which is white-space: pre and so never wrapped at all."""
+    template = (STYLESHEET.parent.parent / "templates" / "table" / "column_table.html").read_text()
+
+    assert "<div white-space: pre-wrap;>" not in template, "invalid attributes are still there"
+    assert 'class="job-error"' in template
+
+
+def test_the_error_message_rule_lets_a_traceback_wrap():
+    css = STYLESHEET.read_text()
+
+    assert "table.table td .job-error {" in css
+    rule = css.split("table.table td .job-error {", 1)[1].split("}", 1)[0]
+    assert "white-space: pre-wrap" in rule
+    assert "overflow-wrap: anywhere" in rule
