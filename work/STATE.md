@@ -34,6 +34,7 @@ every PR. It is not an upstream issue - see `work/LOG.md`, 22:05Z.
 
 | # | prio | summary | reproduced | severity | effort | status |
 |---|---|---|---|---|---|---|
+| — | 0 | `/data/jobs/<id>` returns HTTP 500 when a sub-job has been deleted (`sorted` over `None`) | **yes** | crash | S | PR opened — [#18](https://github.com/r0ny123/mcritweb/pull/18) |
 | — | 0 | Every CI unit job fails with `No module named pytest`; the suite has not run since `mcrit` moved it behind its `dev` extra | **yes** | blocks everything | S | PR opened — [#9](https://github.com/r0ny123/mcritweb/pull/9) |
 
 
@@ -74,7 +75,7 @@ every PR. It is not an upstream issue - see `work/LOG.md`, 22:05Z.
 | 68 | 33 | Improve MatchingResults performance | can't measure here | — | L | not started |
 | 67 | 34 | Investigate export→import bugs | can't (needs a real backend) | — | L | not started |
 | 40 | 35 | Polish query matching results (filename missing, job name) | partially | — | M | not started |
-| 39 | 36 | Inconsistent names between job and result | **yes** (code) | cosmetic | M | not started |
+| 39 | 36 | Inconsistent names between job and result - six headings render *empty* | **yes** (measured) | wrong behaviour | M | PR opened — [#19](https://github.com/r0ny123/mcritweb/pull/19) |
 | 38 | 37 | Filter 'Matching Method Statistics' with the result | can't (needs backend) | — | M | not started |
 | 36 | 38 | Job list tabs do not change the URL, so back/refresh lose the tab | partially | wrong behaviour | M | not started |
 | 34 | 39 | Improve function pages (accordion, minhash flag, analyze button, shingles) | n/a (feature) | — | L | not started |
