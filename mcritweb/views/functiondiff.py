@@ -168,6 +168,12 @@ def get_matches_node_colors(function_id_a, function_id_b):
     client = get_client()
     function_entry = client.getFunctionById(function_id_a, with_xcfg=True)
     other_function_entry = client.getFunctionById(function_id_b, with_xcfg=True)
+    # Same as explore.fetchDotGraph: an entry stored without its control flow graph
+    # makes toSmdaFunction() raise, which used to 500 the whole comparison page (#67).
+    # With one side missing its blocks there is nothing to correlate, so hand back the
+    # empty coloring and let the page render uncolored.
+    if not (function_entry and function_entry.xcfg and other_function_entry and other_function_entry.xcfg):
+        return node_colors
     smda_function_a = function_entry.toSmdaFunction()
     smda_function_b = other_function_entry.toSmdaFunction()
     # no match / base color: bleak red
