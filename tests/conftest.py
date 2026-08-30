@@ -161,8 +161,15 @@ class RecordingMcritClient(FakeMcritClient):
     and then look innocent. This variant lets the view run on and records what it
     reached for, at the cost of telling you nothing about response shapes.
 
-    The one shape it does commit to is the job id, because "returns None" is not a
-    thing the real client ever does for a queueing call.
+    Two shapes it does commit to, both for the same reason - "returns None" is not a
+    thing the real client ever does for them, so answering None would make this fake
+    say something false rather than say nothing:
+
+      * a queueing call answers a job id;
+      * an `is*Id` existence check answers a bool, and answers True, because a fake
+        that denies every id would make every view that validates one take its
+        not-found branch - which is the opposite of letting the view run on. A test
+        that cares about a *missing* id overrides this method for that id.
     """
 
     def __getattr__(self, name):
@@ -170,6 +177,8 @@ class RecordingMcritClient(FakeMcritClient):
             self._record(name, *args, **kwargs)
             if name.startswith(QUEUEING_METHODS):
                 return FAKE_JOB_ID
+            if name.startswith("is") and name.endswith("Id"):
+                return True
             return None
         return _permissive
 

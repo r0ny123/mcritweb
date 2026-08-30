@@ -141,6 +141,15 @@ def start_unique_blocks():
     if len(sample_ids) > MAX_SELECTED_SAMPLES:
         flash(f'A unique blocks request can name at most {MAX_SELECTED_SAMPLES} samples.', category='error')
         return redirect(url_for('analyze.unique_blocks', samples=request.args.get('samples')))
+    # every id, not just the ten the selection page happened to render. The page checks
+    # the slice it is showing, so an id that scrolled off it, a stale one whose sample
+    # was deleted since, or a hand-written query string all reached the backend and
+    # queued a job that could only fail. Bounded by MAX_SELECTED_SAMPLES above, and
+    # paid once on a deliberate submit rather than on every page view.
+    unknown_ids = [sample_id for sample_id in sample_ids if not client.isSampleId(sample_id)]
+    if unknown_ids:
+        flash(f"No sample with id {', '.join(str(sample_id) for sample_id in unknown_ids)} - nothing was submitted.", category='error')
+        return redirect(url_for('analyze.unique_blocks', samples=",".join(str(sample_id) for sample_id in sample_ids if sample_id not in unknown_ids) or None))
     job_id = client.requestUniqueBlocksForSamples(sample_ids)
     if job_id is None:
         # the client answers None for anything that was not a 200, and url_for cannot

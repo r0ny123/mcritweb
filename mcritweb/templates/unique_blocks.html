@@ -67,7 +67,11 @@ Unique Blocks
     pagination_js_helper(window.location.href, params);
   }
   function createJob() {
-    window.location.href = "/analyze/start_unique_blocks?samples=" + encodeURIComponent(joinSampleIds());
+    // url_for, not a root-relative literal: mounted under a SCRIPT_NAME or a reverse
+    // proxy prefix, "/analyze/..." leaves the application entirely. cross_compare.html
+    // hardcodes its own submit URL the same way, which is where this was copied from -
+    // that one is untouched here, but it has the same bug.
+    window.location.href = {{ url_for('analyze.start_unique_blocks')|tojson }} + "?samples=" + encodeURIComponent(joinSampleIds());
   }
   // nothing on this page is a job parameter - the sample set is the whole request - but
   // the pagination widgets expect a provider, and the search box has to survive paging
