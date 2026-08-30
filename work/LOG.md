@@ -1057,3 +1057,86 @@ failure was real — committing the fake to answering *every* `is*Id` let
 `None`. I narrowed the fake to `isSampleId`, wrote the exposed defect into its docstring,
 and pushed the correction two minutes later. **Capture the exit code (`cmd > file; echo $?`)
 rather than piping into `tail` inside a `&&` chain.**
+
+---
+
+## Round 4 — adversarial review of every open PR, and what it found
+
+Five review agents were run over PRs #35–#50, each in its own worktree, each told to
+mutate the code a test claims to guard and report what survived. Their findings are the
+substance of this round; the corrections below are mine, verified independently before
+acting on any of them.
+
+**A security bug on `master`, found in passing.** `analyze.query` took the filename it
+writes an upload under straight from the SMDA report's own `sha256` field — a string the
+uploader wrote, which `SmdaReport.fromDict` assigns through with no validation — and
+joined it into a path. A report declaring `"sha256": "../../../PLANTED"` put
+attacker-chosen bytes at an attacker-chosen path, from `@visitor_required`, the lowest
+role this application has. Reproduced against `df53db9`:
+
+```
+status: 202
+PLANTED written outside instance/: True
+  size: 303 path: /tmp/.../test_traversal0/PLANTED
+uploads dir now: []
+```
+
+Fixed in its own branch (`fix/query-upload-path-traversal`, PR #58) with a hexdigest
+shape check before the join, plus `.lower()` — an uppercase-hashed report used to land at
+a name no reader would ever look up. Two nearby 500s (`sub/dir/NESTED`, a null `sha256`)
+become the same honest 400. +16 tests, 239 → 255. `data.submit` reads the same field but
+its SMDA branch returns before the `open()`, so it is unaffected.
+
+**A live XSS sink held shut by two unrelated bugs.** `main.js:2733-2738` assigns a dot-graph
+node label into `innerHTML`, and those labels carry `apirefs` — import names read out of the
+analysed binary, interpolated by smda's `toDotGraph(with_api=True)` with no escaping. It does
+not fire today: on the single-function page the handler throws two lines earlier on a missing
+`#xcfg_right`, and on the comparison page `#tooltip`/`#value` do not exist. **Fixing either of
+those "obvious" bugs arms it.** Recorded on PR #42's description; not touched, because touching
+it means fixing the tooltip, which is a different change.
+
+**Claims of mine that were wrong, corrected in place:**
+
+- **#42** — "344 of the 609 fixture functions raise through loop detection". Measured
+  myself: `total 609  with_xcfg 200  loops_ok 200  loops_raise 0  with_loops 65`. Zero
+  raise; the other 409 cannot reach `findLoops` at all. The fix stands on the fault
+  injection, not on the corpus. Also "6x loopsObj=5" was one sample of a coin flip (3/3 on
+  a rerun), and "Panel state, not global state" overstated — the four globals still race,
+  they are just no longer the storage.
+- **#48** — "all 120 intact captured functions". It is 200.
+- **#40** — the new `{% if %}` reindented *every* page, so "unchanged down to the rendered
+  string" was false. 27 rendered pages against master: 27 differed, 10 after the whitespace
+  fix, and those 10 are the pages the change is about. Also cited a `filterToFunctionScore`
+  double-append hazard that does not exist (with both bounds set it takes the first branch).
+- **#41** — "the rendered rows are byte-identical". Not for `offset`, which the wire dict
+  carries two's-complement encoded: `0x-80000000` against `0xffffffff80000000`. Any
+  kernel-mode driver sample. The corpus has none, which is why it looked identical.
+- **#49** — `isUsableExtent` was justified by a case that cannot happen, and the mirror
+  anchors the viewport's top-left corner rather than its centre.
+- **#36** — the Conflicts section's advice ("prefer #34's side") breaks the PR: the hunk
+  spans `requestMatchesForSample`, which only #36 adds. 5 failed.
+
+**Tests that passed both ways** — each reproduced by reverting the code it guards:
+
+| PR | test | result with the code removed |
+|---|---|---|
+| #35 | the whole of `testFunctionPage.py` vs `with_xcfg=True` | 11 passed |
+| #43 | two tests named for atomic writes vs in-place writes | 326 passed |
+| #44 | the newest-first order test vs a scrambled order | 21 passed |
+| #45 | the sort test vs the entire sorting script deleted | 245 passed |
+| #45 | nothing at all vs the clipboard fix reverted to the #80 bug | 245 passed |
+| #38 | the cap's message assertion, satisfied by static page prose | 1 passed |
+| #41 | `test_the_search_page_agrees` vs the loop it names | 3 passed |
+| #50 | 4 of 36 arity mutations, two of them a real regression | 242 passed |
+| #37 | the non-query-job guard | 25 passed |
+
+One agent **disagreed with its brief and was right**: the review claimed `explore.sample_by_id`
+still passed raw dicts, and it has called `fromDict` since 55aa4d6. Verified by blame on master
+before accepting. Nothing was changed there.
+
+**A pushback worth keeping:** a reviewer's harness ran as `python /scratch/dump.py`, so
+`sys.path[0]` was the script's directory and `import mcritweb` resolved to the editable
+install for every branch — every page came out "byte-identical" because nothing was
+compared. They caught it themselves and redid the work with an
+`assert mcritweb.__file__.startswith(os.getcwd())`. My own render harness for #40 carries
+the same assertion for the same reason.
