@@ -35,6 +35,36 @@ LOGIN_FAILED = 'Incorrect username or password.'
 REGISTRATION_SUBMITTED = ('Registration submitted. An administrator has to approve the account before you can '
                           'log in - if you cannot log in shortly, please contact one.')
 
+#: What a throttled caller is told. Deliberately the same shape as LOGIN_FAILED - it
+#: names no account and confirms nothing, so the throttle does not become the oracle
+#: that collapsing the two login errors was meant to close.
+TOO_MANY_ATTEMPTS = ('Too many failed attempts from this address. Please wait a few minutes '
+                     'and try again.')
+
+
+def _throttled(username=None):
+    """True if this caller has spent their attempts, having logged the fact.
+
+    The log line is the operator's view of an attempt in progress, which is the second
+    thing issue #101 asks to decide. It names the account only when the attempts are
+    aimed at one - a spray across many names and a run against `admin` want different
+    responses, and the count is what tells them apart.
+    """
+    remote_addr = request.remote_addr
+    if not db.login_is_throttled(remote_addr):
+        return False
+    if username:
+        against = db.count_recent_login_failures(remote_addr, username)
+        current_app.logger.warning(
+            "throttled %s after %d recent failures, %d of them against %r",
+            remote_addr, db.count_recent_login_failures(remote_addr), against, username)
+    else:
+        current_app.logger.warning(
+            "throttled %s after %d recent failures", remote_addr,
+            db.count_recent_login_failures(remote_addr))
+    return True
+
+
 #: A real hash to check a password against when the username does not exist, so that
 #: "no such user" costs what "wrong password" costs. The message alone does not close
 #: the hole: password hashing is deliberately slow, so skipping it is measurable.
@@ -149,7 +179,13 @@ def register():
         if 'registrationToken' in request.form:
             provided_registration_token = request.form['registrationToken']
         error = None
-        if not username:
+        # the guessable secret on this route is the registration token, so it is metered
+        # by the same counter as /login. Ordinary validation slips - a short username, a
+        # password typed twice differently - deliberately do NOT record an attempt: they
+        # are not guesses, and counting them would lock people out of their own signup.
+        if _throttled(username):
+            error = TOO_MANY_ATTEMPTS
+        elif not username:
             error = 'Username is required.'
         elif re.match(r"^(?=[a-zA-Z0-9._]{3,20}$)(?!.*[_.]{2})[^_.].*[^_.]$", username) is None:
             error = "Username has wrong format. Must be 3-20 characters, alphanumeric with dots and underscores allowed, but cannot start or end with dots/underscores, nor contain two of them in a row."
@@ -161,6 +197,7 @@ def register():
             error = 'The passwords do not match. No new user was created.'
         elif is_registration_token_required and server_info.registration_token != provided_registration_token:
             error = 'Invalid registration token provided. No new user was created.'
+            db.record_failed_login(request.remote_addr, username)
         if error is None:
             user_info = UserInfo()
             user_info.username = username
@@ -222,6 +259,13 @@ def login():
         username = request.form['username']
         password = request.form['inputPassword']
 
+        if _throttled(username):
+            # before the password check, so a throttled caller costs no hashing either -
+            # the dummy check below is deliberately expensive and would otherwise make
+            # this route the cheapest way to spend the server's CPU
+            flash(TOO_MANY_ATTEMPTS, category='error')
+            return render_template('login.html')
+
         user_info = UserInfo.fromDb(username=username)
         error = None
         if user_info is None:
@@ -235,7 +279,9 @@ def login():
             user_info.last_login = datetime.utcnow()
             rehashed = _rehash_if_stale(user_info, password)
             user_info.saveToDb(withPassword=rehashed)
+            db.clear_login_failures(request.remote_addr)
             return redirect(url_for('index'))
+        db.record_failed_login(request.remote_addr, username)
         flash(error, category='error')
     return render_template('login.html')
 
