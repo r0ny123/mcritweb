@@ -1633,3 +1633,141 @@ false, and the replies say where the file actually is. The blob does remain in t
 branches' history; purging it needs a history rewrite on branches already open as PRs, so
 it was not done, and the replies state that rather than implying the file is gone
 entirely.
+
+## All 60 PRs merged into one branch, and run against the real stack
+
+`integration/all-60`, cut from `master`, merging all 60 fix branches in PR order.
+
+### The merge: 33 clean, 27 conflicted
+
+The first mechanical pass merged each branch and aborted on conflict, which settles the
+question `work/STATE.md`'s audit could not: **27 of the 60 conflict** once the others are
+already in. That audit is now retracted twice over - its command was vacuous, and the real
+number is nothing like "every conflict is one of three mechanical shapes".
+
+Every conflict was resolved by hand and by reading both sides. Nothing was resolved with
+`-X ours`/`-X theirs` wholesale: a wrong side taken silently drops a fix and leaves the
+suite green, which is the failure mode this campaign keeps meeting.
+
+**A guard I added after the first resolution went wrong.** `safe_union` refuses to union
+two sides that define the same name. It caught a real case on its first use - `#2` and
+`#3` both define `test_a_terminated_job_says_it_was_terminated`, one driving
+`/data/jobs/<id>` through `one_job` and one driving the `/data/result/<id>` dispatch.
+git merged them cleanly because they sit in different regions of the file; Python then
+lets the second definition shadow the first, and **the suite stays green with one of the
+two tests never running**. Renamed rather than dropped.
+
+The resolutions worth naming:
+
+- **`#20` vs `#29`** both implement the same category check (`known_job_category` vs
+  `known_categories`/`MENU_ONLY_CATEGORIES`). Kept #20's - it also flashes, which its
+  tests assert - and deleted #29's duplicate rather than leaving two checks in play.
+- **`#12` vs everything touching `/jobs`**: #12 deliberately made the route GET-only when
+  the search became a GET, so every conflict over that decorator keeps `@bp.route('/jobs')`.
+- **`#46` vs `#50`** is the one that would have gone wrong quietly. #50 replaces the
+  inline result tables with shared macros written against *master*, so taking the macro
+  call reverts #46's score rounding - `"%3d"` instead of `"%3.0f"` - with no test failing
+  on the templates that were refactored. Ported the rounding into `table/match_row.html`
+  first (`num_bytes` deliberately left as `%d`; it is a byte count, not a score), then
+  checked mechanically that **every Jinja expression in the inline blocks exists in the
+  macro** before taking the refactor: 0 missing.
+- **`#35` vs `#36`** on `tests/fixtureData.py` - the pair `work/STATE.md` warned about,
+  and the warning was right. Kept all three methods: `getMatchesForPicHash` (OURS' body,
+  which returns a **list**; THEIRS returned a set, and the `/api/` pass-through hands the
+  result to `handle_raw_response` → JSON, where a set is not serialisable), THEIRS'
+  `_record` line, plus `getMatchesForPicBlockHash` and `requestMatchesForSample`.
+- **`#44` vs `#78`** on `explore.py`: dedupe *and* deserialize, including `id_match`,
+  which the naive merge would have left as a raw dict beside `FunctionEntry` objects.
+- **`#49`'s AGENTS.md** now records both #69's and #74's patches to `main_duo.js`. Worth
+  noting against the review thread answered earlier: AGENTS.md itself documents that file
+  as "**not stock - a project fork**", which is the same conclusion reached there from the
+  MIT licence and the maintainer's own edit.
+
+### Then the integration bugs, which is the point of doing this
+
+Suite after the merge: **42 failed, 1208 passed**. After resolving them: **1247 passed,
+4 failed**, and the 4 are the same Windows platform artefacts a clean `master` has.
+`ruff check .` exit 0.
+
+**The one that was passing for the wrong reason.** `conftest`'s `MCRIT_CLIENT_FACTORY`
+hands out `fake_mcrit.raw_variant()` whenever a view asks for raw responses, which every
+`/api/` route does. `FailingBackend.__getattr__` intercepts only its one named method, so
+`raw_variant()` fell straight through to the healthy corpus:
+
+    handle_raw_response(client.getStatus())
+    -> AttributeError: 'dict' object has no attribute 'status_code'
+
+**Every `/api/` transport-error test was asserting against a backend that never failed.**
+`FailingBackend` now wraps its raw variant too; all 8 pass for the right reason.
+
+**A claim in a test that was simply not true.** `INDEX_CALLS` said `index()` calls
+`getFamily`. It does not - that call sits behind `if job.family_id is not None`, and the
+corpus's one finished 1vN job has none. Measured rather than argued:
+
+    INDEX CALLED: ['getQueueData', 'getSampleById', 'search_samples']
+    jobs: 1 family_ids: [None]
+
+**A real defect in `write_atomically`.** It opened the cache in text mode, so the *raw*
+result download was CRLF on Windows and stopped being byte-for-byte what the backend
+answered - which is the entire premise of serving it from cache. `newline=""` for the text
+modes (`newline` is invalid in binary mode, hence the conditional).
+
+**One test split rather than relaxed.** #36 now names a rejected category in a flash, so
+an invented category *does* reach the page - deliberately, since an empty list would read
+as a fact about the queue. The fallback assertion stays, and a second test pins that it
+arrives escaped, with `<script>alert(1)</script>` as the payload:
+
+    assert b"<script>alert(1)</script>" not in response.data
+    assert b"&lt;script&gt;alert(1)&lt;/script&gt;" in response.data
+
+**A test that would have quietly stopped covering what it names.** #76 took functions out
+of the default search set, so "one category failing does not silence the others" was down
+to one surviving category and the message read "in sample". The test now names all three
+types explicitly rather than being weakened to match.
+
+The remaining fixes were tests meeting behaviour another branch changed: #36's canonical
+redirect (followed - it carries the whole query string through, so it is the same page,
+not a weaker assertion), #79's new failure wording, and #26's coverage table, where an
+unknown job id is now reported as unknown rather than incompatible and `job_failed.html`
+gets a stated reason.
+
+## Running the real thing: MongoDB + mcrit + the merged MCRITweb
+
+Not the offline harness this time. **MongoDB 8.0.29** (Community zip, extracted to the
+scratchpad - no installer, no service, no registry), **mcrit 1.8.1** on MongoDB storage
+*and* the MongoDB queue, and MCRITweb served from the integration branch.
+
+    $ curl -s http://127.0.0.1:8000/status
+    {"status": "successful", "data": {"status": {"db_state": 1, "storage_type": "mongodb",
+     "num_bands": 20, "num_samples": 0, "num_families": 1, "smda_version": "4.5.0", ...}}}
+
+One thing to know for anyone repeating it: `STORAGE_PORT`/`QUEUE_PORT` must be **strings**.
+`MongoDbStorage._initDb` does `len(port)`, so an int is `TypeError: object of type 'int'
+has no len()` and the server 500s on every request.
+
+**29 pages walked, 0 needing a look** - no 500s anywhere, including the deliberately nasty
+ones (`?active=<script>alert(1)</script>`, a 64-char hash query, unknown job ids on all
+three job routes).
+
+**The security fix re-checked against a real backend**, not a recording fake:
+
+    POST sha256=../../../PLANTED   -> 400
+    file outside instance/ created  -> False
+    sha256='sub/dir/NESTED'         -> 400      (was a 500 FileNotFoundError)
+    sha256=''                       -> 400      (was a 500 TypeError)
+    honest report                   -> 202, stored as 'abab…abab'
+    uppercase report                -> 202, same single lowercase file
+
+**And real jobs, end to end.** Two queries submitted through the web UI reached MongoDB
+(`queue`: 2, `fs.files`: 2, `fs.chunks`: 2) and their pages render as jobs rather than as
+"unknown":
+
+    job id on page      : True
+    renders unknown page: False
+    shows a job method  : True
+    page title          : Overview for Job: 6a94395406551f02ed55ccb8
+
+That last check exists because the first version of this walk extracted the id wrongly and
+passed `{'$oid': '...'}` into the URL. Every page still answered **200** - by rendering the
+*unknown job* page. A status-code-only walk would have reported a clean pass without ever
+touching a real job.
