@@ -1949,3 +1949,89 @@ non-empty username and never reaches it. Re-run against the password-mismatch br
 which the test does drive, it fails. Four mutations, all biting.
 
 Suite 257 -> 268 on that branch; ruff clean; CI green on both changed PRs.
+
+## Finishing the partial issues in parallel: 25 -> 34 closable
+
+Ten worktrees, ten agents, one branch each so nothing could collide. Every agent got the
+same contract (`work/harness` aside, it is reproduced in the campaign notes): never weaken
+a test to go green, a test that fails without the fix and is mutation-checked with both
+outputs pasted, full suite plus ruff with exit codes captured directly, and - the one that
+mattered most - **if you are unsure it is correct, do not ship it; write down what is
+missing instead.**
+
+I re-ran the suite, ruff and a mutation check myself on every branch before pushing.
+**I pushed three of them on the agent report alone before doing that**, which is below the
+bar this campaign has held all the way through; I went back and verified those four
+independently (all clean), but the order was wrong and it is recorded rather than tidied
+away.
+
+### What was actually still missing, per issue
+
+| issue | the gap that was left | closed by |
+|---|---|---|
+| #46 | `Job.progress` reads 0 for the entire run of a job waiting on dependencies | progress averaged across the children the page already fetched |
+| #53 | the plumbing existed and nothing consumed it | mechanism + both examples the issue names |
+| #55 | no way to reach the configuration with the job's inputs preselected | link carrying `query=` so `selected=` is actually honoured |
+| #56 | matches were no longer dropped, but still not *marked* | badge column on search and all three listings |
+| #38 | six sample-level filters left the statistics job-wide | statistics follow the narrowed view |
+| #69 | `Show Loop Boundaries` shipped **disabled** | hulls drawn per panel, verified in Chromium |
+| #40 | filename, family/version | done; the job-name box is #122's in the same series |
+| #50 | tables deduplicated but not sortable | sorted over the whole list, not the page |
+| #80 | six-bullet checklist | see below - the interesting one |
+
+### Three findings worth more than the issues that produced them
+
+**#80: the clipboard complaint was a wrap bug, and the stated cause was wrong.** The issue
+guessed "copy to clipboard breaks with extensively long yara strings (more than 120
+chars?)". Driven in Chromium against rules from 30 B to 112 KB, the copy works at every
+size - the hypothesis is dead. What actually breaks is the *rule*: the Block column wrapped
+with `re.sub(r"(.{80})", ...)`, a raw character count, which cut hex bytes in half. On the
+captured report, **41 of 51 wrapped sequences were cut inside a token**, 23 leaving an
+odd-length run like `6a3` / `3` - which no YARA compiler accepts. Sequences under 80
+characters never wrapped, which is exactly why it only ever showed up on long ones, and the
+`$blockhash_… = { ` prefix put the first break near 116 rendered characters, which is where
+the "120?" came from. Fixed by wrapping between bytes.
+
+**#50: sorting needed no backend change at all.** The PR had deferred it on the grounds
+that real sorting means threading a `sort=` parameter through mcrit. But
+`getBestSampleMatchesPerFamily` / `getSampleMatches` / `getAggregatedFunctionMatches` each
+build the *entire* list and only then slice it - so sorting in the view before the slice
+costs one `sorted()` over rows already being built. It also removed a pass: the aggregated
+list was being built twice per render.
+
+**#69: one of the two boxes needed a test, not a fix.** "Show overall matching score" was
+already implemented upstream and still rendering - nothing in the suite could see it, so
+nothing said so. The other box was a real fix: the checkbox toggled `#bgFill`, which only
+`loopify_dagre.addBackground()` creates, and this page never calls it and cannot.
+
+### The agents flagged their own weak tests without being asked
+
+This is the part I would not have predicted. Unprompted, in their own reports:
+
+- **#38** - "Two of the tests I added pass either way, and I am flagging that rather than
+  hiding it... I kept them as coverage of the closed gap in the fixture story, not as
+  evidence for the fix."
+- **#56** - "The one test that passes either way asserts an *absence*... it is not evidence
+  of the fix, and the other 12 are."
+- **#53** - "The 8 that pass either way are the deliberate 'nothing changed' guards... they
+  are regression guards, not the fail-first evidence, and the file says so."
+- **#80** - wrote a browser test for the clipboard, found it passed against the old code
+  once Windows' CRLF normalisation was accounted for, and **deleted it**: "a test that
+  passes either way, which the standards say is worse than none."
+
+### One issue deliberately left open
+
+**#34** cannot be closed from this repository and its PR now says so. Two of five boxes:
+the analyze button is #139's (duplicating it would collide in the same file), and
+**shingles are blocked upstream** - no shingle route in `application_routes.py`, no shingle
+method on `McritClient`, `MinHasher.calculateMinHashFromStorage` keeps only `min(...)` and
+discards the shingle values in the loop, and `minhash_shingle_composition` is populated
+only when `MINHASH_TRACK_SHINGLES` is set, which defaults to `False` - all **609** captured
+corpus functions carry `{}`. The issue's own "not sure if possible right now" was right.
+
+CI: all nine updated PRs green across the five jobs.
+
+**Environment note:** the #69 agent installed `playwright` plus Chromium into the shared
+venv so the browser tests actually run rather than skip. Checked that this did not change
+any other worktree's suite result. It is not a project dependency and CI still skips those
+tests.
