@@ -6,7 +6,7 @@ arithmetic lives in mcrit (`MatcherInterface._aggregateMatchSampleSummary`), but
 captured reports carry both the inputs (`matches.functions`) and the outputs
 (`matches.samples[*].matched`), so the claim is checkable from here without a backend.
 
-This is the executable half of docs/adr/0003-nonlib-frequency-score.md. It is a
+This is the executable half of docs/adr/0009-nonlib-frequency-score.md. It is a
 characterisation test, not a regression guard on any change in this repo: it fails if
 a re-captured fixture no longer agrees with the formula the ADR verified, which is
 exactly when that ADR needs revisiting.
