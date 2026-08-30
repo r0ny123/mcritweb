@@ -46,13 +46,13 @@ every PR. It is not an upstream issue - see `work/LOG.md`, 22:05Z.
 | 101 | 5 | Login says "Incorrect username." vs "Incorrect password.", confirming which accounts exist | **yes** | security | S (enumeration half) / L (rate limiting) | PR opened (partial) — [#6](https://github.com/r0ny123/mcritweb/pull/6) |
 | 100 | 6 | API tokens generated with MD5; no way to rotate one | **yes** (code) | security | M | PR opened — [#7](https://github.com/r0ny123/mcritweb/pull/7) |
 | 78 | 7 | Search shows an entry twice when the term is also its id | **partially** | wrong behaviour | S | PR opened — [#8](https://github.com/r0ny123/mcritweb/pull/8) |
-| 79 | 8 | "Ups, search for `<hash>` ... failed!" when a sha256 is simply not in the DB | **partially** | UX | S | not fixed — `work/notes/issue-79.md`; root cause looks like `mcrit`, not here |
-| 89 | 9 | `mcrit_server_required` makes a blocking HTTP probe on every request to 36 routes | **yes** (code) | UX (latency) | M | not fixed — `work/notes/issue-89.md`; the issue says the call is the maintainer's |
-| 51 | 10 | Job search is dead code (the form is inside a Jinja comment) | **yes** | UX | M | blocked — `work/notes/issue-51.md`; needs a backend filter parameter |
-| 65 | 11 | 'No data in table' message is the same everywhere | no (cosmetic, no repro needed) | UX | M | not started |
-| 52 | 12 | Line breaks in table headers and export/analyze buttons | can't (screenshot only) | cosmetic | S | not started |
-| 41 | 13 | Long job names need line breaks | can't (screenshot only) | cosmetic | S | not started |
-| 61 | 14 | Undeclared JS globals | partially | cosmetic | M | not started |
+| 79 | 8 | "Ups, search for `<hash>` ... failed!" when a sha256 is simply not in the DB | **partially** | UX | S | PR opened — [#10](https://github.com/r0ny123/mcritweb/pull/10) |
+| 89 | 9 | `mcrit_server_required` makes a blocking HTTP probe on every request to 36 routes | **yes** (code) | UX (latency) | M | PR opened — [#11](https://github.com/r0ny123/mcritweb/pull/11) |
+| 51 | 10 | Job search is dead code (the form is inside a Jinja comment) | **yes** | UX | M | PR opened — [#12](https://github.com/r0ny123/mcritweb/pull/12) |
+| 65 | 11 | 'No data in table' message is the same everywhere | no (cosmetic, no repro needed) | UX | M | PR opened — [#16](https://github.com/r0ny123/mcritweb/pull/16) |
+| 52 | 12 | Line breaks in table headers and export/analyze buttons | can't (screenshot only) | cosmetic | S | PR opened — [#13](https://github.com/r0ny123/mcritweb/pull/13) |
+| 41 | 13 | Long job names need line breaks | can't (screenshot only) | cosmetic | S | PR opened — [#14](https://github.com/r0ny123/mcritweb/pull/14) |
+| 61 | 14 | Undeclared JS globals | partially | cosmetic | M | PR opened — [#15](https://github.com/r0ny123/mcritweb/pull/15) |
 | 35 | 15 | "Analyze" on a function row starts a 1vsN for the parent *sample* | **yes** (code) | wrong behaviour | L | not started — needs a function-analysis flow that does not exist |
 | 66 | 16 | Import page gives no progress indication | no | UX | M | not started |
 | 99 | 17 | Result template rendering only covered for five report types | n/a (meta) | — | L | not started |
