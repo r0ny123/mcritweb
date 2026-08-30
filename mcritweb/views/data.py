@@ -748,14 +748,32 @@ def linkhunt_for_sample_or_query(job_info, matching_result: MatchingResult):
 # Listing Job information
 ################################################################
 
-@bp.route('/jobs',methods=('GET', 'POST'))
+def job_parameters_or_blank(job):
+    """`job.parameters`, or "" for a job whose payload cannot be read.
+
+    Job.parameters does not return None - it returns "" or raises. It calls json.loads
+    on payload["params"] and then .items() on the result, so a document whose params is
+    malformed, `null`, or a JSON array raises JSONDecodeError, AttributeError or
+    TypeError. One such job used to break the single page of the browse view that
+    showed it; filtering the whole category for a search would let it break every page
+    of the search instead. A job whose parameters cannot be read cannot contain the
+    search term either, so leaving it out is also the right answer.
+    """
+    try:
+        return job.parameters or ""
+    except Exception:
+        current_app.logger.exception("Could not read parameters for job %s", getattr(job, "job_id", "?"))
+        return ""
+
+
+@bp.route('/jobs')
 @visitor_required
 @mcrit_server_required
 def jobs():
-    query = None
-    if request.method == 'POST':
-        query = request.form['Search']
-    # used for job/method collections
+    # a search is a read, so it travels in the URL: the result is linkable, survives a
+    # refresh, and is carried by the pagination links, which build from request.args.
+    # It used to be a POST whose value was read and then never used - see issue #51.
+    query = request.args.get('Search', '').strip()
     client = get_client()
     # sort order
     ascending = request.args.get('ascending', 'false').lower() == "true"
@@ -817,13 +835,27 @@ def jobs():
         ],
         "statistics": statistics
     }
-    if active_category is None:
-        max_count = statistics["totals"][state_category] if state_category in statistics["totals"] else 0
-        pagination = Pagination(request, max_count, limit=25, query_param="p", limit_param="l")
+    limit_param = "l" if active_category is None else "plimit"
+    if query:
+        # The backend's own `filter` cannot be used together with paging: it slices the
+        # page first and filters what is left (mcrit QueueRemoteCalls.getQueueData), so
+        # `start=0, limit=25, filter=x` answers "the matches among jobs 0-24", not "the
+        # first 25 matches". Asking for page 2 of a search would then skip matches, and
+        # page 1 of a search whose only hit is job 60 renders empty. Fetch the category
+        # unpaged and filter here, where the count that drives pagination is the count
+        # of things actually shown. `getQueueData(method=...)` with no start/limit is
+        # already how delete_job_by_id enumerates a category.
+        matches = client.getQueueData(method=active_category, state=state_category, ascending=ascending) or []
+        matches = [job for job in matches if query.casefold() in job_parameters_or_blank(job).casefold()]
+        pagination = Pagination(request, len(matches), limit=25, query_param="p", limit_param=limit_param)
+        jobs = matches[pagination.start_index:pagination.end_index]
     else:
-        max_count = sum(statistics[active_category].values()) if active_category else 0
-        pagination = Pagination(request, max_count, limit=25, query_param="p")
-    jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, ascending=ascending)
+        if active_category is None:
+            max_count = statistics["totals"][state_category] if state_category in statistics["totals"] else 0
+        else:
+            max_count = sum(statistics[active_category].values()) if active_category else 0
+        pagination = Pagination(request, max_count, limit=25, query_param="p", limit_param=limit_param)
+        jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, ascending=ascending)
     samples_by_id = {}
     families_by_id = {}
     if jobs:
@@ -834,7 +866,7 @@ def jobs():
         for job in jobs:
             if job.family_id is not None:
                 families_by_id[job.family_id] = client.getFamily(job.family_id)
-    return render_template('jobs.html', families=families_by_id, samples=samples_by_id, active=active_category, state=state_category, jobs=jobs, menu_configuration=menu_configuration, p=pagination, query=query)
+    return render_template('jobs.html', families=families_by_id, samples=samples_by_id, active=active_category, state=state_category, ascending=ascending, jobs=jobs, menu_configuration=menu_configuration, p=pagination, query=query, match_count=len(matches) if query else None)
 
 
 @bp.route('/jobs/<job_id>')
