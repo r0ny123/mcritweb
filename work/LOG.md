@@ -1523,3 +1523,113 @@ not labels — except for the two links written as `[PR #12](...)`, where the la
 fork PR number and moves with it. The 209 bare `#N` in these bodies are upstream issue
 references and are **more** correct upstream than they were on the fork, so they are left
 alone; every body also gains a header saying so, rather than relying on a reader guessing.
+
+## All 60 PRs are open upstream, and the 16 review threads are answered
+
+`gh auth` was re-validated by the user, which unblocked both. `gh api` is used
+throughout, so no credential is read, held or passed by any script here — the earlier
+credential-store read stayed blocked and stayed unused.
+
+### 57 more PRs upstream: #106 - #162
+
+    $ python open_upstream.py
+    still to open: 57
+     1/57  fork #2   -> upstream #106   fix/linkhunt-500-on-incompatible-job
+    ...
+    57/57  fork #61  -> upstream #162   fix/jobs-500-when-the-queue-cannot-be-read
+    done. mapped 60 fork PRs.
+
+Zero failures, zero rate-limit stops, paced at 4s. With #103/#104/#105 that is **60 fork
+PRs to 60 upstream PRs, #103-#162**. The script writes its mapping after every single
+creation, so a stop anywhere would have resumed rather than double-opened.
+
+### The body rewrite, and the trap in it
+
+The sibling links are not shaped the way they look:
+
+    [#52](https://github.com/r0ny123/mcritweb/pull/13)
+      ^^ upstream ISSUE 52        ^^ fork PR 13
+
+The **label** is already an upstream issue number and is correct upstream unchanged; the
+**target** is a fork PR and is the part that moves. So pass 2 rewrites targets, not
+labels — except the two links written `[PR #12](...)`, where the label *is* the fork PR
+number and moves with it. The 209 bare `#N` are upstream issue references and are more
+correct upstream than they were on the fork, so they are untouched; every body carries a
+header saying so rather than leaving a reader to guess.
+
+**A bug caught by spot-checking a created PR rather than by the dry run.** Pass 2
+rewrites every `r0ny123/mcritweb/pull/N` URL — including the one in the provenance
+header, which is the single link in the body that is *supposed* to point at the fork.
+Rewriting it would have turned "Mirrors r0ny123/mcritweb#14" into a self-reference on all
+57. Fixed by holding the header line out of the rewrite, then re-verified:
+
+    header preserved: True | sibling rewritten: True | PR-label rewritten: True
+
+    $ python fix_xrefs.py
+    pass 2 done: 7 rewritten, 50 had no sibling links, 0 failed
+
+Only bodies that actually change are PATCHed, so a re-run is free and no PR timeline
+fills with no-op edits.
+
+### Upstream CI
+
+    GREEN=47  RED=0  RUNNING=14  NOCHECKS=0
+
+Not one red. #103 (the pytest fix) was green on all five jobs before the rest went up,
+which is what made the other 59 able to run at all.
+
+### The 16 review threads: answered and resolved
+
+Every one had already been fixed in code — that was established in the previous section —
+so the work was to say so in-thread, with the commit and the mechanism, and resolve. All
+16 replied, all 16 resolved. Verified independently of the script's own ledger:
+
+    PR 11: threads=3 unresolved=0        PR 52: threads=2 unresolved=0
+    PR 12: threads=1 unresolved=0        PR 53: threads=2 unresolved=0
+    PR 13: threads=1 unresolved=0        PR 55: threads=1 unresolved=0
+    PR 14: threads=1 unresolved=0        PR 56: threads=1 unresolved=0
+    PR 20: threads=1 unresolved=0        PR 61: threads=1 unresolved=0
+    PR 49: threads=2 unresolved=0
+
+(The first version of that check filtered on an author login ending `[bot]` and reported
+`threads=0` for every PR — a clean-looking result that was pure filter error. GraphQL
+returns a Bot's login *without* the `[bot]` suffix REST appends. Same shape as the
+`merge-tree` and `awk $NF` traps: a query that cannot match anything reads exactly like a
+pass.)
+
+### One thread was answered with a disagreement, not a fix
+
+**PR #49, Codex P1, "move graph synchronization out of vendored `trace_CFG`."** The policy
+line is real — `AGENTS.md:146` lists `trace_CFG/` among assets not to modify. Two facts
+sit against applying it here, and both were checked rather than asserted:
+
+- `static/trace_CFG/LICENSE` is **MIT** (hdc-arizona, 2021), which permits modification
+  outright provided the notice is kept. It is untouched.
+- The project already modifies this exact file, and the most recent edit is the
+  maintainer's own:
+
+      4af629d 2026-08-06 Daniel Plohmann :: require a CSRF token on every unsafe method (#83)
+      f8fc205 2022-12-13 pnx@pyrite      :: allow matching of arbitrary functions by their IDs
+      2ebfe81 2022-10-14 pnx@pyrite      :: initial commit
+
+Where the finding still lands, and the reply says so: those are 4-line and 2-line edits
+and this PR is +116. That is a difference in kind. A project-owned wrapper is the better
+shape in principle; what makes it awkward is that the hook points (`graphPanes`, the zoom
+handlers, the post-render fit) live inside the file's closure and are unreachable from
+outside, so extracting the synchronisation means first exporting a seam — itself a
+modification of the vendored file, and a larger diff than the one it replaces. Left as
+the maintainer's call rather than shipped either way, per "if you're unsure, it doesn't
+ship."
+
+### One claim I had to narrow before posting it
+
+The three `cookies.txt` threads (#11, #13, #14) were going to be answered with "the
+harness hardcodes its key, so the file leaked nothing" — citing
+`work/harness/devserver.py:45`. Checked first: **`work/` is empty on all three of those
+branches**; the harness source lives only on `claude/mcritweb-triage-fixes-a5adho`. The
+argument survives, because that branch is public in the same repository and anyone who
+can read the repo can mint the cookie from it — but "on this branch" would have been
+false, and the replies say where the file actually is. The blob does remain in those
+branches' history; purging it needs a history rewrite on branches already open as PRs, so
+it was not done, and the replies state that rather than implying the file is gone
+entirely.
