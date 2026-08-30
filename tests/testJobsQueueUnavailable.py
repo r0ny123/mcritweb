@@ -31,7 +31,7 @@ def test_the_jobs_page_answers_when_the_queue_cannot_be_summarized(client, as_ro
     as_role("visitor")
     monkeypatch.setattr(fake_mcrit, "getQueueStatistics", lambda *args, **kwargs: None, raising=False)
 
-    response = client.get("/data/jobs")
+    response = client.get("/data/jobs", follow_redirects=True)
 
     assert response.status_code == 200
     page = response.get_data(as_text=True)
@@ -45,10 +45,10 @@ def test_the_jobs_page_says_so_rather_than_showing_an_empty_queue(client, as_rol
     """
     as_role("visitor")
     monkeypatch.setattr(fake_mcrit, "getQueueStatistics", lambda *args, **kwargs: {}, raising=False)
-    empty_page = client.get("/data/jobs").get_data(as_text=True)
+    empty_page = client.get("/data/jobs", follow_redirects=True).get_data(as_text=True)
 
     monkeypatch.setattr(fake_mcrit, "getQueueStatistics", lambda *args, **kwargs: None, raising=False)
-    failed_page = client.get("/data/jobs").get_data(as_text=True)
+    failed_page = client.get("/data/jobs", follow_redirects=True).get_data(as_text=True)
 
     assert "queue failed" not in empty_page
     assert "queue failed" in failed_page
@@ -58,7 +58,7 @@ def test_a_queue_that_answers_is_untouched(client, as_role, fake_mcrit):
     """The guard must not cost the page: the ordinary render still carries its menu."""
     as_role("visitor")
 
-    response = client.get("/data/jobs")
+    response = client.get("/data/jobs", follow_redirects=True)
 
     assert response.status_code == 200
     page = response.get_data(as_text=True)
@@ -78,7 +78,7 @@ def test_a_category_the_queue_does_not_hold_is_not_a_crash(client, as_role, fake
     as_role("visitor")
     monkeypatch.setattr(fake_mcrit, "getQueueStatistics", lambda *args, **kwargs: {}, raising=False)
 
-    response = client.get(f"/data/jobs?active={category}")
+    response = client.get(f"/data/jobs?active={category}", follow_redirects=True)
 
     assert response.status_code == 200
 
@@ -94,7 +94,7 @@ def test_a_category_filtered_url_answers_when_the_queue_cannot_be_summarized(cli
     as_role("visitor")
     monkeypatch.setattr(fake_mcrit, "getQueueStatistics", lambda *args, **kwargs: None, raising=False)
 
-    response = client.get(f"/data/jobs?active={category}")
+    response = client.get(f"/data/jobs?active={category}", follow_redirects=True)
 
     assert response.status_code == 200
     page = response.get_data(as_text=True)
@@ -116,8 +116,12 @@ def test_a_category_the_queue_does_hold_still_paginates(client, as_role, fake_mc
         raising=False,
     )
 
-    response = client.get("/data/jobs?active=getMatchesForSample&p=2")
+    response = client.get("/data/jobs?active=getMatchesForSample&p=2", follow_redirects=True)
 
     assert response.status_code == 200
-    windows = [kwargs.get("start") for name, args, kwargs in fake_mcrit.calls if name == "getQueueData"]
+    # the corpus fake records getQueueData's start/limit positionally
+    # (`_record("getQueueData", start, limit, method=...)`), so reading only kwargs
+    # here silently yielded None and the assertion could never see a real window
+    windows = [kwargs["start"] if "start" in kwargs else (args[0] if args else None)
+               for name, args, kwargs in fake_mcrit.calls if name == "getQueueData"]
     assert windows == [25], f"30 finished + 2 failed is a second page starting at 25, asked for {windows}"
