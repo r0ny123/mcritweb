@@ -6,7 +6,8 @@ status: accepted — recorded 2026-08-30
 
 Issue #57 is a meta-issue collecting job-related work. Trackers earn their keep when they
 say which children are blocked and why, so this records the state of each live bullet as
-measured against `df53db9`, rather than leaving it to be re-derived.
+measured against `df53db9` with **mcrit 1.8.1** installed as the backend, rather than
+leaving it to be re-derived.
 
 **#28 (closed) is genuinely done.** The jobs page builds a per-method nested menu from
 `getQueueStatistics()` (`data.py:733-761`), rendered as dropdowns — visible in the
@@ -21,7 +22,7 @@ with no `Search` field answered **400**; with one, it returned the same 85 rows 
 unfiltered page.
 
 The trap: `McritClient.getQueueData(…, filter=…)` exists, but
-`QueueRemoteCalls.py:37-42` applies the filter **after** paging —
+mcrit 1.8.1's `mcrit/queue/QueueRemoteCalls.py:37-42` applies the filter **after** paging —
 `[job for job in self.queue.get_jobs(start_index, limit, method, state, ascending) if
 filter in job.parameters]`. So `start=0, limit=25, filter=x` answers "the matches among
 jobs 0–24", not "the first 25 matches". Wiring it would have produced "page 3 of 40,
@@ -38,7 +39,10 @@ have their own change. **#47 (queue cache)** is blocked upstream — see ADR-000
 
 Anyone returning to #51 should not "just pass `filter=`". The backend filter is unusable
 with a `limit` until `QueueRemoteCalls.getQueueData` filters before paging, and that is an
-mcrit change.
+mcrit change. The line numbers above are mcrit 1.8.1's; `setup.py` only requires
+`mcrit>=1.5.3`, so re-check them against the version actually installed before concluding
+that the block has lifted - the shape to look for is a `filter` applied to the result of
+`self.queue.get_jobs(start_index, limit, ...)` rather than passed into it.
 
 ## Outcome
 
