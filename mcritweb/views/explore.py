@@ -312,16 +312,19 @@ def functions():
     if results is None:
         flash_search_failed(query, "functions")
     else:
-        # as in families and samples above. Kept as raw dicts, which is this page's
-        # existing convention - function_row.html reads them by name either way, and
-        # switching the whole page to FunctionEntry is a separate change. See issue #56.
+        # as in families and samples above, and deserialized rather than passed on as
+        # raw dicts: explore.search already hands function_table FunctionEntry objects,
+        # and this page handing it wire dicts was invisible only because Jinja falls
+        # back from attribute to item lookup and the keys happen to equal the attribute
+        # names. A renamed key or any derived property would break this page and leave
+        # the search page working. Issues #56 (dedupe) and #64 (deserialize).
         by_id = {}
         id_match = results.get('id_match')
         if id_match is not None:
-            by_id[id_match['function_id']] = id_match
+            by_id[id_match['function_id']] = FunctionEntry.fromDict(id_match)
         for function_dict in results['search_results'].values():
-            #functions.append(FunctionEntry.fromDict(function_dict))
-            by_id.setdefault(function_dict['function_id'], function_dict)
+            if function_dict['function_id'] not in by_id:
+                by_id[function_dict['function_id']] = FunctionEntry.fromDict(function_dict)
         functions = list(by_id.values())
     user_column_setup = get_user_column_setup("functions_table")
     return render_template("functions.html", functions=functions, pagination=pagination, query=query, user_column_setup=user_column_setup)
