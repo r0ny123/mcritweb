@@ -234,7 +234,7 @@
         {% set job_total_duration = job_info|total_duration %}
         {% if job_total_duration is not none %}
           <tr>
-            <td valign="middle">Total (with dependencies): </td>
+            <td valign="middle"><span class="hint--right" data-hint="Measured from when this job was queued. A job that fans out is queued just after the children it waits on, so this is a lower bound by that enqueue interval - 10ms for five children.">Total (since queued): </span></td>
             <td valign="middle">{{ job_total_duration }}</td>
           </tr>
         {% endif %}
