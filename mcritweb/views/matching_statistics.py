@@ -9,7 +9,7 @@ claiming 756 functions / 151654 bytes where the honest answer is 4 / 249.
 
 Four of the five fields are recomputable here without asking the backend anything:
 they are counts over the very function matches the report already contains, so
-aggregating the *filtered* list describes exactly what is on screen. The functions
+aggregating the *narrowed* list describes exactly what is on screen. The functions
 below mirror `_summarizeMatches` field for field, and
 `tests/testMatchingStatistics.py` asserts that they reproduce the backend's own
 numbers exactly, for every captured report, whenever nothing is filtered. That
@@ -22,6 +22,44 @@ serialized, so nothing here can recompute them. It is carried through job-wide a
 the table labels it as such, rather than passing a job-wide number off as a filtered
 one.
 """
+
+
+def _on_screen_function_matches(matching_result):
+    """The function matches left standing by everything the page narrowed.
+
+    `applyFilterValues()` keeps two lists and splits its filters between them: the
+    sample-level ones (`filter_family_name`, the score thresholds, `filter_unique_only`,
+    `filter_exclude_own_family`) rebind `filtered_sample_matches` only, the
+    function-level ones (`filter_exclude_pic`, `filter_func_unique`, the offset and
+    score filters) rebind `filtered_function_matches` only. Counting one list alone
+    therefore misses half the narrowings, which is how six of the nine filters used to
+    leave this table job-wide.
+
+    So a match is on screen when *both* survived: its own function is still in the
+    function match list, and the sample it matched is still in the sample table. That
+    is the definition `?famid=` and `?samid=` already imply - `filterToFamilyId` and
+    `filterToSampleId` narrow both lists in lockstep - and extending it to the
+    sample-level filters is what makes the two routes to the same view agree. On the
+    captured 1-vs-corpus report, `?famid=3` and `filter_family_name=win.dridex` show
+    the identical two samples; before this intersection the first said 4 own functions
+    and the second said 756.
+
+    The cost is that for those six filters the statistics now describe less than the
+    function table below them, which mcrit still renders job-wide. That is the honest
+    direction of the two: the page's subject is the samples it is willing to show, and
+    a summary that outruns it is the bug in the issue.
+
+    Unfiltered this cannot drop anything, so it does not disturb the equivalence with
+    the backend above: `_aggregateMatchSampleSummary` derives the report's sample list
+    from the same function matches, so every `matched_sample_id` is in it by
+    construction.
+    """
+    sample_ids_on_screen = {sample_match.sample_id for sample_match in matching_result.filtered_sample_matches}
+    return [
+        function_match
+        for function_match in matching_result.filtered_function_matches
+        if function_match.matched_sample_id in sample_ids_on_screen
+    ]
 
 
 def _aggregate(function_matches):
@@ -54,34 +92,13 @@ def matching_statistics(matching_result):
     - whether the page is showing a subset of the job, which is what makes the
     job-wide `num_self_matches` need a label.
     """
-    function_matches = matching_result.filtered_function_matches
+    function_matches = _on_screen_function_matches(matching_result)
     statistics = {
         "minhash": _aggregate(match for match in function_matches if match.match_is_minhash),
         "pichash": _aggregate(match for match in function_matches if match.match_is_pichash),
-        # Whether this is a subset of the job, measured over the function matches -
-        # which is what the four recomputed fields are counted from, and also what the
-        # page's function table renders. So it is exactly the right question for them.
-        #
-        # It is not the same as "the user filtered something". `applyFilterValues`
-        # splits into family/sample filters and function filters, and only the second
-        # group touches `filtered_function_matches`. Measured on the captured 1-vs-N
-        # report (11 samples, 1913 function matches):
-        #
-        #   filter_direct_min_score=20         3/11 samples   1913/1913 functions
-        #   filter_direct_nonlib_min_score=20  8/11           1913/1913
-        #   filter_frequency_min_score=20      3/11           1913/1913
-        #   filter_unique_only                 7/11           1913/1913
-        #   filter_exclude_own_family          9/11           1913/1913
-        #   filter_family_name=win.citadel     2/11           1913/1913
-        #   filter_exclude_library             6/11           1812/1913
-        #   filter_exclude_pic                11/11            576/1913
-        #   filter_func_unique                11/11            557/1913
-        #
-        # The six that narrow only the sample list leave every function match in place,
-        # so the statistics and the function table below them stay in step - both show
-        # the whole job's function matches. They do disagree with the *sample* table,
-        # which is a real gap, but not one this table can close by relabelling: the
-        # numbers would still be the ones it is showing.
+        # measured against the report as it arrived, so this is "the page is showing a
+        # subset of the job" and not "the user typed something into a filter box" - a
+        # filter that happens to exclude nothing leaves the table honestly unlabelled.
         "is_filtered": len(function_matches) != len(matching_result.function_matches),
     }
     for method in ("minhash", "pichash"):
