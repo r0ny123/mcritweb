@@ -1281,3 +1281,155 @@ because CI never got as far as running it.
     All checks passed!
 
 Pushed aba7ca2. Every other open PR is red for the same pytest reason.
+
+---
+
+# Session resume — 2026-08-30, new machine (Windows)
+
+## The environment from the brief does not exist here
+
+The previous sessions ran on Linux: `.venv/bin/python`, `make init`, a 239-passed
+baseline. This machine is Windows 11, and there is **no `.venv`** — it was never on the
+branch, so "recreate it" was the first job, and it did not go the way the brief describes.
+
+    $ python -m pip install -r requirements.txt
+    ...
+      Project name: pycxxfilt
+      Running `gcc --version` gave "[WinError 2] The system cannot find the file specified"
+      Running `clang --version` gave "[WinError 2] ..."
+    error: metadata-generation-failed
+
+`pycxxfilt` is not a declared dependency of anything in `requirements.txt`. The chain is
+`mcrit` -> `smda>=4.2.13` -> `pycxxfilt>=0.1.0`, and smda imports it at module scope
+(`smda/common/labelprovider/ItaniumDemangler.py:6`), reached from `LanguageAnalyzer`,
+`ElfSymbolProvider`, `PeSymbolProvider` and `MachoDemangler` — so it is not skippable.
+
+**The actual constraint, which took one PyPI query to settle rather than guesswork:**
+
+    pycxxfilt 0.1.0 wheels: cp311 only
+      cp311-...-win_amd64.whl, cp311-...-manylinux..., cp311-...-macosx..., + sdist
+
+There is a Windows wheel; there is no wheel for **any** interpreter but CPython 3.11.
+This box had only 3.13, so pip fell through to the sdist and tried to compile. On CI this
+is invisible: ubuntu runners have gcc, so 3.12/3.13/3.14 build it from source and pass.
+
+Resolved without touching the system: CPython 3.11.9 from the NuGet `python` package,
+which is a plain zip (no installer, no registry, no PATH change), extracted to the
+scratchpad and used to build `.venv`. Nothing outside the repo and the scratchpad was
+modified.
+
+    $ .venv/Scripts/python.exe -V
+    Python 3.11.9
+    $ .venv/Scripts/python.exe -c "import pycxxfilt; print(pycxxfilt.demangle('_ZN3fooEv'))"
+    foo()
+    $ .venv/Scripts/python.exe -m pytest --version   -> pytest 9.1.1
+    $ .venv/Scripts/python.exe -m ruff --version     -> ruff 0.16.0   (the pin CI uses)
+
+Also note `EXIT=0` in my first install attempt was `tail`'s exit code, not pip's — the
+exact trap this log already warns about, hit again inside one session. The install had
+failed. Every exit code below is captured directly from the command, not through a pipe.
+
+## The Windows baseline is 235 passed / 4 failed, and all four are the platform
+
+This matters for every claim further down: on this machine a *clean* `origin/master` does
+not reach 239.
+
+    $ cd <worktree at origin/master> && pytest -q
+    4 failed, 235 passed, 1 warning in 39.54s        MASTER_PYTEST_EXIT=1
+
+    FAILED tests/testSecretKey.py::test_the_key_file_is_not_readable_by_others
+    FAILED tests/testUserFilters.py::...::testRoundTripPreservesValues
+    FAILED tests/testUserFilters.py::...::testSaveIsScopedToTheOwningUser
+    FAILED tests/testUserFilters.py::...::testScoresAreClampedToValidRange
+
+Diagnosed rather than waved away:
+
+- `testSecretKey` asserts `not mode & stat.S_IRGRP`. NTFS has no POSIX mode bits;
+  `os.stat` reports `33206` (0o666) for every file. The assertion cannot hold on Windows
+  and says nothing about the code.
+- The three `testUserFilters` failures are **in `tearDown`**, not in the test bodies:
+  `TemporaryDirectory.cleanup()` -> `PermissionError: [WinError 32] ... 'mcritweb.sqlite'`.
+  The sqlite3 connection is still open; POSIX unlinks an open file, Windows refuses. The
+  assertions under test all passed before teardown ran.
+
+Neither was touched — no test deleted, disabled, skipped or rewritten. The four are
+identical on every branch measured below, so deltas are read against 235, and CI on
+ubuntu remains the authority for the absolute number.
+
+## Open work item 2 — #20/#61 share a line: verified, and my first check was vacuous
+
+The audit command published in `work/STATE.md` **does not work on git 2.52**:
+
+    $ git merge-tree $(git merge-base origin/master origin/fix/35-analyze-a-single-function) \
+          origin/fix/35-analyze-a-single-function origin/fix/36-job-tab-in-the-url \
+          | grep -c "<<<<<<<\|>>>>>>>"
+    0        <- on the pair STATE.md names as THE one that needs care
+
+So the unanchored grep fixed the *last* bug in this command and left it reporting clean
+regardless. Three-argument `git merge-tree` is the deprecated trivial-merge mode; it does
+not run the ort strategy and does not emit conflict markers the way the audit assumed.
+**`work/STATE.md`'s conflict audit should be treated as unverified**, exactly like the
+version before it. Recording this rather than re-running 58 branches' worth of it.
+
+The thing actually asked for was checked by doing the merge, which is unambiguous:
+
+    $ git worktree add --detach <wt> origin/fix/jobs-500-on-unknown-category
+    $ git merge --no-edit origin/fix/jobs-500-when-the-queue-cannot-be-read
+    MERGE_EXIT=0
+    Auto-merging mcritweb/views/data.py
+     mcritweb/views/data.py            |   8 +++
+     tests/testJobsQueueUnavailable.py | 123 ++++++++++++++++++++++++++++++++++++++
+
+`data.py` gains **8 lines** — #61's `statistics is None` guard only. If the shared hunk had
+drifted, the merge would have added it twice or conflicted; it did neither. Confirmed
+directly too:
+
+    $ cmp <#20's hunk> <#61's hunk>   -> byte-identical
+    $ grep -n "max_count = " <merged data.py>
+    806:        max_count = statistics["totals"][state_category] ...
+    812:        max_count = sum(statistics.get(active_category, {}).values()) ...
+    $ # one of each, and both PRs' distinct fixes present:
+    statistics.get(active_category  1     known_job_category  3     statistics is None  1
+    $ pytest -q
+    4 failed, 259 passed, 1 warning in 46.39s      (235 + 24, same 4)
+
+Both PRs still stand alone and still merge cleanly in either order. Nothing to change.
+
+## The three upstream candidates, re-verified on this machine
+
+Not taken on trust from the previous session — each branch checked out fresh and run:
+
+| branch | pytest | ruff |
+|---|---|---|
+| `fix/ci-install-pytest` (#9) | 4 failed, **235** passed | RUFF_EXIT=0 |
+| `fix/query-upload-path-traversal` (#58) | 4 failed, **251** passed | RUFF_EXIT=0 |
+| `fix/9-promote-a-query-to-a-sample` (#37) | 4 failed, **274** passed | RUFF_EXIT=0 |
+
+Same four platform failures in all three, so the deltas are +0, +16 and +39 over master.
+#9 adding nothing is right: it changes CI config, `Makefile` and `AGENTS.md` only.
+
+**#58 re-reproduced here rather than cited.** Its test file dropped onto unpatched master:
+
+    $ cp w58/tests/testQueryUpload.py <master worktree>/tests/ && pytest -q tests/testQueryUpload.py
+    14 failed, 2 passed in 3.62s
+
+    E  AssertionError: a visitor wrote a file outside the instance directory
+    E  assert not True
+    E   +  where True = exists()
+    E   +    where exists = WindowsPath('.../pytest-20/test_a_report_declaring_a_trav0/PLANTED').exists
+
+That is the mutation check in its strongest form — 14 of 16 tests fail without the fix and
+pass with it, so none of them is satisfied by page prose. The copied file was deleted from
+the master worktree afterwards (`git status` clean).
+
+## Blocked, and precisely on what
+
+- **`gh` CLI is unusable here:** `gh auth status` -> "The token in keyring is invalid."
+- **The GitHub MCP server was rate-limited** for the first ~25 minutes of this session
+  (`get_me` -> "rate limit exceeded. Retry after 12m38s", counting down across retries).
+- **`git push` works** — Git Credential Manager holds a valid credential;
+  `git push --dry-run origin claude/mcritweb-triage-fixes-a5adho` -> "Everything up-to-date".
+
+So branch pushes are available and API calls were not, which is why this session did local
+verification first. The compromised token from the earlier session was **not** used and not
+looked for; it still needs revoking at https://github.com/settings/tokens by hand.
