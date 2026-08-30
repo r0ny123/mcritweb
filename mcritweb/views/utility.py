@@ -4,10 +4,13 @@ Request-parameter parsing lives in params.py; the function-diff block comparison
 lives in functiondiff.py. See issue #88.
 """
 
+import collections
 import functools
 import os
 import re
 import shutil
+import threading
+import time
 
 import requests
 from flask import current_app, flash, g, redirect, session, url_for
@@ -46,14 +49,80 @@ def default_server_probe():
     return result.status_code != 401
 
 
+#: The last probe answer. Module-level, so it is per worker process - two workers can
+#: briefly disagree, which is the cost of not making this round-trip on every request
+#: to all 36 decorated routes. See issue #89.
+#:
+#: Two timestamps, because they answer different questions. `answered_at` is when the
+#: probe came back, and it is what the TTL is measured from: taking it before the call
+#: would make every entry `probe_duration` seconds old at birth, so a slow backend -
+#: precisely the case where a per-request round-trip hurts - would get little or no
+#: caching. `started_at` is when the probe went out, and it is what decides which of two
+#: concurrent answers to keep: the probe that *started* later observed the more recent
+#: state, even if it finished first.
+_ProbeAnswer = collections.namedtuple("_ProbeAnswer", "server_url started_at answered_at was_up")
+_probe_cache = None
+_probe_cache_lock = threading.Lock()
+
+#: Bumped by forget_server_probe. A probe that was already in flight when the settings
+#: changed carries the old generation and its answer is discarded rather than written
+#: over the invalidation - without this, an admin who has just corrected a bad token
+#: keeps seeing the failure for up to the full TTL, which is the one thing
+#: forget_server_probe exists to prevent. The probe runs on 36 routes, so on a busy
+#: instance one is nearly always in flight when the settings are saved.
+_probe_generation = 0
+
+
+def forget_server_probe():
+    """Drop the cached answer. Called when the server settings change, so an operator
+    who has just fixed the URL or token does not wait out the TTL to see it work."""
+    global _probe_cache, _probe_generation
+    with _probe_cache_lock:
+        _probe_cache = None
+        _probe_generation += 1
+
+
+def probe_server(probe, ttl, server_url):
+    """`probe()`, but at most once per `ttl` seconds per backend URL.
+
+    A raise is not cached: a connection error is the answer most likely to change on
+    its own, and the caller turns it into a different message than "up" or "down".
+    Keyed by URL so pointing the instance at another backend re-probes immediately;
+    every other settings change - a token correction, say - calls forget_server_probe().
+
+    The lock is not held across the probe. Serialising every request on all 36 decorated
+    routes behind one HTTP call with a 13-second timeout would be worse than the problem
+    this cache is solving. Two threads arriving on a cold cache both probe; the write is
+    reconciled under the lock afterwards, against both the generation and the incumbent's
+    start time, so neither a concurrent invalidation nor an older answer is lost.
+    """
+    global _probe_cache
+    if ttl <= 0:
+        return probe()
+    with _probe_cache_lock:
+        cached = _probe_cache
+        generation = _probe_generation
+    if cached is not None and cached.server_url == server_url and time.monotonic() - cached.answered_at < ttl:
+        return cached.was_up
+
+    started_at = time.monotonic()
+    answer = probe()
+    fresh = _ProbeAnswer(server_url, started_at, time.monotonic(), answer)
+    with _probe_cache_lock:
+        if generation == _probe_generation and (_probe_cache is None or _probe_cache.started_at <= fresh.started_at):
+            _probe_cache = fresh
+    return answer
+
+
 def mcrit_server_required(view):
     @functools.wraps(view)
     def wrapped_view(**kwargs):
         # resolved from config so tests can substitute it, in the same way the
         # backend client itself is substituted via MCRIT_CLIENT_FACTORY (issue #88)
         probe = current_app.config.get("MCRIT_SERVER_PROBE", default_server_probe)
+        ttl = current_app.config.get("MCRIT_SERVER_PROBE_TTL", 0)
         try:
-            if not probe():
+            if not probe_server(probe, ttl, get_server_url() if ttl > 0 else None):
                 flash('Connected to MCRIT server but could not authenticate - Did you configure a token in the server settings?', category='error')
                 return redirect(url_for('index'))
         except Exception:
