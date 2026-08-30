@@ -691,6 +691,15 @@ def linkhunt_for_sample_or_query(job_info, matching_result: MatchingResult):
 # Listing Job information
 ################################################################
 
+#: Every job type the jobs page offers a tab for. `Job.method_types["all"]` is not the
+#: whole list on its own: it omits recalculatePicHashes and recalculateMinHashes, which
+#: the admin maintenance routes create and which the menu does render.
+JOB_CATEGORIES = tuple(Job(None, None).method_types["all"]) + (
+    "recalculatePicHashes",
+    "recalculateMinHashes",
+)
+
+
 @bp.route('/jobs',methods=('GET', 'POST'))
 @visitor_required
 @mcrit_server_required
@@ -706,6 +715,11 @@ def jobs():
     job_template = Job(None, None)
     # dynamically create the job page with nested menu based on groups from statistics and Job.method_types
     active_category = request.args.get('active', None)
+    if active_category is not None and active_category not in JOB_CATEGORIES:
+        # rendering an empty list would read as a fact about the queue rather than
+        # about the URL, so say which it is and fall back to the default tab
+        flash(f'"{active_category}" is not a job type.', category="error")
+        active_category = None
     summarized_groups = {"matching": 0, "query": 0, "blocks": 0, "minhashing": 0, "collection": 0}
     for group in summarized_groups.keys():
         for category in job_template.method_types[group]:
@@ -764,7 +778,10 @@ def jobs():
         max_count = statistics["totals"][state_category] if state_category in statistics["totals"] else 0
         pagination = Pagination(request, max_count, limit=25, query_param="p", limit_param="l")
     else:
-        max_count = sum(statistics[active_category].values()) if active_category else 0
+        # getQueueStatistics only reports categories that have at least one job, so a
+        # type that has never run - or whose jobs were all deleted through this page's
+        # own per-category delete - is absent, and indexing it was a 500
+        max_count = sum(statistics.get(active_category, {}).values()) if active_category else 0
         pagination = Pagination(request, max_count, limit=25, query_param="p")
     jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, ascending=ascending)
     samples_by_id = {}
