@@ -1868,3 +1868,84 @@ reference, which breaks GitHub's pattern and leaves the sentence intact.
 
 **Result, verified through the API rather than by reading bodies back: 17 of 61 PRs carry
 a closing link, to 17 distinct issues, and every one is a PR that fully resolves it.**
+
+## Closing the gaps: 17 issues -> 25
+
+The goal is that every issue can be closed with confidence, and that anything found
+along the way and left unfixed gets fixed. Working the 36 that could not close.
+
+### Four closed by reading the issue rather than the PR's own hedge
+
+Three PRs were held open by caveats that had stopped being true, and one by a caveat
+about something the issue never asked for:
+
+- **#73** - the caveat named the same finished-but-empty hole in `data.linkhunt` as an
+  open follow-up. #106 had already fixed it (`is_finished` there renders
+  `result_empty.html`). The issue is about the JobResult view either way.
+- **#54** - "the browse pages still say nothing" is fixed in #119, which was already
+  editing those three templates.
+- **#42** - all three orderings the issue asks about are implemented (clustered,
+  sample_id, family) plus the reset button.
+- **#100** - the issue scopes itself to "two small, independent changes" and sequences
+  hashed-tokens-at-rest as "after the two above rather than instead of them", so the
+  caveat naming it was never a reason to hold the issue open.
+
+Also **#78** (the duplicate the screenshot shows is within one page, which is what is
+removed) and **#44** (the smda half is another codebase, as the issue itself says).
+
+**#89 stays open deliberately.** Its "Suggested direction" says the TTL cache is the
+cheap win and "remove the probe, handle errors at the call site" is the real fix, and
+that "the decision belongs to whoever owns the error-handling story, not to a drive-by
+change". A PR cannot close an issue whose ask is a decision the maintainer has not made.
+
+### #65 - the last table building its empty state by hand
+
+`cross_compare.html` still hardcoded "No samples available. Click here to upload your
+first sample" under a search box, and it was the one page still handing a **visitor** a
+link to `data.submit`, which is contributor-only and answers 403. Routed through the
+shared macro, which already knows about `CONTRIBUTOR_ONLY_LINKS`.
+
+The macro lost its leading underscore to get there - Jinja refuses to import a name
+starting with one, and it stopped being template-private the moment a second template
+needed it.
+
+**A test that passed for the wrong reason, caught by mutation.** The visitor assertion
+was `'href="/data/submit"' not in page`. The markup it replaced used *single* quotes,
+so it passed against exactly the thing it was written to catch. It asserts on the
+rendered element now, and two of the three new tests fail when the fix is reverted.
+
+### #101 - the half that was actually the issue
+
+`/login` and `/register` counted nothing. Collapsing the two login messages made
+enumeration harder and did nothing about rate, which is what the issue is titled after.
+
+Failures now go into a new `login_attempt` table - SQLite, so no new dependency and,
+unlike an in-process counter, correct across the several workers a real deployment runs.
+Ten attempts per fifteen minutes; the block expires on its own because the count is
+taken over the trailing window rather than held as a lockout flag, so there is no state
+to unlock.
+
+The issue asks for two decisions to be made explicitly. Both are, in code and in tests:
+
+- **Keyed on the address, never the account.** A per-account lockout hands an attacker a
+  denial of service against any account whose name they know. The username is counted,
+  but only so the log can distinguish a spray from a run against `admin`.
+- **Failures are logged**, so an operator can see an attempt in progress.
+
+Two details that are easy to get wrong and are pinned by tests: the throttle runs
+*before* the password check, because the absent-user dummy hash is deliberately
+expensive and would otherwise make this the cheapest route on which to burn the
+server's CPU; and on `/register` only a wrong registration token counts as a guess -
+mistyping a password twice is not guessing, and counting it would lock people out of
+their own signup.
+
+All four touchpoints AGENTS.md requires for a schema change, including the migration
+and the README entry. `testMigrations.py` gains the schema this step starts from, as
+that file explicitly asks new migrations to do.
+
+**Mutation-checked, including one that did not bite the first time.** Mutating the
+"Username is required" branch left the registration test green - the test posts a
+non-empty username and never reaches it. Re-run against the password-mismatch branch,
+which the test does drive, it fails. Four mutations, all biting.
+
+Suite 257 -> 268 on that branch; ruff clean; CI green on both changed PRs.
