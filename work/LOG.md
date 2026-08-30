@@ -926,3 +926,100 @@ Headlines, all measured:
   and `ScoreColorProvider` blends *toward 255* so the whole heat-map inverts in meaning
   on a dark ground. The cached match-diagram PNGs are baked on white and never
   invalidated.
+
+---
+
+## Session 7 — the "can't be done here" set becomes fifteen PRs
+
+Every issue the research pass re-triaged now has a PR, plus the ones I did by hand.
+
+### Landed this session
+
+| issue | PR | one line |
+|---|---|---|
+| #34 | [#35](https://github.com/r0ny123/mcritweb/pull/35) | accordion, API usage, MinHash indicator — plus an unterminated `<i>` tag |
+| #35 | [#36](https://github.com/r0ny123/mcritweb/pull/36) | analyze a function, not its parent sample |
+| #9 | [#37](https://github.com/r0ny123/mcritweb/pull/37) | promote a query to a sample |
+| #93 | [#38](https://github.com/r0ny123/mcritweb/pull/38) | unique blocks gets a page, a sample set and rule knobs |
+| #44 | [#39](https://github.com/r0ny123/mcritweb/pull/39) | `dedumped` is not a dump; two 500s on the submit path |
+| #38 | [#40](https://github.com/r0ny123/mcritweb/pull/40) | matching statistics follow the filter |
+| #64 | [#41](https://github.com/r0ny123/mcritweb/pull/41) | deserialize the function listing |
+| #69 | [#42](https://github.com/r0ny123/mcritweb/pull/42) | the FunctionVs loop and cycle highlights actually work |
+| #68 | [#43](https://github.com/r0ny123/mcritweb/pull/43) | diagram off the page request; four costs |
+| #77/#76 | [#44](https://github.com/r0ny123/mcritweb/pull/44) | stop downloading the whole queue and every family |
+| #80 | [#45](https://github.com/r0ny123/mcritweb/pull/45) | clipboard copies `.value`; version column; sortable |
+| #7 | [#46](https://github.com/r0ny123/mcritweb/pull/46) | round the score columns |
+| #46 | [#47](https://github.com/r0ny123/mcritweb/pull/47) | a cross job that took 8s no longer reports 0:00:00 |
+| #67 | [#48](https://github.com/r0ny123/mcritweb/pull/48) | the CFG view survives a function with no xcfg |
+| #74 | [#49](https://github.com/r0ny123/mcritweb/pull/49) | the two CFG panes pan and zoom together |
+
+### The worktree collision, and what fixed it
+
+Four agents (#69, #68, #77, #38) were handed the **same** worktree by the harness and their
+edits interleaved in `views/data.py`. Nobody lost work — each of them noticed
+independently, isolated their own hunks, and rebuilt in a clean tree off `origin/master`
+— but the numbers they first measured were contaminated, and two of them said so before
+I asked.
+
+**Standing fix, now in every brief:** the agent's first action is
+`git worktree add --detach /tmp/work-<issue> origin/master`, plus a pristine
+`/tmp/baseline-<issue>` it never edits, and it confirms `git status` there lists only its
+own files before reporting. The four briefs I sent after that produced clean isolated
+trees with no intervention.
+
+One thing this cost me: an agent created a branch in the shared tree, which moved the
+*other* agents' base from `227bc4a` to `df53db9` under them. Recoverable, but it is why
+the rule is "your own tree first, before any other work" rather than "eventually".
+
+### My own mistake, recorded
+
+Mutation-checking `explore.py` on a branch with no commit yet, I reverted the mutation
+with `git checkout mcritweb/views/explore.py` — which threw away the agent's actual
+change along with my mutation. Rebuilt it from the diff I had already printed and
+confirmed byte-for-byte via `git diff --stat`. **Use `cp` backups for mutation checks on
+an uncommitted tree, never `git checkout`.**
+
+### Codex findings this session — six, all real
+
+- **#10 uppercase SHA-256** — real, fixed, and the mutation check needed three tests: two
+  for the fold, one against the *tempting wrong fix* of lowercasing `query` itself, which
+  would also have folded the display.
+- **#19 `getMatchesForSampleVsGroup` unnamed** — real, and the fixture claim checked out
+  exactly (5 such jobs in `queue.json`). The interesting half was **why my ratchet missed
+  it**: it ratcheted against `Job.method_types["all"]`, which mcrit maintains by hand and
+  which omits four methods. Now enumerates `@Remote`-decorated methods, which found
+  `doDbCleanup` as well — plus a second ratchet reading the captured queue, which is the
+  one the finding would have tripped.
+- **#15 file-wide declaration search** — real. Scoping alone produced a *false positive*
+  on a parameter reassignment, so the parameter half was not optional. Zero findings
+  either way against the current tree, which is the right moment to tighten.
+- **#16 dead CTA link for visitors** — real, and it was nine call sites, four of them
+  older than my branch. Gate went in `_empty_state`, and the premise (`/data/submit` is
+  403 for a visitor) is now pinned by its own test.
+- **#44 partial queue read** — real, and worse than "undercounts": the flash *said* the
+  annotations were not shown while some of them were.
+- **#46 tooltip precision** — real and subtle. The test compared the cell against
+  `round(tooltip)`, but the tooltip is already rounded to two decimals, so a score of
+  2.501 (tooltip `2.50`, cell `3`) would have failed a correct page — a latent spurious
+  failure waiting for the next fixture regeneration.
+- **#47 fan-out parent queued last** — real; verified the parent is created 10ms after its
+  last child. Did not take the remedy (per-child fetch is the cost the `wait` label is
+  about) and relabelled instead, which is what was actually wrong.
+
+Two threads left **open on purpose**, both maintainer calls rather than mine: whether
+`main_duo.js` counts as vendored (it is already a project fork — 492-line diff from
+`main.js`, our own CSRF patches on master), and whether an image cache counts as "writes"
+in `routePolicy`'s table.
+
+### Corrections agents made to my briefs, which is the point of asking them
+
+- Jinja's `round` filter is round-half-to-**even**, not half-up — so the two rounding
+  forms I offered are byte-identical for every input, and the choice had to be made on
+  other grounds.
+- The #46 progress rollup is **free** on `/data/jobs/<id>`, which already fetches every
+  child; my cost objection only holds for the result pages.
+- DataTables is **not** removed at `df53db9` — that lives on another branch. I had told
+  an agent otherwise.
+- The #80 version column costs **zero** extra calls for a family job, not one:
+  `getFamily(with_samples=True)` already answers with them, checked against both mcrit
+  1.5.3 and 1.8.1.
