@@ -67,18 +67,43 @@ def test_the_fake_reports_version_in_the_shape_the_real_client_returns(corpus_mc
 
 # --- the statistics page actually renders the statistics --------------------------
 
+#: `statistics.html` renders `{% if loop.index <= 12 %}`, so it shows at most this many
+#: statistics. Restated here because the tests below have to agree with the page rather
+#: than with the fixture: the captured status carries 8 fields today, but these fixtures
+#: are regenerated from a live backend, and one that reported more would have broken CI
+#: without anything about the page changing.
+STATISTICS_ROW_LIMIT = 12
+
+
 def test_the_statistics_page_renders_the_numbers_it_was_given(client, as_role):
     """This is the test that could not have passed before: the page rendered an empty
     table, and its 200 said nothing."""
     as_role("visitor")
     expected = load("status")["status"]
+    rendered = list(expected)[:STATISTICS_ROW_LIMIT]
 
     page = client.get("/explore/statistics").get_data(as_text=True)
 
     # one value cell per statistic; the key goes in a <th>
-    assert page.count("<td") >= len(expected), "the statistics table came out empty"
-    for key, value in expected.items():
-        assert cell_after(page, key) == str(value), f"{key} is not on the page"
+    assert page.count("<td") >= len(rendered), "the statistics table came out empty"
+    for key in rendered:
+        assert cell_after(page, key) == str(expected[key]), f"{key} is not on the page"
+
+
+def test_the_statistics_page_stops_at_its_row_limit(client, as_role, app, corpus_mcrit):
+    """The cap is the page's, not the fixture's, so it is pinned independently of how
+    many fields the captured status happens to carry. Without this, the limit is only
+    visible in a Jinja conditional and the test above silently stops covering the tail
+    of a larger status."""
+    as_role("visitor")
+    many = {f"stat_{index:02d}": index for index in range(STATISTICS_ROW_LIMIT + 3)}
+    corpus_mcrit.getStatus = lambda *args, **kwargs: {"status": many}
+    app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: corpus_mcrit
+
+    page = client.get("/explore/statistics").get_data(as_text=True)
+
+    shown = [key for key in many if f">{key}</td>" in page or cell_after(page, key) is not None]
+    assert shown == list(many)[:STATISTICS_ROW_LIMIT], f"the page rendered {len(shown)} rows"
 
 
 # --- the admin page shows a version, not a dict -----------------------------------
