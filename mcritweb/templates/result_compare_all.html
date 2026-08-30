@@ -290,7 +290,7 @@ Results for Job: {{ job_info.job_id }}
           {% elif column_type == "num_matched_functions" %}
             <td style="text-align: right;" valign="middle">{{ aggregate["num_functions_matched"] }}</td>
           {% elif column_type == "best_score" %}
-            <td style="text-align: right;" valign="middle">{{ "%d"|format(aggregate["best_score"]) }}</td>
+            <td style="text-align: right;" valign="middle">{{ "%3.0f"|format(aggregate["best_score"]) }}</td>
           {% elif column_type == "num_minhash" %}
             <td style="text-align: right;" valign="middle">{{ aggregate["minhash_matches"] }}</td>
           {% elif column_type == "num_pichash" %}
