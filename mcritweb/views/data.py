@@ -772,7 +772,11 @@ def jobs():
         max_count = statistics["totals"][state_category] if state_category in statistics["totals"] else 0
         pagination = Pagination(request, max_count, limit=25, query_param="p", limit_param="l")
     else:
-        max_count = sum(statistics[active_category].values()) if active_category else 0
+        # `active` is a query parameter, so it is whatever the caller typed: a category
+        # that has no jobs right now, a bookmark from when it did, or junk. Indexing it
+        # was a KeyError and a 500 - and since `statistics` only carries the categories
+        # the queue currently holds, that was most categories most of the time.
+        max_count = sum(statistics.get(active_category, {}).values())
         pagination = Pagination(request, max_count, limit=25, query_param="p")
     jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, ascending=ascending)
     samples_by_id = {}
