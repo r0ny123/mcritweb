@@ -136,16 +136,17 @@ Jobs
       </ul>
     </div>
   </nav>
-  {#
-  {% if query %}
-  <p>Results for "{{ query }}"</p>
-  {% endif %}
-  <form style="width:100%" method="POST" required>
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="text" class="form-control shadow-none" name="Search"id="Search" placeholder="Search" autofocus autocomplete="on">
+  <form style="width:100%" method="GET">
+    {# carried so searching does not silently drop the category/state you were looking at #}
+    {% if active %}<input type="hidden" name="active" value="{{ active }}">{% endif %}
+    {% if state %}<input type="hidden" name="state" value="{{ state }}">{% endif %}
+    {% if ascending %}<input type="hidden" name="ascending" value="true">{% endif %}
+    <input type="text" class="form-control shadow-none" name="Search" id="Search" placeholder="Search jobs" value="{{ query or '' }}" autocomplete="on">
     <input type='submit' hidden>
   </form>
-  #}
+  {% if query %}
+  <p>Results for "{{ query }}" &mdash; <a href="{{ url_for('data.jobs', active=active, state=state) }}">clear</a></p>
+  {% endif %}
 
   {% if active %}
 <p>

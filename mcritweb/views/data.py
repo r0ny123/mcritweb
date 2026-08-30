@@ -691,14 +691,14 @@ def linkhunt_for_sample_or_query(job_info, matching_result: MatchingResult):
 # Listing Job information
 ################################################################
 
-@bp.route('/jobs',methods=('GET', 'POST'))
+@bp.route('/jobs')
 @visitor_required
 @mcrit_server_required
 def jobs():
-    query = None
-    if request.method == 'POST':
-        query = request.form['Search']
-    # used for job/method collections
+    # a search is a read, so it travels in the URL: the result is linkable, survives a
+    # refresh, and is carried by the pagination links, which build from request.args.
+    # It used to be a POST whose value was read and then never used - see issue #51.
+    query = request.args.get('Search', '').strip()
     client = get_client()
     # sort order
     ascending = request.args.get('ascending', 'false').lower() == "true"
@@ -766,7 +766,10 @@ def jobs():
     else:
         max_count = sum(statistics[active_category].values()) if active_category else 0
         pagination = Pagination(request, max_count, limit=25, query_param="p")
-    jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, ascending=ascending)
+    # `filter` is a substring test against the job's parameters string, applied by the
+    # backend. Note it filters the page it was asked for rather than the whole queue,
+    # so the counts above are of unfiltered jobs - see the PR for issue #51.
+    jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, filter=query or None, ascending=ascending)
     samples_by_id = {}
     families_by_id = {}
     if jobs:
@@ -777,7 +780,7 @@ def jobs():
         for job in jobs:
             if job.family_id is not None:
                 families_by_id[job.family_id] = client.getFamily(job.family_id)
-    return render_template('jobs.html', families=families_by_id, samples=samples_by_id, active=active_category, state=state_category, jobs=jobs, menu_configuration=menu_configuration, p=pagination, query=query)
+    return render_template('jobs.html', families=families_by_id, samples=samples_by_id, active=active_category, state=state_category, ascending=ascending, jobs=jobs, menu_configuration=menu_configuration, p=pagination, query=query)
 
 
 @bp.route('/jobs/<job_id>')
