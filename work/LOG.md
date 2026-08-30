@@ -1023,3 +1023,37 @@ in `routePolicy`'s table.
 - The #80 version column costs **zero** extra calls for a family job, not one:
   `getFamily(with_samples=True)` already answers with them, checked against both mcrit
   1.5.3 and 1.8.1.
+
+### #50 landed, and four more Codex findings
+
+[PR #50](https://github.com/r0ny123/mcritweb/pull/50) — 244 `column_type` branches across four
+result templates become 92, net −295 lines of template. Acceptance was a byte diff of 51
+rendered pages: 37 byte-identical, and the 14 that differ are all `result_compare_all.html`,
+all whitespace-only, all DOM-identical node by node. The macros went into a **new**
+`table/match_row.html` precisely so they could not collide with the thirty-odd open PRs
+touching `sample_row.html` / `function_row.html`.
+
+Worth keeping: **Jinja renders a macro called with the wrong arity as nothing at all,
+silently.** Marker-based assertions caught 6 of 18 arity mutations — a marker present in
+one table hid breakage in another. A structural audit (every match table has header cells
+and body cells) catches 18 of 18.
+
+Findings closed:
+
+- **#34** — the statistics test required every field of the captured status to appear,
+  while `statistics.html` renders at most 12. Passes today at 8 fields; a fixture refresh
+  from a richer backend would have broken CI with nothing about the page changing. Test
+  now walks what the page renders, and a second test pins the cap against a synthetic
+  15-field status so the limit is asserted somewhere other than a Jinja conditional.
+- **#38 ×2** — `start_unique_blocks` forwarded ids the selection page never validated (it
+  checks only the ten it renders), and the submit URL was a root-relative literal that
+  leaves the app under a `SCRIPT_NAME` prefix. Both fixed; `cross_compare.html:90` has the
+  same URL bug and was left alone as out of scope, with that said on the thread.
+
+**A mistake worth recording.** I pushed the first #38 fix with a failing test, because
+`pytest -q | tail -2 && git push` returns the exit status of `tail`, not pytest. The
+failure was real — committing the fake to answering *every* `is*Id` let
+`data.match_functions` past its guard and into `match_info["function_entry_a"]` on a
+`None`. I narrowed the fake to `isSampleId`, wrote the exposed defect into its docstring,
+and pushed the correction two minutes later. **Capture the exit code (`cmd > file; echo $?`)
+rather than piping into `tail` inside a `&&` chain.**
