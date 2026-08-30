@@ -245,7 +245,11 @@ def test_a_failed_job_is_not_reported_as_an_unknown_one(client, as_role, corpus_
     assert b"ran out of attempts" in response.data
 
 
-def test_a_terminated_job_says_it_was_terminated(client, as_role, corpus_mcrit, monkeypatch):
+def test_a_terminated_job_is_not_reported_as_an_unknown_one(client, as_role, corpus_mcrit, monkeypatch):
+    """Same name as the job-page test in this file until the branches were merged;
+    that one drives /data/jobs/<id> through `one_job`, this one drives the
+    /data/result/<id> dispatch. Renamed because the later definition shadowed the
+    earlier one and the suite stayed green with one of them never running."""
     as_role("visitor")
     job_id = _with_job(corpus_mcrit, monkeypatch, terminated=True)
 
@@ -303,9 +307,17 @@ def test_a_report_this_dispatch_cannot_render_is_reported_not_crashed(client, as
     assert b"incompatible with the requested interpretation" in response.data
 
 
-def test_job_page_renders_for_a_finished_job(client, as_role):
+@pytest.mark.parametrize(
+    "report",
+    ["matches_for_sample", "matches_for_sample_vs", "matches_for_query", "cross_compare", "unique_blocks"],
+)
+def test_job_page_renders_for_a_finished_job(client, as_role, report):
+    """This used to cover only matches_for_sample, which is the one report in the corpus
+    with no sub-jobs. The cross compare has five, none of them captured - the same shape
+    as a dependency deleted through the UI - and the page 500d on it. See
+    tests/testJobOverview.py."""
     as_role("visitor")
-    response = client.get(f"/data/jobs/{job_id_of('matches_for_sample')}")
+    response = client.get(f"/data/jobs/{job_id_of(report)}")
     assert response.status_code == 200
 
 
