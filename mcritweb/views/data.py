@@ -696,8 +696,21 @@ def linkhunt_for_sample_or_query(job_info, matching_result: MatchingResult):
 # the last child is done, so its own duration covers only the assembly of the result
 # and reads as ~0 however long the matching took (issue #46). created_at ->
 # finished_at brackets the children too, and both are already on the job document, so
-# it costs no additional backend call.
+# it costs no additional backend call. Until the job finishes the far end of that
+# span is the clock, which is the only reason `utc_now` below exists.
 JOB_TIMESTAMP_FMT = "%Y-%m-%d-%H:%M:%S"
+
+
+def utc_now():
+    """The wall clock a still-running job's total is measured against.
+
+    Job timestamps arrive in UTC and are rendered as they arrive, so the comparison
+    has to be UTC too - the rest of the app already reads the clock this way (db.py,
+    authentication.py). Whole seconds, like every other timestamp that goes into the
+    subtraction. Its own function so a test can freeze it: this is the only thing
+    about these rows that is not deterministic.
+    """
+    return datetime.utcnow().replace(microsecond=0)
 
 
 def job_timestamp_as_datetime(value):
@@ -705,10 +718,12 @@ def job_timestamp_as_datetime(value):
 
     Job.created_at / .finished_at normalize the {"$date": ...} the REST API sends into
     an ISO string, but hand back whatever the queue stored otherwise - a datetime, for
-    an in-process LocalQueue.
+    an in-process LocalQueue. Both shapes come back at whole-second resolution: the
+    string one has to be, since parsing it drops the sub-second part, and a total of
+    `0:01:29.510000` beside a `0:00:00` duration reads as a different kind of number.
     """
     if isinstance(value, datetime):
-        return value
+        return value.replace(microsecond=0)
     if isinstance(value, str):
         try:
             return datetime.strptime(value[:10] + "-" + value[11:19], JOB_TIMESTAMP_FMT)
@@ -719,13 +734,24 @@ def job_timestamp_as_datetime(value):
 
 @bp.app_template_filter('total_duration')
 def total_duration(job_info):
-    """How long a job that waited on dependencies took end to end, or None when that
-    is not a number this job can produce."""
+    """How long a job that waited on dependencies has taken end to end, or None when
+    that is not a number this job can produce.
+
+    A job still waiting on its dependencies is measured against the clock. That is
+    the state issue #46 is really about - while the children run, the parent has no
+    duration and a progress of 0, so the page a reader watches refresh says nothing
+    at all about how long the work has been going.
+    """
     try:
         if not job_info.all_dependencies:
             return None
         created_at = job_timestamp_as_datetime(job_info.created_at)
-        finished_at = job_timestamp_as_datetime(job_info.finished_at)
+        if job_info.finished_at is None:
+            # a failed or terminated job never gets a finished_at, so counting it
+            # against the clock would keep growing for as long as the document lives
+            finished_at = None if job_info.is_failed or job_info.is_terminated else utc_now()
+        else:
+            finished_at = job_timestamp_as_datetime(job_info.finished_at)
     except KeyError:
         # a job document written before one of these fields existed does not carry it
         return None
