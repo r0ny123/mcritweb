@@ -113,6 +113,37 @@ class UserInfo:
     def registration_date(self):
         return self.registered.strftime("%Y-%m-%d")
     
+def get_stored_password_hash_method():
+    """The hashing method the user table's passwords were made with, or None.
+
+    check_password_hash costs whatever the *stored* hash asks for, not whatever
+    generate_password_hash would pick today, and werkzeug's default has moved
+    (pbkdf2:sha256:260000 -> 600000 -> scrypt) across the versions this app has been
+    pinned to. Werkzeug writes the method into the hash ahead of the first '$', so the
+    answer can simply be read off a row. See issue #101 and _spend_a_password_check.
+
+    The *most common* method, not the first row's. A table carrying a mix - accounts
+    from before a werkzeug upgrade alongside accounts registered after it - has no
+    single right answer, and one dummy cannot match two methods. Picking the majority
+    leaves the smallest set of accounts distinguishable; picking an arbitrary row (a
+    bare LIMIT 1) leaves whichever set that row does not belong to, which on an upgraded
+    instance is every account created since the upgrade.
+    """
+    record = get_db().execute(
+        """
+        SELECT substr(password, 1, instr(password, '$') - 1) AS method, COUNT(*) AS rows_with_it
+        FROM user
+        WHERE instr(password, '$') > 1
+        GROUP BY method
+        ORDER BY rows_with_it DESC
+        LIMIT 1;
+        """
+    ).fetchone()
+    if record is None or not record["method"]:
+        return None
+    return record["method"]
+
+
 def get_all_user_info():
     all_user_infos = []
     database = get_db() 

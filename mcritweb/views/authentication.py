@@ -2,6 +2,7 @@ import functools
 import hashlib
 import os
 import re
+import secrets
 import sqlite3
 import uuid
 
@@ -20,6 +21,90 @@ bp = Blueprint('authentication', __name__, url_prefix='/')
 #: reach nothing and no page explains why. Anything writing `user.role` validates
 #: against this first. See issue #95.
 KNOWN_ROLES = ('pending', 'visitor', 'contributor', 'admin')
+
+#: One message for both halves of a failed login. Saying which half was wrong tells an
+#: unauthenticated caller whether an account exists, one request at a time. See #101.
+LOGIN_FAILED = 'Incorrect username or password.'
+
+#: One message for a registration that did not produce an account. "That username is
+#: taken" is the same disclosure /login was just stopped from making, from a route that
+#: is just as anonymous. Nothing is lost by staying quiet: a new account is created
+#: `pending` and cannot be used until an admin approves it, so the honest instruction
+#: is the same either way.
+REGISTRATION_SUBMITTED = ('Registration submitted. An administrator has to approve the account before you can '
+                          'log in - if you cannot log in shortly, please contact one.')
+
+#: A real hash to check a password against when the username does not exist, so that
+#: "no such user" costs what "wrong password" costs. The message alone does not close
+#: the hole: password hashing is deliberately slow, so skipping it is measurable.
+#:
+#: The method matters as much as the fact of hashing. check_password_hash costs whatever
+#: the *stored* hash asks for, and werkzeug's default has moved across the versions this
+#: app has been pinned to - measured here on werkzeug 3.1.8, one check costs 66 ms for
+#: pbkdf2:sha256:260000 (its 2.2 default, which is what this repo pinned until #27),
+#: 150 ms for pbkdf2:sha256:600000, and 93 ms for scrypt:32768:8:1. A dummy built with
+#: today's default therefore equalises nothing on a database whose rows predate the
+#: upgrade - it just moves the tell. So the dummy is built with the method the user
+#: table actually uses, and rebuilt if that answer changes.
+#:
+#: Built on first use rather than at import, because every app start - and every test
+#: that builds one - would otherwise pay for a hash nobody needs.
+_ABSENT_USER_PASSWORD_HASH = None
+_ABSENT_USER_HASH_METHOD = None
+
+
+def _spend_a_password_check(password):
+    """Do the work a real password check would, and throw the answer away."""
+    global _ABSENT_USER_PASSWORD_HASH, _ABSENT_USER_HASH_METHOD
+    method = db.get_stored_password_hash_method()
+    if _ABSENT_USER_PASSWORD_HASH is None or _ABSENT_USER_HASH_METHOD != method:
+        secret = secrets.token_urlsafe(32)
+        # an empty table has no method to match; the default is as good an answer as
+        # any, and there is no account to be told apart from in the first place
+        try:
+            _ABSENT_USER_PASSWORD_HASH = (generate_password_hash(secret, method=method) if method
+                                          else generate_password_hash(secret))
+        except ValueError:
+            # the stored hashes name something werkzeug can verify but not generate - a
+            # legacy md5$/sha1$ hash, or a column written by something other than this
+            # app. Falling back costs the timing match for those rows; raising would
+            # make /login 500 for absent usernames *only*, which is both a denial of
+            # service and a perfect existence oracle - strictly worse than the leak
+            # this whole change is closing.
+            current_app.logger.warning("Cannot generate a %r hash for the absent-user check; using the default", method)
+            _ABSENT_USER_PASSWORD_HASH = generate_password_hash(secret)
+        _ABSENT_USER_HASH_METHOD = method
+    check_password_hash(_ABSENT_USER_PASSWORD_HASH, password)
+
+
+def _rehash_if_stale(user_info, password):
+    """Move a verified password onto the current hashing method.
+
+    Only reachable with a password that has just been checked, so the plaintext is in
+    hand and the rewrite is safe. This is what lets the table converge on one cost:
+    without it, a database carrying a mix of old and new hashes keeps a timing
+    difference between accounts that _spend_a_password_check cannot match with one dummy.
+    """
+    global _ABSENT_USER_PASSWORD_HASH, _ABSENT_USER_HASH_METHOD
+    stored_method = user_info.password.split("$", 1)[0]
+    if stored_method == _current_hash_method():
+        return False
+    user_info.password = generate_password_hash(password)
+    # the dummy was built to match the old method, so it is now the odd one out
+    _ABSENT_USER_PASSWORD_HASH = None
+    _ABSENT_USER_HASH_METHOD = None
+    return True
+
+
+_CURRENT_HASH_METHOD = None
+
+
+def _current_hash_method():
+    """The method a hash generated right now would carry. One hash per process."""
+    global _CURRENT_HASH_METHOD
+    if _CURRENT_HASH_METHOD is None:
+        _CURRENT_HASH_METHOD = generate_password_hash(secrets.token_urlsafe(8)).split("$", 1)[0]
+    return _CURRENT_HASH_METHOD
 
 
 @bp.before_app_request
@@ -104,9 +189,16 @@ def register():
                 try:
                     user_info.saveToDb()
                 except sqlite3.IntegrityError:
-                    error = f"User {username} is already registered."
+                    # the username is taken. Saying so here would hand back exactly the
+                    # answer /login was just stopped from giving, from a route that is
+                    # equally anonymous and equally unthrottled. Both outcomes leave by
+                    # the same door with the same message. See #101.
+                    current_app.logger.info("Registration rejected: requested username is already in use")
+                if g.first_user:
+                    flash('Registration complete - you can log in now.', category='success')
                 else:
-                    return redirect(url_for("authentication.login"))
+                    flash(REGISTRATION_SUBMITTED, category='info')
+                return redirect(url_for("authentication.login"))
         flash(error, category='error')
     proposed_registration_token = ""
     if g.first_user:
@@ -132,14 +224,16 @@ def login():
         user_info = UserInfo.fromDb(username=username)
         error = None
         if user_info is None:
-            error = 'Incorrect username.'
+            _spend_a_password_check(password)
+            error = LOGIN_FAILED
         elif not check_password_hash(user_info.password, password):
-            error = 'Incorrect password.'
+            error = LOGIN_FAILED
         if error is None:
             session.clear()
             session['user_id'] = user_info.user_id
             user_info.last_login = utc_now()
-            user_info.saveToDb()
+            rehashed = _rehash_if_stale(user_info, password)
+            user_info.saveToDb(withPassword=rehashed)
             return redirect(url_for('index'))
         flash(error, category='error')
     return render_template('login.html')
