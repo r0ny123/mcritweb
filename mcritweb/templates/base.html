@@ -26,12 +26,14 @@
   <link rel="icon" type="image/png" href=" {{ url_for('static',filename='d20_mcrit_cabaret_small.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='navbar.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='hint.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='jquery-ui.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='dataTables.bootstrap5.min.css') }}">
   <script src="{{ url_for('static', filename='jquery.js') }}"></script>
-  <script src="{{ url_for('static', filename='jquery.dataTables.min.js') }}"></script>
-  <script src="{{ url_for('static', filename='dataTables.bootstrap5.min.js') }}"></script>
-  <script src="{{ url_for('static', filename='jquery-ui.js') }}"></script>
+  {# DataTables and jQuery UI used to be here: 623 KB of render-blocking JavaScript and
+     41 KB of CSS, on every page, for two calls.
+
+     DataTables is gone entirely - its one initialiser selected an element the app never
+     renders, so it did nothing anywhere. jQuery UI loads from result_cross.html, the
+     only page that calls `.sortable()`; {% block style %} runs after this block, so
+     jQuery is in place before it. See issue #63. #}
   <script src="{{ url_for('static', filename='autocomplete.js') }}"></script>
   <script src="{{ url_for('static', filename='bootstrap-5.0.2-dist/js/bootstrap.bundle.min.js') }}"></script>
   <script src="{{ url_for('static', filename='post_action.js') }}"></script>
