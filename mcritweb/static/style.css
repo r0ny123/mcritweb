@@ -182,6 +182,16 @@ html {
   .pointer {
     cursor: pointer;
   }
+
+  /* Issue #41. A job's description can hold a long unbroken token: the filename of
+     an upload, a SHA-256, or the raw `job.parameters` string the fallback branch of
+     job_description prints for a method it does not recognise. With nowhere to break,
+     it pushes the column - and the table - wider than the viewport.
+     `anywhere` rather than `break-word` because it has to break a token that is alone
+     on its line, which is exactly this case. */
+  table.table td.job-description {
+    overflow-wrap: anywhere;
+  }
   /* The user manual, rendered from docs/manual/README.md by mcritweb/manual.py.
      Markdown output carries no Bootstrap classes, so the few elements it produces
      that need them are styled here rather than by post-processing the HTML. */
