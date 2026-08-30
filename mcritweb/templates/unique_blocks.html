@@ -108,15 +108,23 @@ Unique Blocks
     </thead>
     {% if selected_samples %}
     <tbody>
-      {% for sample in selected_samples %}
-      <tr>
-        <th align="right" valign="middle" scope="row" class="id">{{ "%d"|format(sample.sample_id) }}</th>
+      {# id -> entry, and the entry is none for a selected id the backend would not
+         resolve. Such a row is still drawn, greyed out: it is part of the selection, so
+         hiding it would leave a sample set nobody can see or edit, and the x below is
+         the only way to take it back out. #}
+      {% for sample_id, sample in selected_samples.items() %}
+      <tr {% if sample is none %}class="text-muted"{% endif %}>
+        <th align="right" valign="middle" scope="row" class="id">{{ "%d"|format(sample_id) }}</th>
+        {% if sample is none %}
+        <td colspan="6" valign="middle">not confirmed by MCRIT - deleted, or the backend was unavailable</td>
+        {% else %}
         <td align="right" valign="middle" class="font-monospace">{{ sample.getShortSha256() }}</td>
         <td valign="middle">{{ sample.family }}</td>
         <td valign="middle">{{ sample.version }}</td>
         <td valign="middle">{{ sample.getShortFilename() }}</td>
         <td align="right" valign="middle">{{ "%d"|format(sample.bitness) }}</td>
         <td align="right" valign="middle">{{ "%d"|format(sample.statistics['num_functions']) }}</td>
+        {% endif %}
         <td valign="middle"><a style="color: black;" onclick="deleteSample(this)"><i class="fa-solid fa-xmark"></i></a></td>
       </tr>
       {% endfor %}

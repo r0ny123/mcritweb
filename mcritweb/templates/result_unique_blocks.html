@@ -187,13 +187,18 @@ Unique Blocks for {{ sample_ids|length }} Samples
           <button type="submit" class="btn btn-primary">regenerate rule</button>
         </div>
     </form>
-    {% if not yara_cover["has_rule"] %}
-    <p class="alert alert-warning">These parameters selected no blocks at all, so there is no rule below. Widen the bounds and regenerate.</p>
-    {% endif %}
+    {# keyed on the rule rather than on the cover's has_rule flag, so the warning appears
+       exactly when there is nothing to show. A cover with no blocks in it has no rule
+       that compiles - an empty strings section is a YARA syntax error and the condition
+       reads "0 of them" - so the page says so instead of offering it for copying. #}
+    {% if yara_rule is none %}
+    <p class="alert alert-warning">These parameters selected no blocks at all, so there is no rule to show. Widen the bounds and regenerate.</p>
+    {% else %}
     <p>Copy rule to clipboard!&nbsp;<i class="fa-regular fa-copy" onclick="copyElementToClipboard('#yara_text')"></i>
     </p>
     <textarea style="font-family:monospace; min-width: 100%" id="yara_text" name="yara_text" 
         rows="50">{{yara_rule}}</textarea>
+    {% endif %}
   </div>
 </div>
 {% endblock %}
