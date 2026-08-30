@@ -486,3 +486,44 @@ issue #76. Audit by reading the branches, not by counting them.
 issues: #2 (linkhunt 500 on an incompatible job), #18 (job overview 500 on a deleted
 dependency), #20 (jobs page 500 on an empty category), #34 (test backend fidelity), #58
 (a visitor choosing where `/analyze/query` writes its upload), and the CI fix in #9.
+
+## Merge order: which PRs actually collide
+
+Computed with `git merge-tree df53db9 <a> <b>` over all **1711 pairs** of the 59
+`fix/*` branches. `master` has not moved since `df53db9`, so nothing conflicts with
+the *base* - only with each other, which is what decides merge order.
+
+**58 conflicting pairs of 1711 (3.4%).** The rest merge clean in any order.
+
+Files that carry the conflicts, most contended first:
+
+```
+  12  tests/fixtureData.py
+  11  tests/routePolicy.py
+  10  mcritweb/views/data.py
+   7  mcritweb/templates/search.html
+   6  mcritweb/templates/table/column_table.html
+   6  docs/manual/README.md
+   5  tests/fixtures/regenerate.py
+   5  tests/fixtures/families.json
+   5  tests/fixtures/README.md
+   5  mcritweb/templates/table/family_row.html
+```
+
+Branches most often involved: `fix/80-block-isolation-table`,
+`fix/75-download-raw-result` and `fix/7-round-the-score-columns` at six pairs each;
+`fix/98`, `fix/77`, `fix/73` and `fix/68` at five.
+
+Nothing here is a design collision. Every conflict is one of three mechanical shapes:
+two branches appending a method to the same fake, two adding a row to the same policy
+table, or two editing adjacent lines of `data.py`. The one that needs care is
+`tests/fixtureData.py` between #35 and #36 - the hunk opens inside
+`getMatchesForPicHash`'s docstring and runs through `requestMatchesForSample`, which
+only #36 adds, so taking either side wholesale loses the other's method. PR #36's
+description says so explicitly, with the five tests that fail if you get it wrong.
+
+**A caveat about how this was measured.** My first run of this reported *zero*
+conflicting pairs, because I anchored the marker grep as `^<<<<<<<` and
+`git merge-tree` prefixes its output. A sanity check against a pair I already knew
+conflicts is what caught it. Any future run of this audit should assert a known
+conflict before trusting a clean result.
