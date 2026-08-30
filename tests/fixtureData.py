@@ -18,12 +18,19 @@ import json
 import pathlib
 import re
 
+import mcrit.matchers.MatcherFlags as MatcherFlags
+from mcrit.config.MinHashConfig import MinHashConfig
+from mcrit.minhash.MinHash import MinHash
 from mcrit.queue.LocalQueue import Job
 from mcrit.storage.FamilyEntry import FamilyEntry
 from mcrit.storage.FunctionEntry import FunctionEntry
+from mcrit.storage.MatchedFunctionEntry import MatchedFunctionEntry
 from mcrit.storage.SampleEntry import SampleEntry
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
+
+# the backend scores a function pair against its own minhash defaults
+MINHASH_CONFIG = MinHashConfig()
 
 # fixture name -> the job method it was produced by, for tests that want to say
 # "the cross compare report" instead of carrying an instance-specific job id
@@ -219,6 +226,62 @@ class CorpusMcritClient:
     def isFunctionId(self, function_id, *args, **kwargs):
         self._record("isFunctionId", function_id, *args, **kwargs)
         return int(function_id) in self._functions
+
+    # --- direct matching ----------------------------------------------------------
+
+    def getMatchFunctionVs(self, function_id_a, function_id_b, *args, **kwargs):
+        """The dict `MinHashIndex.getMatchesFunctionVs` assembles, built the same way.
+
+        Every field is derived from the two entries, so this stays right as long as
+        the fixtures do; the only borrowed constants are the backend's own minhash
+        defaults, which decide the score and the IS_MINHASH flag.
+        """
+        self._record("getMatchFunctionVs", function_id_a, function_id_b, *args, **kwargs)
+        entry_a = self._functions.get(int(function_id_a))
+        entry_b = self._functions.get(int(function_id_b))
+        if entry_a is None or entry_b is None:
+            return None
+        sample_a = self._samples[entry_a.sample_id]
+        sample_b = self._samples[entry_b.sample_id]
+        bits = MINHASH_CONFIG.MINHASH_SIGNATURE_BITS
+        minhash_a = entry_a.getMinHash(minhash_bits=bits)
+        minhash_b = entry_b.getMinHash(minhash_bits=bits)
+        score = None
+        if minhash_a.minhash and minhash_b.minhash:
+            # float(), because the real client's value has been through JSON
+            score = float(MinHash.calculateMinHashScore(minhash_a.minhash, minhash_b.minhash, minhash_bits=bits))
+        flags = 0
+        flags += MatcherFlags.IS_MINHASH_FLAG if score is not None and score >= MINHASH_CONFIG.MINHASH_MATCHING_THRESHOLD else 0
+        flags += MatcherFlags.IS_PICHASH_FLAG if entry_a.pichash == entry_b.pichash else 0
+        flags += MatcherFlags.IS_LIBRARY_FLAG if sample_b.is_library else 0
+        match_tuple = [entry_b.family_id, entry_b.sample_id, entry_b.function_id, score, flags]
+        return {
+            "function_entry_a": entry_a.toDict(),
+            "function_entry_b": entry_b.toDict(),
+            "sample_entry_a": sample_a.toDict(),
+            "sample_entry_b": sample_b.toDict(),
+            "match_entry": MatchedFunctionEntry(entry_a.function_id, entry_a.binweight, entry_a.offset, match_tuple).toDict(),
+        }
+
+    def getMatchesForPicHash(self, pichash, summary=False, *args, **kwargs):
+        """Functions sharing a PicHash, as `/query/pichash/<hash>[/summary]` answers.
+
+        The full form is a set of (family_id, sample_id, function_id) tuples; the
+        summary counts the distinct ids in each position (`QueryResource`).
+        """
+        self._record("getMatchesForPicHash", pichash, summary=summary)
+        matches = {
+            (entry.family_id, entry.sample_id, entry.function_id)
+            for entry in self._functions.values()
+            if entry.pichash == pichash
+        }
+        if not summary:
+            return matches
+        return {
+            "families": len({match[0] for match in matches}),
+            "samples": len({match[1] for match in matches}),
+            "functions": len({match[2] for match in matches}),
+        }
 
     # --- jobs and results --------------------------------------------------------
 
