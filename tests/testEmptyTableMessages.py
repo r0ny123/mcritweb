@@ -189,6 +189,7 @@ if __name__ == "__main__":
         ("/analyze/compare", "query"),
         ("/analyze/compare_versus", "query_a"),
         ("/analyze/compare_versus", "query_b"),
+        ("/analyze/cross_compare", "query"),
     ],
 )
 def test_a_selection_page_search_that_missed_does_not_blame_an_empty_collection(client, as_role, path, query_param):
@@ -200,7 +201,7 @@ def test_a_selection_page_search_that_missed_does_not_blame_an_empty_collection(
     assert "No sample matches &#34;zzznothingmatchesthis&#34;." in page
 
 
-@pytest.mark.parametrize("path", ["/analyze/compare", "/analyze/compare_versus"])
+@pytest.mark.parametrize("path", ["/analyze/compare", "/analyze/compare_versus", "/analyze/cross_compare"])
 def test_the_same_page_without_a_search_still_offers_the_upload(client, as_role, path, monkeypatch, fake_mcrit):
     """The old message is right when the collection really is empty - the point is to
     stop saying it when it is not."""
@@ -215,6 +216,41 @@ def test_the_same_page_without_a_search_still_offers_the_upload(client, as_role,
     page = client.get(path).get_data(as_text=True)
 
     assert "upload your first sample" in page
+
+
+def test_the_cross_compare_picker_does_not_offer_a_visitor_a_403(client, as_role, monkeypatch, fake_mcrit):
+    """The upload prompt is a link to data.submit, which is contributor-only.
+
+    This picker built its empty state by hand rather than through the shared macro, so
+    it was the one page still handing a visitor a link that answers 403. It goes
+    through `_empty_state` now, which drops the link and keeps the sentence.
+    """
+    as_role("visitor")
+    monkeypatch.setattr(fake_mcrit, "search_samples", lambda *args, **kwargs: {
+        "search_results": {}, "cursor": {"forward": None, "backward": None},
+        "id_match": None, "sha_match": None,
+    })
+
+    page = client.get("/analyze/cross_compare").get_data(as_text=True)
+
+    assert "upload your first sample" in page, "the sentence still belongs there"
+    # asserted on the element, not on an href spelling: the markup this replaced used
+    # single quotes, so a `href="..."` check passed against exactly what it should catch
+    assert '<span class="text-muted">No samples available' in page, "should be inert text"
+    assert ">No samples available. Click here to upload your first sample</a>" not in page,         "a visitor was offered a link that answers 403"
+
+
+def test_the_cross_compare_picker_still_links_for_a_contributor(client, as_role, monkeypatch, fake_mcrit):
+    """The other direction: whoever can actually follow the link still gets it."""
+    as_role("contributor")
+    monkeypatch.setattr(fake_mcrit, "search_samples", lambda *args, **kwargs: {
+        "search_results": {}, "cursor": {"forward": None, "backward": None},
+        "id_match": None, "sha_match": None,
+    })
+
+    page = client.get("/analyze/cross_compare").get_data(as_text=True)
+
+    assert ">No samples available. Click here to upload your first sample</a>" in page
 
 
 def test_paging_past_the_end_of_a_search_says_so(client, as_role, fake_mcrit, monkeypatch):
