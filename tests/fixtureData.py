@@ -174,6 +174,11 @@ class CorpusMcritClient:
         self._functions.update({int(k): FunctionEntry.fromDict(v) for k, v in load("functions_matched").items()})
         self._jobs = {job_id_of(report): (load(f"{report}.job"), load(f"{report}.result")) for report in REPORTS}
         self._queue = load("queue")
+        # the captured queue holds jobs the reports do not - the per-sample children
+        # a cross compare combined among them - and a real backend answers getJobData
+        # for every one of them. Without this the cross compare's job page cannot even
+        # render, because it resolves its dependencies.
+        self._queued_by_id = {entry["_id"]["$oid"]: entry for entry in self._queue}
 
     def raw_variant(self):
         """The same backend answering in raw mode - see FakeMcritClient.raw_variant."""
@@ -255,7 +260,10 @@ class CorpusMcritClient:
     def getJobData(self, job_id, *args, **kwargs):
         self._record("getJobData", job_id, *args, **kwargs)
         entry = self._jobs.get(job_id)
-        return Job(entry[0], None) if entry else None
+        if entry:
+            return Job(entry[0], None)
+        queued = self._queued_by_id.get(job_id)
+        return Job(queued, None) if queued else None
 
     def getResultForJob(self, job_id, *args, **kwargs):
         self._record("getResultForJob", job_id, *args, **kwargs)
