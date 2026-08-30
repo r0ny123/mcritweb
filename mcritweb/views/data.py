@@ -27,6 +27,7 @@ from mcritweb.views.params import (
     parse_str_query_param,
     parseBaseAddrFromFilename,
     parseBitnessFromFilename,
+    slider_position_for_band_range,
 )
 from mcritweb.views.ScoreColorProvider import ScoreColorProvider
 from mcritweb.views.utility import get_session_user_id, mcrit_server_required
@@ -831,7 +832,7 @@ def job_by_id(job_id):
         for job in child_jobs:
             if job.family_id is not None:
                 families_by_id[job.family_id] = client.getFamily(job.family_id)
-    return render_template('job_overview.html', families=families_by_id, samples=samples_by_id, job_info=job_info, auto_refresh=auto_refresh, child_jobs=child_jobs, missing_children=missing_children, can_rerun=is_rerunnable(job_info, child_jobs))
+    return render_template('job_overview.html', families=families_by_id, samples=samples_by_id, job_info=job_info, auto_refresh=auto_refresh, child_jobs=child_jobs, missing_children=missing_children, can_rerun=is_rerunnable(job_info, child_jobs), configuration_url=configuration_url(job_info, child_jobs))
 
 
 @bp.route('/jobs/<job_id>/delete', methods=('POST',))
@@ -1051,6 +1052,60 @@ def is_rerunnable(job_info, child_jobs=None):
     if not has_run_its_course(job_info):
         return False
     return rerun_request(job_info, child_jobs) is not None
+
+
+def configuration_url(job_info, child_jobs=None):
+    """The analyze page this job was submitted from, with its inputs filled in.
+
+    Issue #55's other half: from a finished job back to the form behind it, so the
+    parameters can be changed and the job resubmitted rather than retyped. Built on
+    `rerun_request` so there is one recovery of a job's arguments and not two - a job
+    whose request cannot be rebuilt faithfully gets no link here either.
+
+    Preselecting is not the same as passing the ids along. `analyze.compare` and
+    `analyze.compare_versus` highlight a row only when the sample is on the search
+    page in front of them, and compare.html falls back to selecting the *first* row
+    when it is not - so a bare `selected=` would quietly point the form at a
+    different sample. Each link therefore also carries the search that puts the
+    sample on the page: searching a sample id makes mcrit answer with that sample
+    (`id_match`), regardless of where it would otherwise fall in the paging.
+
+    None means no link at all, which is the honest answer whenever the form cannot
+    represent the job it claims to be showing.
+
+    Not gated on the job having finished, unlike the rerun: following a link queues
+    nothing, and reopening the form of a job still in the queue to submit a variation
+    of it is a reasonable thing to want.
+    """
+    request_to_repeat = rerun_request(job_info, child_jobs)
+    if request_to_repeat is None:
+        return None
+    method_name, args, kwargs = request_to_repeat
+    kwargs = dict(kwargs)
+    sample_group_only = kwargs.pop("sample_group_only", False)
+    # `band_matches_required` is the only matching parameter these forms have a
+    # control for. A job carrying another one cannot be shown on them, and one
+    # carrying none took the backend's own default rather than a slider position,
+    # which the slider - which always submits one - cannot reproduce either.
+    if set(kwargs) != {"band_matches_required"}:
+        return None
+    slider_position = slider_position_for_band_range(kwargs["band_matches_required"])
+    if slider_position is None:
+        return None
+    # `rematch` is left at each page's default: force_recalculation is consumed by
+    # QueueRemoteCalls before the payload is written, so no job records whether it
+    # was forced and preselecting either way would be an invention.
+    if method_name == "requestMatchesCross":
+        return url_for('analyze.cross_compare', samples=",".join(str(sample_id) for sample_id in args[0]),
+                       onlySelected="true" if sample_group_only else "false", minhashBandRange=slider_position)
+    if method_name == "requestMatchesForSample":
+        return url_for('analyze.compare', query=args[0], selected=args[0], minhashBandRange=slider_position)
+    if method_name == "requestMatchesForSampleVs":
+        return url_for('analyze.compare_versus', query_a=args[0], selected_a=args[0],
+                       query_b=args[1], selected_b=args[1], minhashBandRange=slider_position)
+    # a method added to RERUNNABLE_METHODS has to say which form preselects it, and
+    # how, before it can be linked to one
+    return None
 
 
 @bp.route('/jobs/<job_id>/rerun', methods=('POST',))
