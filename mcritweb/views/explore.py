@@ -1,5 +1,6 @@
 import time
 
+import requests
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 from mcrit.queue.JobCollection import JobCollection
 from mcrit.storage.FamilyEntry import FamilyEntry
@@ -42,6 +43,10 @@ def modifyFamily():
             family_entry = client.getFamily(family_id)
             if family_entry is None:
                 raise ValueError
+        except requests.RequestException:
+            # a backend that could not be reached says nothing about the family id.
+            # Let it reach the handler that reports it as what it is - see issue #43
+            raise
         except Exception:
             flash("No valid family_id received.", category="error")
             return redirect(url_for('explore.families'))
@@ -115,6 +120,10 @@ def modifySample():
             sample_entry = client.getSampleById(sample_id)
             if sample_entry is None:
                 raise ValueError
+        except requests.RequestException:
+            # a backend that could not be reached says nothing about the sample id.
+            # Let it reach the handler that reports it as what it is - see issue #43
+            raise
         except Exception:
             flash("No valid sample_id received.", category="error")
             return redirect(url_for('explore.samples'))
