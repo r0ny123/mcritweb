@@ -199,8 +199,8 @@ def test_the_empty_search_page_carries_no_message(client, as_role):
 
 
 def test_a_search_the_backend_could_not_answer_does_not_claim_nothing_matched(client, as_role, fake_mcrit, monkeypatch):
-    """`search()` reads a failed call as `results is None` and flashes "search ...
-    failed!". The page then has no rows either, so the empty-result message would
+    """`search()` reads a failed call as `results is None` and flashes that the backend
+    did not answer. The page then has no rows either, so the empty-result message would
     fire on top of it and tell the reader their term matched nothing - which is a
     different, and wrong, thing to say."""
     as_role("visitor")
@@ -212,7 +212,7 @@ def test_a_search_the_backend_could_not_answer_does_not_claim_nothing_matched(cl
 
     assert response.status_code == 200
     page = response.get_data(as_text=True)
-    assert "failed!" in page, "the flashed error is what tells the reader what happened"
+    assert "the backend did not answer" in page, "the flashed error is what tells the reader what happened"
     assert "Nothing matched" not in page
 
 
@@ -246,7 +246,7 @@ def test_one_category_failing_does_not_silence_the_answer_for_the_others(client,
 
     page = client.get("/explore/search?query=zzzznomatchzzzz").get_data(as_text=True)
 
-    assert "failed!" in page, "the failure still has to be reported"
+    assert "the backend did not answer" in page, "the failure still has to be reported"
     assert "Nothing matched" in page, "and so does the answer for the categories that worked"
     assert "sample, function" in page, "which should name the ones it is talking about"
 
@@ -347,6 +347,35 @@ def test_distinct_families_are_all_listed(client, as_role, fake_mcrit):
     expected = [f for f in fake_mcrit._families.values() if "win" in f.family_name.lower()]
     assert len(expected) > 1, "the corpus has to hold more than one for this to mean anything"
     assert response.get_data(as_text=True).count('class="family-row') == len(expected)
+
+
+# --- the analyze pages, which share one search-result reader ---------------------
+
+#: (path, the query parameter that reaches `get_unique_samples_from_search_result`)
+ANALYZE_PAGES = [
+    ("/analyze/compare", "query"),
+    ("/analyze/cross_compare", "query"),
+    ("/analyze/compare_versus", "query_a"),
+]
+
+
+@pytest.mark.parametrize("path, query_param", ANALYZE_PAGES)
+def test_the_analyze_pages_render_entries_rather_than_wire_dicts(client, as_role, fake_mcrit, path, query_param):
+    """All three read their sample list through the same helper, and nothing pinned
+    what it hands the row macro - the route matrix asserts these pages answer 200, but
+    it does not distinguish a page of rows from the "no samples available" placeholder.
+
+    The evidence is the short sha column: `getShortSha256` is a method on `SampleEntry`
+    with no key of that name in the wire dict, so a raw dict renders as an
+    `UndefinedError` rather than as a slightly wrong cell. Issue #64.
+    """
+    as_role("visitor")
+    sample = next(iter(fake_mcrit._samples.values()))
+
+    response = client.get(f"{path}?{query_param}={sample.sample_id}")
+
+    assert response.status_code == 200
+    assert sample.getShortSha256() in response.get_data(as_text=True)
 
 
 # --- the fake's own contract -----------------------------------------------------

@@ -347,16 +347,22 @@ def functions():
     if results is None:
         flash_search_failed(query, "functions")
     else:
-        # as in families and samples above. Kept as raw dicts, which is this page's
-        # existing convention - function_row.html reads them by name either way, and
-        # switching the whole page to FunctionEntry is a separate change. See issue #56.
+        # as in families and samples above: the exact-id hit arrives beside the text
+        # results rather than among them, and this page used to read only the latter
+        # (issue #56). Both are deserialized, as explore.search already does with the
+        # same values - they feed the same function_table macro, and handing it raw
+        # dicts off the wire only worked because Jinja falls back from attribute to
+        # item lookup and the keys happen to equal the attribute names. A renamed key,
+        # or any derived property, would break this page while leaving the search page
+        # working. See issue #64.
         by_id = {}
         id_match = results.get('id_match')
         if id_match is not None:
-            by_id[id_match['function_id']] = id_match
+            entry = FunctionEntry.fromDict(id_match)
+            by_id[entry.function_id] = entry
         for function_dict in results['search_results'].values():
-            #functions.append(FunctionEntry.fromDict(function_dict))
-            by_id.setdefault(function_dict['function_id'], function_dict)
+            entry = FunctionEntry.fromDict(function_dict)
+            by_id.setdefault(entry.function_id, entry)
         functions = list(by_id.values())
         exact_matches = exact_match_marks(results, 'function_id')
     user_column_setup = get_user_column_setup("functions_table")
