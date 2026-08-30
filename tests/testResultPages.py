@@ -45,6 +45,12 @@ class _MatchTableAudit(HTMLParser):
     one `Frequency`. That makes it the number of *body* cells a row owes, which is what
     the width check below compares against.
 
+    `cells` is every body cell of the table in document order, which - the width check
+    holding - is `columns` cells per row. That is what `column_of` slices to read one
+    column down the rows, and it is why the cells are collected per table rather than
+    per row: the library table on `result_compare_all.html` puts its cells outside the
+    `<tr>` (see below), so nothing here can group them by row.
+
     Those two spans assume both halves of each pair are active: a stored column setting
     that keeps `direct_score` and drops `direct_nonlib_score` leaves a `colspan="2"`
     header over one cell, and the width check would fail. That is a real misalignment in
@@ -57,12 +63,13 @@ class _MatchTableAudit(HTMLParser):
         super().__init__(convert_charrefs=False)
         self._open = []
         self._header_text = None
+        self._cell_text = None
         self.tables = []
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
         if tag == "table":
-            self._open.append({"match_rows": 0, "th": 0, "td": 0, "columns": 0, "headers": []})
+            self._open.append({"match_rows": 0, "th": 0, "td": 0, "columns": 0, "headers": [], "spans": [], "cells": []})
         elif self._open:
             if tag == "tr" and "background-color" in (attributes.get("style") or ""):
                 # every match row carries its score colour; the surrounding widget
@@ -71,20 +78,29 @@ class _MatchTableAudit(HTMLParser):
             elif tag == "th":
                 self._open[-1]["th"] += 1
                 colspan = attributes.get("colspan") or "1"
-                self._open[-1]["columns"] += int(colspan) if colspan.isdigit() else 1
+                span = int(colspan) if colspan.isdigit() else 1
+                self._open[-1]["columns"] += span
+                self._open[-1]["spans"].append(span)
                 self._header_text = []
             elif tag == "td":
                 self._open[-1]["td"] += 1
+                self._cell_text = []
 
     def handle_data(self, data):
         if self._header_text is not None:
             self._header_text.append(data)
+        if self._cell_text is not None:
+            self._cell_text.append(data)
 
     def handle_endtag(self, tag):
         if tag == "th":
             if self._header_text is not None and self._open:
                 self._open[-1]["headers"].append("".join(self._header_text).strip())
             self._header_text = None
+        elif tag == "td":
+            if self._cell_text is not None and self._open:
+                self._open[-1]["cells"].append("".join(self._cell_text).strip())
+            self._cell_text = None
         elif tag == "table" and self._open:
             self.tables.append(self._open.pop())
 
@@ -305,6 +321,118 @@ def test_job_page_renders_for_a_finished_job(client, as_role):
     as_role("visitor")
     response = client.get(f"/data/jobs/{job_id_of('matches_for_sample')}")
     assert response.status_code == 200
+
+
+################################################################
+# Sorting - the other half of issue #50
+################################################################
+
+def column_of(table, header):
+    """The body cells under `header`, top row first.
+
+    The audit collects body cells per table rather than per row, so a column is a
+    stride through that list - offset by the widths of the headers before it, because
+    `famlib_header` covers two columns with one `Direct` header.
+    """
+    index = table["headers"].index(header)
+    start = sum(table["spans"][:index])
+    return table["cells"][start::table["columns"]]
+
+
+#: (report, sort parameter, the header of the column it orders). One report per kind of
+#: function table: `matches_for_sample` renders the aggregated one on
+#: `result_compare_all.html`, `matches_for_sample_vs` the function-to-function one on
+#: `result_compare_vs.html`, and the two sort through different key tables in
+#: `views/result_sorting.py`. Both hold several hundred rows at 100 to a page, which is
+#: what makes the cross-page assertion below possible at all - every other match table
+#: in the corpus fits on one page.
+SORTABLE_FUNCTION_TABLES = [
+    ("matches_for_sample", "best_score", "Best Score"),
+    ("matches_for_sample_vs", "best_score", "Score"),
+]
+
+
+def function_table_of(client, report, context, query=""):
+    response = client.get(f"/data/result/{job_id_of(report)}?{query}")
+    assert response.status_code == 200, f"{report} {context} did not render"
+    return function_match_table(response, f"{report} {context}")
+
+
+@pytest.mark.parametrize("report, sort_by, header", SORTABLE_FUNCTION_TABLES)
+def test_a_result_table_sorts_the_whole_list_and_not_only_the_page(client, as_role, report, sort_by, header):
+    """The sort has to reach the rows the page is not showing.
+
+    These tables are sliced server-side, so ordering the hundred rows that reached the
+    browser - which is all a client-side sort such as the DataTables call in `jobs.html`
+    can see - leaves the reader with a page that is sorted and a list that is not. The
+    last row of page one being above the first row of page two is what tells the two
+    apart, and it is why the sort runs in `views/result_sorting.py` over the whole
+    materialised `MatchingResult` before the page is cut out of it.
+    """
+    as_role("visitor")
+    natural = column_of(function_table_of(client, report, "unsorted"), header)
+    first = [int(value) for value in column_of(function_table_of(client, report, "sorted page 1", f"funpsort={sort_by}"), header)]
+    second = [int(value) for value in column_of(function_table_of(client, report, "sorted page 2", f"funpsort={sort_by}&funp=2"), header)]
+
+    assert len(first) > 1 and len(second) > 1, f"{report} has too few rows to tell a sort from a slice"
+    assert [str(value) for value in first] != natural, f"{report} ignored funpsort={sort_by}"
+    assert first == sorted(first), f"{report} page 1 is not in order: {first}"
+    assert second == sorted(second), f"{report} page 2 is not in order: {second}"
+    assert first[-1] <= second[0], (
+        f"{report} page 2 starts at {second[0]} below the {first[-1]} page 1 ended on - "
+        "the sort only reached the rows that page was showing"
+    )
+
+
+@pytest.mark.parametrize("report, sort_by, header", SORTABLE_FUNCTION_TABLES)
+def test_a_result_table_sorts_the_other_way_round(client, as_role, report, sort_by, header):
+    as_role("visitor")
+    ascending = [int(value) for value in column_of(function_table_of(client, report, "ascending", f"funpsort={sort_by}&funpasc=true"), header)]
+    descending = [int(value) for value in column_of(function_table_of(client, report, "descending", f"funpsort={sort_by}&funpasc=false"), header)]
+
+    assert descending == sorted(descending, reverse=True), f"{report} descending is not in order: {descending}"
+    assert descending != ascending, f"{report} ignored funpasc=false"
+
+
+def test_each_table_on_a_result_page_sorts_on_its_own(client, as_role):
+    """Three match tables share `result_compare_all.html` and one query string, so each
+    `Pagination` derives its sort parameters from its own page parameter - `fampsort`
+    for the family table, `libpsort` for the library one, `funpsort` for the functions.
+    Sorting one and finding the others reordered would mean they are reading each
+    other's parameter."""
+    as_role("visitor")
+    job_id = job_id_of("matches_for_sample")
+    unsorted = client.get(f"/data/result/{job_id}")
+    sorted_families = client.get(f"/data/result/{job_id}?fampsort=sha256")
+
+    assert unsorted.status_code == 200 and sorted_families.status_code == 200
+    families = match_tables(sorted_families.data.decode("utf-8", "replace"))[0]
+    # the cell shows the first eight characters of the hash, which orders the same way
+    # the whole hash the sort key reads does
+    hashes = column_of(families, "SHA256")
+    assert len(hashes) > 1, "the family table has too few rows to tell a sort from a slice"
+    assert hashes == sorted(hashes), f"the family table ignored fampsort=sha256: {hashes}"
+    assert hashes != column_of(match_tables(unsorted.data.decode("utf-8", "replace"))[0], "SHA256")
+    assert function_match_table(sorted_families, "the function table")["cells"] == function_match_table(unsorted, "the function table")["cells"], (
+        "sorting the family table reordered the function table as well"
+    )
+
+
+def test_a_sort_link_names_its_own_table_and_returns_to_page_one(client, as_role):
+    """Reading on from row 300 of an order the reader has not seen the start of is not
+    useful, so `Pagination.get_sort_link` drops the page - the same thing
+    `CursorPagination.get_sort_link` does for the listing pages."""
+    as_role("visitor")
+    response = client.get(f"/data/result/{job_id_of('matches_for_sample')}?funp=3")
+    markup = response.data.decode("utf-8", "replace")
+
+    assert response.status_code == 200
+    for parameter in ("fampsort=sha256", "libpsort=sha256", "funpsort=best_score"):
+        assert parameter in markup, f"no header on the page links to {parameter}"
+    function_sort_links = re.findall(r"window\.location\.href='([^']*funpsort=[^']*)'", markup)
+    assert function_sort_links, "the function table has no sort links"
+    for link in function_sort_links:
+        assert "funp=1" in link, f"a sort link kept the reader on page 3: {link}"
 
 
 if __name__ == "__main__":
