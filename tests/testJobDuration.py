@@ -5,8 +5,12 @@ A job that waits on dependencies - a cross compare waits on one child per sample
 only starts once the last of them is done, so `Job.duration`, finished_at minus
 started_at of the parent, times the assembly of its result and nothing of the work
 it is assembled from. `data.total_duration` is the created_at -> finished_at span
-that does cover the children; these tests pin it against the captured cross compare
-job and over every timestamp shape a job document can carry. See issue #46.
+that does cover the children, counted against the clock while the job is still
+running; these tests pin it against the captured cross compare job and over every
+timestamp shape a job document can carry. See issue #46.
+
+The clock is `data.utc_now`, and every test that reaches it freezes it, so nothing
+here depends on when it runs.
 """
 
 import logging
@@ -15,9 +19,10 @@ import unittest
 from datetime import UTC, datetime
 
 import pytest
-from fixtureData import job_id_of
+from fixtureData import CorpusMcritClient, job_id_of, load
 from mcrit.queue.LocalQueue import Job
 
+from mcritweb.views import data
 from mcritweb.views.data import total_duration
 
 LOG = logging.getLogger(__name__)
@@ -25,10 +30,21 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
 logging.disable(logging.CRITICAL)
 
 
+#: 90 seconds after the captured cross compare was queued (10:46:10.490).
+NOW = datetime(2026, 8, 6, 10, 47, 40)
+
+
 @pytest.fixture
 def fake_mcrit(corpus_mcrit):
     """Wire the app in this module to the captured corpus (see conftest)."""
     return corpus_mcrit
+
+
+@pytest.fixture
+def frozen_clock(monkeypatch):
+    """Stop the clock the elapsed-time row reads, so it is a number and not a race."""
+    monkeypatch.setattr(data, "utc_now", lambda: NOW)
+    return NOW
 
 
 def job_table_row(page, label):
@@ -84,14 +100,73 @@ def test_a_job_without_dependencies_reports_only_its_own_duration(client, as_rol
     assert job_table_row(page, "Total (since queued)") is None
 
 
+class CorpusStillRunningCross(CorpusMcritClient):
+    """The captured corpus, with the cross compare rewound to before a worker took it.
+
+    Every job in the corpus ran to completion, so the state the issue is about has to
+    be put back by hand. Only the parent is rewound - its five children keep the
+    timestamps they were captured with, which is a moment a real queue does pass
+    through: the last child has finished and the parent has not been picked up yet.
+    A job in that state has no result either, so `getResultForJob` is rewound too.
+    """
+
+    def getJobData(self, job_id, *args, **kwargs):
+        if job_id == job_id_of("cross_compare"):
+            self._record("getJobData", job_id, *args, **kwargs)
+            return Job(dict(load("cross_compare.job"), started_at=None, finished_at=None, progress=0), None)
+        return super().getJobData(job_id, *args, **kwargs)
+
+    def getResultForJob(self, job_id, *args, **kwargs):
+        if job_id == job_id_of("cross_compare"):
+            self._record("getResultForJob", job_id, *args, **kwargs)
+            return None
+        return super().getResultForJob(job_id, *args, **kwargs)
+
+
+class TestWhileTheDependenciesAreStillRunning:
+    """The half of issue #46 the page could not answer at all: until the last child is
+    done the parent has no duration, and the progress it does have is its own, which
+    is 0 no matter how much of the work is finished."""
+
+    @pytest.fixture
+    def fake_mcrit(self):
+        return CorpusStillRunningCross()
+
+    def test_the_job_page_reports_how_long_the_job_has_been_going(self, client, as_role, frozen_clock):
+        as_role("visitor")
+        response = client.get(f"/data/jobs/{job_id_of('cross_compare')}")
+
+        assert response.status_code == 200
+        page = response.data.decode()
+        # the two numbers the job carries itself, neither of which says anything
+        assert job_table_row(page, "Duration") == "This job hasn't finished yet"
+        assert job_table_row(page, "Progress") == "0.00%"
+        assert job_table_row(page, "Total (since queued)") == "0:01:30 and counting"
+
+    def test_the_in_progress_page_reports_it_too(self, client, as_role, frozen_clock):
+        """`/data/result` of an unfinished job renders job_in_progress.html, which
+        switches the duration row off - so this row is the only elapsed time on it."""
+        as_role("visitor")
+        response = client.get(f"/data/result/{job_id_of('cross_compare')}")
+
+        assert response.status_code == 200
+        page = response.data.decode()
+        assert job_table_row(page, "Duration") is None
+        assert job_table_row(page, "Total (since queued)") == "0:01:30 and counting"
+
+
 # --- data.total_duration, over the timestamp shapes a Job can carry ----------------
 
-def job_with(created_at, finished_at, dependencies=("6a7465f2f8b8d2c6f83664c8",)):
+def job_with(created_at, finished_at, dependencies=("6a7465f2f8b8d2c6f83664c8",), attempts_left=3, terminated=False):
     return Job(
         {
             "created_at": created_at,
             "finished_at": finished_at,
             "all_dependencies": list(dependencies),
+            # only read for a job with no finished_at, to tell "still running" from
+            # "will never finish"
+            "attempts_left": attempts_left,
+            "terminated": terminated,
         },
         None,
     )
@@ -112,10 +187,31 @@ def test_total_duration_reads_every_timestamp_shape(created_at, finished_at):
 
 
 @pytest.mark.parametrize(
+    "created_at",
+    [
+        {"$date": "2026-08-06T10:46:10.490Z"},
+        "2026-08-06T10:46:10.490Z",
+        "2026-08-06 10:46:10.490000",
+        datetime(2026, 8, 6, 10, 46, 10, 490000),
+    ],
+)
+def test_total_duration_of_a_running_job_counts_against_the_clock(created_at, frozen_clock):
+    """The state issue #46 is actually about. While the children run the parent has
+    no finished_at and no duration, so elapsed time is the only number there is."""
+    assert str(total_duration(job_with(created_at, None))) == "0:01:30"
+
+
+@pytest.mark.parametrize(
     "job",
     [
         pytest.param(job_with("2026-08-06T10:46:10.490Z", "2026-08-06T10:46:18.572Z", dependencies=()), id="no dependencies"),
-        pytest.param(job_with("2026-08-06T10:46:10.490Z", None), id="unfinished"),
+        pytest.param(job_with("2026-08-06T10:46:10.490Z", None, dependencies=()), id="running, nothing waited on"),
+        pytest.param(job_with("2026-08-06T10:46:10.490Z", None, attempts_left=0), id="out of attempts"),
+        pytest.param(job_with("2026-08-06T10:46:10.490Z", None, terminated=True), id="terminated"),
+        pytest.param(
+            Job({"all_dependencies": ["6a7465f2f8b8d2c6f83664c8"], "created_at": "2026-08-06T10:46:10.490Z", "finished_at": None}, None),
+            id="running, no attempts_left field",
+        ),
         pytest.param(job_with(None, "2026-08-06T10:46:18.572Z"), id="never created"),
         pytest.param(job_with("who knows", "2026-08-06T10:46:18.572Z"), id="unparsable"),
         pytest.param(job_with("2026-08-06T10:46", "2026-08-06T10:46:18.572Z"), id="truncated"),

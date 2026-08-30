@@ -229,15 +229,18 @@
             {% endif %}
           </td>
         </tr>
-        {# a job waiting on dependencies only starts once they are done, so its own
-           duration says nothing about them - see data.total_duration #}
-        {% set job_total_duration = job_info|total_duration %}
-        {% if job_total_duration is not none %}
-          <tr>
-            <td valign="middle"><span class="hint--right" data-hint="Measured from when this job was queued. A job that fans out is queued just after the children it waits on, so this is a lower bound by that enqueue interval - 10ms for five children.">Total (since queued): </span></td>
-            <td valign="middle">{{ job_total_duration }}</td>
-          </tr>
-        {% endif %}
+      {% endif %}
+      {# a job waiting on dependencies only starts once they are done, so its own
+         duration says nothing about them - see data.total_duration. Deliberately
+         outside show_duration: the pages that switch the duration row off do so
+         because an unfinished job has none, which is exactly when this row is the
+         only elapsed time there is. #}
+      {% set job_total_duration = job_info|total_duration %}
+      {% if job_total_duration is not none %}
+        <tr>
+          <td valign="middle"><span class="hint--right" data-hint="Measured from when this job was queued, and against the current time while it is still running. A job that fans out is queued just after the children it waits on, so this is a lower bound by that enqueue interval - 10ms for five children.">Total (since queued): </span></td>
+          <td valign="middle">{{ job_total_duration }}{% if not job_info.finished_at %} and counting{% endif %}</td>
+        </tr>
       {% endif %}
       {% if show_progress %}
         <tr>
