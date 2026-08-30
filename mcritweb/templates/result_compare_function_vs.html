@@ -53,8 +53,7 @@ Function: {{ function_id_a }} vs {{ function_id_b }}
         <span style="float:right"><a href="#top">go to top</a></span>
         <input style=" margin: 3px;" type="button" id="showCycles" value="Show Cycles"/>
         <input style=" margin: 3px;" type="button" id="showLoops" value="Show Loops"/>
-        <!-- Loop boundaries are drawn by loopify_dagre against the layout it rewrites the dot graph into, and this page renders the unmodified graph in two panels instead - so the control has never had anything to toggle here. Disabled rather than left as a silent no-op, see issue #69. -->
-        <label style=" margin:3px; background-color:#e9ecef; padding:1px; color:#6c757d" title="Not available in the side-by-side view (mcritweb issue #69)."><input style=" margin: 3px;" type="checkbox" id="loopBgFill" value="loopBgFill" disabled>Show Loop Boundaries</label>
+        <label style=" margin:3px; background-color:#fdd0a2; padding:1px"><input style=" margin: 3px;" type="checkbox" id="loopBgFill" value="loopBgFill" checked>Show Loop Boundaries</label>
         <!-- <label style=" margin:3px; padding: 3px;"><input style=" margin: 3px;" type="checkbox" id="enableNodeDrag" value="enableNodeDrag">Enable Node Dragging</label> -->
         <label style=" margin:3px; padding: 3px;"><input style=" margin: 3px;" type="checkbox" id="enableTooltip" value="enableTooltip">Enable Tooltip</label>
     </div>
