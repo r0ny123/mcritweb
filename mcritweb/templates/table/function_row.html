@@ -1,5 +1,5 @@
 {% from 'table/pagination_widget.html' import sortable_header_col %}
-{% from 'table/links.html' import format_pichash, format_offset, format_family_name, format_family_id, format_sample_id, format_function_id %}
+{% from 'table/links.html' import format_pichash, format_offset, format_family_name, format_family_id, format_sample_id, format_function_id, exact_match_header_col, exact_match_col %}
 
 {% macro function_row_std_js() %}
 <script>
@@ -13,11 +13,12 @@
 {% endmacro %}
 
 
-{% macro function_header(for_sample_view=False, sort_pagination=None, column_setup=None) %}
+{% macro function_header(for_sample_view=False, sort_pagination=None, column_setup=None, exact_matches=None) %}
   {% if column_setup is none %}
     {% set column_setup = ["function_id", "family_id", "sample_id", "pic_hash", "has_minhash", "offset", "function_name", "num_instructions", "num_blocks"] %}
   {% endif %}
   <tr>
+    {% if exact_matches %}{{ exact_match_header_col() }}{% endif %}
     {% for column_type in column_setup %}
       {% if column_type == "function_id" %}
         {% call sortable_header_col(sort_pagination, "function_id") %}
@@ -58,11 +59,12 @@
 {% endmacro %}
       
       
-{% macro function_row(function, for_sample_view=False, column_setup=None) %}
+{% macro function_row(function, for_sample_view=False, column_setup=None, exact_matches=None) %}
   {% if column_setup is none %}
     {% set column_setup = ["function_id", "family_id", "sample_id", "pic_hash", "has_minhash", "offset", "function_name", "num_instructions", "num_blocks"] %}
   {% endif %}
   <tr class="function-row parent_{{ kwargs['parent'] }}" >
+    {% if exact_matches %}{{ exact_match_col(exact_matches.get(function.function_id)) }}{% endif %}
     {% for column_type in column_setup %}
       {% if column_type == "function_id" %}
         <th align="left" valign="middle" scope="row" class="function-id">{{ "%d"|format(function.function_id) }}</th>
