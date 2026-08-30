@@ -166,10 +166,18 @@ class RecordingMcritClient(FakeMcritClient):
     say something false rather than say nothing:
 
       * a queueing call answers a job id;
-      * an `is*Id` existence check answers a bool, and answers True, because a fake
-        that denies every id would make every view that validates one take its
-        not-found branch - which is the opposite of letting the view run on. A test
-        that cares about a *missing* id overrides this method for that id.
+      * `isSampleId` answers a bool, and answers True, because a fake that denies
+        every sample id makes every view validating one take its not-found branch,
+        which is the opposite of letting the view run on. A test that cares about a
+        *missing* id overrides the method for that id.
+
+    Deliberately only `isSampleId`, not every `is*Id`. Extending it to `isFunctionId`
+    lets `data.match_functions` past its guard and into `match_info["function_entry_a"]`
+    on the None this fake answers `getMatchFunctionVs` with - a TypeError, and a real
+    defect in that view (a backend that cannot answer takes the page down rather than
+    reporting it) that is nothing to do with the route this commitment exists for.
+    Widening this is the right thing to do together with guarding that view, not
+    before it.
     """
 
     def __getattr__(self, name):
@@ -177,7 +185,7 @@ class RecordingMcritClient(FakeMcritClient):
             self._record(name, *args, **kwargs)
             if name.startswith(QUEUEING_METHODS):
                 return FAKE_JOB_ID
-            if name.startswith("is") and name.endswith("Id"):
+            if name == "isSampleId":
                 return True
             return None
         return _permissive
