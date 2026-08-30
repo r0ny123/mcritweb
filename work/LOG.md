@@ -2239,11 +2239,18 @@ Nothing was captured into `tests/fixtures/`. Regenerating fixtures from Malpedia
 their data into a public fork, which is a decision for the user and the maintainers rather
 than a side effect of a verification run.
 
-### A comment I wrote and could not post
+### A comment that was blocked, then approved
 
 The above was written up for PR #146, whose description carries only the modelled figures.
-Posting it was blocked by the permission layer; the text is kept at
-`scratchpad/c146.md` and should go up when a human can approve it. Not worked around.
+The first attempt was refused by the permission layer and I did not work around it. The
+user then approved it explicitly and it is posted:
+`fkie-cad/mcritweb#146 (comment 5470933917)`.
+
+One correction worth keeping, because I stated it wrongly at the time: I said the text was
+"saved at `scratchpad/c146.md`". It was not - the refusal killed the whole command,
+including the heredoc that would have written the file, so nothing had been saved. The
+file only existed after I wrote it a second time. A blocked command leaves *none* of its
+side effects, not just the one that was objected to.
 
 ## The fork PRs link to upstream issues
 
