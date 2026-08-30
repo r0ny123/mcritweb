@@ -21,6 +21,7 @@ JOB_METHOD_NAMES = {
     # matching
     "getMatchesForSample": "Match 1vN",
     "getMatchesForSampleVs": "Match 1v1",
+    "getMatchesForSampleVsGroup": "Match 1vGroup",
     "combineMatchesToCross": "CrossCompare",
     # queries
     "getMatchesForUnmappedBinary": "Match Binary (unmapped)",
@@ -40,6 +41,8 @@ JOB_METHOD_NAMES = {
     "modifySample": "Modify Sample",
     "deleteFamily": "Delete Family",
     "modifyFamily": "Modify Family",
+    # maintenance
+    "doDbCleanup": "Database Cleanup",
 }
 
 

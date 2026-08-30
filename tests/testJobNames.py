@@ -20,6 +20,7 @@ See issue #39.
 """
 
 import collections
+import inspect
 import logging
 import pathlib
 import re
@@ -29,6 +30,7 @@ import pytest
 from fixtureData import job_id_of
 from mcrit.queue.LocalQueue import Job
 from mcrit.storage.MatchingResult import MatchingResult
+from mcrit.Worker import Worker
 
 from mcritweb.jobnames import JOB_METHOD_NAMES, job_method_name
 
@@ -38,8 +40,21 @@ logging.disable(logging.CRITICAL)
 
 TEMPLATE_ROOT = pathlib.Path(__file__).parent.parent / "mcritweb" / "templates"
 
-# raised by the admin maintenance routes; not part of the queue's own method_types
-MAINTENANCE_METHODS = ["rebuildIndex", "recalculatePicHashes", "recalculateMinHashes"]
+def every_queued_method():
+    """Every method the backend can put a job in the queue for.
+
+    Taken from the `@Remote` decorator, which sets `remote = True` on the function it
+    wraps, rather than from `Job.method_types["all"]`. That list is hand-maintained in
+    mcrit and is **incomplete**: it omits `getMatchesForSampleVsGroup` (queued by
+    `MinHashIndex.getMatchesCross` when `sample_group_only` is set), `doDbCleanup`, and
+    the two `recalculate*` methods the admin maintenance page submits. A ratchet built
+    on it therefore ratchets against the wrong list and passes while jobs go unnamed -
+    which is how `getMatchesForSampleVsGroup` was missing from the table below.
+    """
+    return sorted(
+        name for name, function in inspect.getmembers(Worker, predicate=inspect.isfunction)
+        if getattr(function, "remote", False)
+    )
 
 
 @pytest.fixture
@@ -53,9 +68,19 @@ def fake_mcrit(corpus_mcrit):
 def test_every_job_method_the_backend_can_produce_has_a_name():
     """A ratchet. When mcrit grows a job type, this fails and someone picks a label,
     rather than the new type quietly showing up as a raw RPC name in the interface."""
-    every_method = Job({"payload": {}}, None).method_types["all"] + MAINTENANCE_METHODS
-    unnamed = [method for method in every_method if method not in JOB_METHOD_NAMES]
+    unnamed = [method for method in every_queued_method() if method not in JOB_METHOD_NAMES]
     assert unnamed == [], f"no display name for {unnamed}"
+
+
+def test_the_ratchet_is_wider_than_the_queue_own_list():
+    """Guards the guard. If mcrit ever fills `method_types["all"]` in, this test starts
+    failing and can simply go - but until then, an assertion that the two agree would be
+    the assertion that let the gap through."""
+    queue_own_list = Job({"payload": {}}, None).method_types["all"]
+    missing_from_the_queue_list = [m for m in every_queued_method() if m not in queue_own_list]
+
+    assert "getMatchesForSampleVsGroup" in missing_from_the_queue_list
+    assert set(missing_from_the_queue_list) < set(every_queued_method())
 
 
 def test_an_unknown_method_is_shown_as_itself():
