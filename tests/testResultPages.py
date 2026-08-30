@@ -82,5 +82,101 @@ def test_job_page_renders_for_a_finished_job(client, as_role):
     assert response.status_code == 200
 
 
+def test_unique_blocks_statistics_carries_a_sample_version(client, as_role):
+    """The report names samples by id only - `statistics["by_sample_id"]` is block
+    counts - so the version has to be looked up on the backend (issue #80)."""
+    as_role("visitor")
+    response = client.get(f"/data/result/{job_id_of('unique_blocks')}")
+
+    assert response.status_code == 200
+    page = response.data.decode()
+    assert "Block Statistics across Samples" in page
+    statistics_table = page.split("Block Statistics across Samples")[1].split("</table>")[0]
+    assert ">Version<" in statistics_table
+    # the versions of the three win.citadel samples the captured report covers
+    for version in ("1.3.5.1", "1.3.4.0", "0.0.1.1"):
+        assert version in statistics_table, f"{version} missing from the statistics table"
+
+
+def test_unique_blocks_statistics_columns_are_sortable(client, as_role):
+    """Sorting happens in the page, over data that is already fully in memory. The
+    cells carry the raw number so a formatted cell ("2844 (66.76%)") still sorts
+    numerically."""
+    as_role("visitor")
+    response = client.get(f"/data/result/{job_id_of('unique_blocks')}")
+    page = response.data.decode()
+
+    assert response.status_code == 200
+    assert 'data-sort="number"' in page
+    assert 'data-sort="text"' in page
+    assert 'data-sort-value="2844"' in page
+
+
+def test_unique_blocks_page_survives_a_backend_that_lost_a_sample(client, as_role, fake_mcrit):
+    """A deleted sample resolves to None. The version column has nothing to show for
+    it, which is not a reason to lose the whole report."""
+    as_role("visitor")
+    fake_mcrit.getSampleById = lambda sample_id, *args, **kwargs: None
+    response = client.get(f"/data/result/{job_id_of('unique_blocks')}")
+
+    assert response.status_code == 200
+    assert b"Block Statistics across Samples" in response.data
+
+
+class _StubSample:
+    def __init__(self, sample_id, version):
+        self.sample_id = sample_id
+        self.version = version
+
+
+class _StubFamily:
+    def __init__(self, samples=None):
+        self.samples = samples
+
+
+class _StubClient:
+    """Answers getSampleById from a dict and counts what it was asked for."""
+
+    def __init__(self, samples):
+        self.samples = samples
+        self.requested = []
+
+    def getSampleById(self, sample_id):
+        self.requested.append(sample_id)
+        return self.samples.get(sample_id)
+
+
+def test_sample_versions_come_from_the_family_without_extra_requests():
+    """getFamily already answers with the family's samples, and result_unique_blocks
+    has that entry in hand before the statistics table is built."""
+    from mcritweb.views.data import get_sample_versions
+
+    client = _StubClient({})
+    family = _StubFamily({"0": _StubSample(0, "1.0"), "1": _StubSample(1, "2.0")})
+
+    assert get_sample_versions(client, family, [0, 1]) == {0: "1.0", 1: "2.0"}
+    assert client.requested == []
+
+
+def test_sample_versions_fall_back_to_a_lookup_per_sample():
+    """The sample-job case has no family, and a backend answering a family without
+    its samples lands here too."""
+    from mcritweb.views.data import get_sample_versions
+
+    client = _StubClient({7: _StubSample(7, "3.x")})
+
+    assert get_sample_versions(client, None, [7]) == {7: "3.x"}
+    assert client.requested == [7]
+
+
+def test_sample_versions_omit_a_sample_the_backend_no_longer_has():
+    from mcritweb.views.data import get_sample_versions
+
+    client = _StubClient({})
+
+    assert get_sample_versions(client, _StubFamily(None), [7]) == {}
+    assert client.requested == [7]
+
+
 if __name__ == "__main__":
     unittest.main()
