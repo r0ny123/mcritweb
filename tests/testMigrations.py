@@ -213,7 +213,7 @@ def test_the_oldest_schema_is_brought_fully_up_to_date(tmp_path):
 
     _run_migration(tmp_path, db_path)
 
-    assert {"user", "user_filters", "server", "user_column_settings"} <= _tables(db_path)
+    assert {"user", "user_filters", "server", "user_column_settings", "query_upload"} <= _tables(db_path)
     assert "apitoken" in _columns(db_path, "user")
     assert "server_token" in _columns(db_path, "server")
 
@@ -287,17 +287,18 @@ def test_stored_user_filters_are_not_dropped(tmp_path):
     assert _query(db_path, "SELECT user_id, filter_direct_min_score, filter_exclude_pic FROM user_filters") == [(1, 42, 1)]
 
 
-def test_a_v1_3_6_database_only_gains_column_settings(tmp_path):
-    """The last step before the current schema: user_column_settings arrives in
-    v1.4.0, and the already-migrated pieces must be left untouched."""
+def test_a_v1_3_6_database_gains_the_tables_added_since(tmp_path):
+    """The steps after it that only create a table: user_column_settings arrives in
+    v1.4.0 and query_upload with issue #40, and the already-migrated pieces must be
+    left untouched by either."""
     db_path = _legacy_database(tmp_path, SCHEMA_V1_3_6)
     _insert_legacy_user(db_path, "olduser", with_apitoken=True)
     _insert_legacy_server(db_path, with_server_token=True)
 
-    assert "user_column_settings" not in _tables(db_path)
+    assert {"user_column_settings", "query_upload"}.isdisjoint(_tables(db_path))
     _run_migration(tmp_path, db_path)
 
-    assert "user_column_settings" in _tables(db_path)
+    assert {"user_column_settings", "query_upload"} <= _tables(db_path)
     assert _query(db_path, "SELECT apitoken FROM user") == [("preexisting-token",)]
     assert _query(db_path, "SELECT server_token FROM server") == [("srvtoken",)]
 
