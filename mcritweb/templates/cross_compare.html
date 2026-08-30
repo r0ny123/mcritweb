@@ -143,7 +143,7 @@ function handleSliderChange(val) {
         <td valign="middle">{{ sample.getShortFilename() }}</td>
         <td align="right" valign="middle">{{ "%d"|format(sample.bitness) }}</td>
         <td align="right" valign="middle">{{ "%d"|format(sample.statistics['num_functions']) }}</td>
-        <td valign="middle"><a style="color: black;" onclick="deleteSample(this)"><i class="fa-solid fa-xmark"></i></a></td>
+        <td valign="middle"><a style="color: var(--control-text);" onclick="deleteSample(this)"><i class="fa-solid fa-xmark"></i></a></td>
 
       </tr>
       {% endfor %}
@@ -171,7 +171,7 @@ function handleSliderChange(val) {
       </thead>
       <tbody>
         {% for sample in samples %}
-        <tr {% if sample.sample_id in selected_ids %} style="background-color: yellowgreen;"{% endif %}{% if sample.sample_id in cached %} style="background-color: rgb(240, 240, 240);"{% endif %}class="parent">
+        <tr {% if sample.sample_id in selected_ids %} style="background-color: var(--row-selected-bg);"{% endif %}{% if sample.sample_id in cached %} style="background-color: var(--surface-muted);"{% endif %}class="parent">
           <th align="right" valign="middle" scope="row" class="id">{{ "%d"|format(sample.sample_id) }}</th>
           <td align="right" valign="middle" class="font-monospace">{{ sample.getShortSha256() }}</td>
           <td valign="middle">{{ sample.family }}</td>
@@ -221,7 +221,7 @@ function handleSliderChange(val) {
       {% endif %}
   </center>
   {% else %}
-  <center><a href='{{ url_for("data.submit") }}' style="color: #0d6efd; text-decoration: underline;" >No samples available. Click here to upload your first sample</a></center>
+  <center><a href='{{ url_for("data.submit") }}' style="color: var(--link-color); text-decoration: underline;" >No samples available. Click here to upload your first sample</a></center>
 {% endif %}
 </div>
 {% endblock %}
