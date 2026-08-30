@@ -1,4 +1,5 @@
 import time
+from collections import Counter
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 from mcrit.queue.JobCollection import JobCollection
@@ -270,16 +271,41 @@ def sample_by_id(sample_id):
         return redirect(url_for('explore.samples'))
 
 
+def get_api_usage(function_entry):
+    """Which imported APIs a function calls, as (name, call sites), busiest first.
+
+    smda stores one entry per call site in `xcfg["apirefs"]`, keyed by the offset of
+    the call, so an API called three times appears three times.
+
+    Returns None - not an empty list - when there is no graph to read them out of, so
+    the page can say "unknown" rather than "none". Both of the backend's ways of
+    having no graph count: `MongoDbStorage.getFunctionById` documents `xcfg is None`
+    as "not requested" and `{}` as "disassembly dropped", and neither is evidence
+    that the function calls nothing.
+    """
+    # FunctionEntry only declares `xcfg`; an entry built without one leaves the
+    # attribute unset rather than None
+    xcfg = getattr(function_entry, "xcfg", None)
+    if not isinstance(xcfg, dict) or not xcfg:
+        return None
+    apirefs = xcfg.get("apirefs")
+    if not isinstance(apirefs, dict):
+        return []
+    call_sites = Counter(str(api) for api in apirefs.values() if api)
+    return sorted(call_sites.items(), key=lambda name_and_count: (-name_and_count[1], name_and_count[0].lower()))
+
+
 @bp.route('/functions/<int(signed=True):function_id>')
 @visitor_required
 @mcrit_server_required
 def function_by_id(function_id):
     client = get_client()
-    function_entry = client.getFunctionById(function_id)
+    # with_xcfg, because the API calls shown on the page live in the graph (#34)
+    function_entry = client.getFunctionById(function_id, with_xcfg=True)
     if function_entry:
         sample_entry = client.getSampleById(function_entry.sample_id)
         pichash_match_summary = client.getMatchesForPicHash(function_entry.pichash, summary=True)
-        return render_template("single_function.html", entry=function_entry, sample_entry=sample_entry, pichash_match_summary=pichash_match_summary)
+        return render_template("single_function.html", entry=function_entry, sample_entry=sample_entry, pichash_match_summary=pichash_match_summary, api_usage=get_api_usage(function_entry))
     else:
         flash("The given Function ID doesn't exist", category="error")
         return redirect(url_for('explore.functions'))
