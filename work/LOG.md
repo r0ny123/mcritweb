@@ -1771,3 +1771,51 @@ That last check exists because the first version of this walk extracted the id w
 passed `{'$oid': '...'}` into the URL. Every page still answered **200** - by rendering the
 *unknown job* page. A status-code-only walk would have reported a clean pass without ever
 touching a real job.
+
+## Two of the integration findings traced back to their own PRs
+
+The merge exposed three defects. Checked which of them exist in a single PR rather than
+only in the combination, because a bug that lives in one branch should be fixed there and
+not just in the integration branch:
+
+| finding | standalone? | acted on |
+|---|---|---|
+| `write_atomically` writes the cache in text mode | code defect real in `fix/68`, not observable there | fixed in `fix/68` -> #145 |
+| `FailingBackend` misses `raw_variant` | latent in `fix/43`, fires when `fix/79` lands | closed in `fix/43` -> #130 |
+| `INDEX_CALLS` names `getFamily` | no - green standalone, corpus ordering differs | left to the integration branch |
+
+**#145 (`fix/68-result-page-performance`).** `write_atomically` opened the report cache in
+text mode. That cache is served back verbatim as the raw result, so it has to be
+byte-for-byte what `json.dump` wrote, and text mode does not promise that - it rewrites
+the newline on any platform whose line ending is not LF. `newline=""` for the text modes.
+Neither branch can see it alone: this one writes the cache and nothing here checks its
+bytes; #127 checks the bytes and writes in place.
+
+The new test says what it cannot do: on Linux, where text mode translates nothing, it
+passes with or without the fix, **so CI cannot see the regression it guards**. Written
+down rather than left as an implied guarantee, and mutation-checked where it does bite.
+
+    342 passed (was 341), ruff exit 0; dropping newline="" fails the new test.
+
+**#130 (`fix/43-backend-transport-errors`).** `FailingBackend` intercepts one named method
+and forwards the rest. Correct on this branch, whose conftest hands the app `fake_mcrit`
+directly - but #113 changes the factory to hand out `fake_mcrit.raw_variant()` for raw
+responses, which every `/api/` route asks for. That call reaches past the injected failure
+and returns a healthy client, so with both in one tree every `/api/` transport-error test
+passes against a backend that never fails. Naming `raw_variant` explicitly closes it from
+this side; it is a no-op until #113 lands, which is why it gets its own test rather than
+relying on the `/api/` cases to notice.
+
+One thing that had to be got right: the lookup is on the **class**. The corpus fake
+answers every unknown attribute with a stub that raises when called, so
+`getattr(inner, "raw_variant", None)` never returns None and cannot tell "has one" from
+"does not" - the first version did exactly that and failed with `NotImplementedError`.
+
+    269 passed, ruff exit 0; removing the method fails the new test.
+
+Both interactions are also recorded as comments on the *other* half of each pair (#113 and
+#127), because those PR bodies describe a change that is fine on its own and give a reader
+no reason to expect it to matter elsewhere.
+
+**Upstream after both pushes: 61 PRs, 61 green, 0 red, 0 running, all MERGEABLE, no
+review decisions or maintainer comments outstanding.**
