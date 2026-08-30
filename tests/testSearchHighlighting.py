@@ -81,17 +81,32 @@ def marks(response):
 def test_a_bare_term_is_markable_in_every_searched_field():
     """mcrit resolves a bare term to a substring condition on each of the fields in
     MongoDbStorage's `search_fields`, so the mark may appear in any of those columns."""
-    assert get_highlight_terms("zeus") == {field: ("zeus",) for field in SEARCH_FIELDS}
+    assert get_highlight_terms("zeus") == {field: (("zeus", False),) for field in SEARCH_FIELDS}
 
 
 def test_a_field_scoped_term_is_markable_only_in_that_field():
     """The reason this module parses at all. With one flat list of terms instead,
     `family_id:5` would put a mark on every "5" in every filename on the page."""
-    assert get_highlight_terms("filename:foo") == {"filename": ("foo",)}
+    assert get_highlight_terms("filename:foo") == {"filename": (("foo", True),)}
 
 
-def test_a_substring_operator_is_markable():
-    assert get_highlight_terms("family:?cita") == {"family": ("cita",)}
+def test_an_equality_condition_is_only_marked_on_an_equal_field():
+    """`=` means the field *is* the value, and a row can be on the page because some
+    other half of an OR matched. Marking a substring of a field that was never equal
+    would claim a hit the backend did not make.
+
+    Found by Codex review: the operator used to be discarded after deciding the term
+    was markable, and every retained term was then matched as a substring."""
+    terms = get_highlight_terms("family:=zeus OR filename:foo")
+
+    # the family half did not match this row; only its filename half did
+    assert split_search_matches("win.vmzeus", terms, "family") == [("win.vmzeus", False)]
+    # and a family that really is "zeus" is still marked
+    assert split_search_matches("zeus", terms, "family") == [("zeus", True)]
+
+
+def test_a_substring_operator_still_marks_a_substring():
+    assert get_highlight_terms("family:?cita") == {"family": (("cita", False),)}
 
 
 def test_a_negated_term_is_not_markable():
@@ -111,12 +126,12 @@ def test_a_term_under_a_negated_parenthesis_is_not_markable():
 
 
 def test_terms_of_a_conjunction_are_all_markable():
-    assert get_highlight_terms("filename:foo version:1.2")["filename"] == ("foo",)
-    assert get_highlight_terms("filename:foo version:1.2")["version"] == ("1.2",)
+    assert get_highlight_terms("filename:foo version:1.2")["filename"] == (("foo", True),)
+    assert get_highlight_terms("filename:foo version:1.2")["version"] == (("1.2", True),)
 
 
 def test_a_repeated_term_is_recorded_once():
-    assert get_highlight_terms("zeus zeus")["family_name"] == ("zeus",)
+    assert get_highlight_terms("zeus zeus")["family_name"] == (("zeus", False),)
 
 
 @pytest.mark.parametrize("query", ["", "   ", None, 0, [], "''", '""'])
