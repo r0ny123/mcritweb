@@ -31,6 +31,19 @@
   // Points the shared dicts at one panel. The vendored modules and most of the
   // code below reach for them by name, so a panel is made current for the span of
   // the code that fills it rather than every reader being rewritten.
+  //
+  // Be clear about what this does and does not fix. The per-panel dicts are now
+  // private and lossless - that is the issue #69 bug. But these four globals still
+  // end up pointing at whichever panel rendered last, and which one that is is still
+  // a race: 12 reloads of the same comparison page gave b 10 times and a twice. No
+  // reachable reader observes it today, because every one of them is dead code on
+  // this page - the edge-click handler throws on a null `g` two lines earlier, the
+  // node-drag and brush handlers are behind controls the duo template does not render
+  // (`#enableNodeDrag` is inside an HTML comment, `#enableBrush` appears nowhere), and
+  // `setupTrace()` and `getCodefromGraph()` have no live call site here. The highlight
+  // code below uses `cfgPanels` directly and never these. So this is latent, not
+  // active - but anyone wiring up `setupTrace` or fixing the edge-click has to take
+  // the panel from `cfgPanels` rather than trusting these.
   function usePanel(panel){
     nodesAll = panel.nodes;
     edgesAll = panel.edges;
@@ -3531,7 +3544,10 @@ function highlightUERs(UERtype){
       for(var nodeId in panel.nodes) {
         if(!panel.nodes.hasOwnProperty(nodeId)) { continue; }
         panel.nodes[nodeId]
-          .attr("fill", "")
+          // null removes the attribute; "" would leave fill="" behind, which is not a
+          // valid SVG presentation value. Browsers ignore it either way, but a pristine
+          // node has no fill attribute at all and un-highlighting should restore that.
+          .attr("fill", null)
           .select("rect")
           .style("fill", panel.colors.hasOwnProperty(nodeId) ? panel.colors[nodeId] : "");
       }
