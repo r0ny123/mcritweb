@@ -495,3 +495,70 @@ pushing it**, not just the diff of the files I meant to touch.
 This is the second time a mistake of mine was caught by reading rather than by a test
 (the first was the #54 `str.replace` that patched the wrong views). Both were textual
 operations whose *scope* was wrong while each individual edit looked fine.
+
+---
+
+## 2026-08-30 02:45-03:55Z — parallel review, and seven of my nine PRs had real defects
+
+The user authorised subagents ("you can spawn your own subagents to review the PRs ...
+up to 30 ... to work parallely"). I ran eight at once, all read-only on this checkout:
+four hostile reviews over PRs 2-18, four reconnaissance passes over upcoming issues.
+
+**This was the single most valuable hour of the run.** The reviews found defects in
+seven of the nine substantive PRs, and two of them were things I had seen and shipped
+anyway. Both of those are the same failure mode: I noticed a problem, wrote a comment
+acknowledging it, and let the comment stand in for a fix.
+
+### Findings, and what I did about each
+
+| PR | finding | fixed |
+|---|---|---|
+| #12 (#51) | mcrit filters *after* slicing the page, so job search only ever searched page 1. Its own inline comment said so. | rewritten: unpaged fetch + local filter |
+| #11 (#89) | the cache write was unconditional, so an in-flight probe overwrote `forget_server_probe()`; and an older answer could overwrite a newer one, which my docstring said was impossible | generation counter + start-time comparison; TTL now measured from completion |
+| #10 (#79) | claimed "no sample with this SHA-256" when the *call failed* - `handle_response` maps 404 and 500 and 502 alike to None | raw mode, only 404 is absence |
+| #6 (#101) | `/register` still leaked account existence; the timing dummy used today's hash method against databases written with an older one, leaving a ~30% gap | both closed; rehash-on-login so the table converges |
+| #17 (#62) | the preload fetched 150KB on /login at phone widths and the font was never drawn - and my premise-guard test was a markup match that could not see it | gated on `g.user`; guard replaced with something markup can honestly check |
+| #16 (#65) | three tables sitting under a search box still said "upload your first sample" | plus three more sites found while checking |
+| #14 (#41) | the wrapping stopped at the jobs list; the same string on the overview and every result page was unwrapped | one class in `column_table.html` |
+| #2 | the new `else` was unreachable for the job types its comment named (they store no result), so those still rendered "Job in Progress" forever | full state chain + `job_failed.html` |
+| #3 (#73) | a failed job reported as "not found"; a report that *cannot be fetched* reported as *empty*, though `job_info.result` distinguishes them | three-way split |
+| #5 (#54) | one failure flag over three independent searches; `hasCurrent` (a cursor param) mistaken for "has rows"; an escaping test that passed on master | all three |
+| #7 (#100) | a visitor's token works against the API but settings showed neither the token nor the rotate button | `API_ROLES`, one constant |
+| #9 | `make init` still did not install pytest, one target above the comment saying it must | fixed |
+| #4 (#98) | **clean** - the reviewer round-tripped a real legacy database through master and the branch and confirmed the migration and downgrade safety | - |
+| #18 | **clean** | - |
+| #15 (#61) | **clean** - the reviewer executed all 45 pages' inline scripts in one shared V8 global and found zero redeclaration errors | - |
+
+### The lesson, stated plainly
+
+Two of these (#12, #2) were defects I had *documented in a code comment* and shipped.
+A comment explaining why something is wrong is not a mitigation. If the honest comment
+would read "note this is incorrect", the change is not ready.
+
+A third (#17) is worse in kind: I wrote a test whose docstring claimed to guard an
+invariant, implemented it as a substring match on markup, and never asked whether the
+assertion could distinguish the failing case. It could not. A guard that cannot fail is
+worse than no guard, because it is read as evidence.
+
+### Reconnaissance, and two corrected triage calls
+
+- **#35 is not effort L.** My table said "needs a function-analysis flow that does not
+  exist". The `?funid=` filter and `result_compare_function.html` already exist and
+  render (verified live); what is missing is a route that starts the parent-sample job
+  and lands on `?funid=<id>`. S-M, with one design question for the maintainer.
+- **#56 has a half nobody filed.** `/explore/functions?query=5` renders "No functions
+  available" while `/explore/search?query=5&type=function` finds it - the listing pages
+  read `search_results` only and drop `id_match`/`sha_match` on the floor. Same for
+  families. That is a search hiding an existing record: wrong behaviour, effort S, and
+  it is nowhere in the issue text. Reproduced live, both directions.
+
+### New defects found while reproducing other things
+
+- `/data/jobs/<cross compare>` was HTTP 500 (`sorted` over a `None` child job) → PR #18.
+- `/data/jobs?active=notARealCategory` is an uncaught `KeyError` → 500, any visitor.
+- `data.py:559` passes `job_info=result_json` to `result_corrupted.html`, so that page
+  renders an empty job id and a delete button pointing at nothing.
+- `result_compare_function.html` renders `matching_result.getFamilyNameByFamilyId(famid)`
+  with `famid` never passed to that template.
+
+None of these have issue numbers. Each gets its own PR.
