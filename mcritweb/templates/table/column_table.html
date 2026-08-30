@@ -253,9 +253,7 @@
         <tr>
           <td valign="middle">Error Message: </td>
           <td valign="middle">
-            <div white-space: pre-wrap;>
-              <pre><code>{{ (job_info.last_error.rstrip()|e) -}}</code></pre>
-            </div>
+            <pre class="job-error"><code>{{ (job_info.last_error.rstrip()|e) -}}</code></pre>
           </td>
         </tr>
       {% endif %}
