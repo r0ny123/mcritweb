@@ -50,7 +50,11 @@ Function: {{ function_id }}
           </h2>
           <div id="api_usage_section" class="accordion-collapse collapse" aria-labelledby="api_usage_heading">
             <div class="accordion-body">
-              {% if api_usage is not defined or api_usage is none %}
+              {# explore.function_by_id is the only route that renders this page, and it
+                 always passes api_usage: None for "unknown", a possibly empty list of
+                 (name, call sites) otherwise. Guarding against the kwarg being absent
+                 would dress a programming error up as a fact about the function. #}
+              {% if api_usage is none %}
                 <p>This function is stored with no control flow information, so its API calls are unknown.</p>
               {% elif not api_usage %}
                 <p>This function does not reference any imported APIs.</p>

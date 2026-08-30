@@ -277,11 +277,17 @@ def get_api_usage(function_entry):
     smda stores one entry per call site in `xcfg["apirefs"]`, keyed by the offset of
     the call, so an API called three times appears three times.
 
-    Returns None - not an empty list - when there is no graph to read them out of, so
-    the page can say "unknown" rather than "none". Both of the backend's ways of
-    having no graph count: `MongoDbStorage.getFunctionById` documents `xcfg is None`
-    as "not requested" and `{}` as "disassembly dropped", and neither is evidence
-    that the function calls nothing.
+    Returns None - not an empty list - whenever the answer is unknown rather than
+    empty, so the page can say so. Three things count as unknown, and none of them is
+    evidence that the function calls nothing:
+
+      * `xcfg is None` - the entry was not fetched `with_xcfg`
+      * `xcfg == {}` - the disassembly was dropped; `MongoDbStorage.getFunctionById`
+        documents both of those as part of its contract
+      * a graph with no usable `apirefs` - `apirefs` is one of smda's
+        REQUIRED_FUNCTION_FIELDS, so a stored graph without a mapping there is a
+        broken shape, and reading it as "calls nothing" would both answer a question
+        the data cannot answer and hide the break
     """
     # FunctionEntry only declares `xcfg`; an entry built without one leaves the
     # attribute unset rather than None
@@ -290,7 +296,7 @@ def get_api_usage(function_entry):
         return None
     apirefs = xcfg.get("apirefs")
     if not isinstance(apirefs, dict):
-        return []
+        return None
     call_sites = Counter(str(api) for api in apirefs.values() if api)
     return sorted(call_sites.items(), key=lambda name_and_count: (-name_and_count[1], name_and_count[0].lower()))
 
