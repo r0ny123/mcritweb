@@ -2035,3 +2035,72 @@ CI: all nine updated PRs green across the five jobs.
 venv so the browser tests actually run rather than skip. Checked that this did not change
 any other worktree's suite result. It is not a project dependency and CI still skips those
 tests.
+
+## Two integration hazards that no single branch can see
+
+Both were found while landing the parallel round, and both are the shape that merges
+*cleanly* and is wrong afterwards - which is the only shape that matters here.
+
+### Four branches each wrote `docs/adr/0003`
+
+`0003` through `0008` were already taken (`0003` by `fix/72-function-labels-blocked-upstream`),
+and the round produced four more ADRs, all numbered 0003 with **different filenames**. Git
+merges different paths without a conflict, so the tree would have ended up holding five
+ADRs numbered 0003 and nothing would have complained. Renumbered on landing:
+
+| branch | ADR |
+|---|---|
+| `fix/7-round-the-score-columns` | 0009-nonlib-frequency-score |
+| `fix/64-deserialize-the-function-listing` | 0010-search-results-arrive-as-dicts |
+| `fix/67-cfg-without-an-xcfg` | 0011-export-import-is-a-faithful-copier |
+| `fix/89-cache-the-backend-probe` | 0012-keep-the-backend-reachability-probe |
+| `fix/74-synchronise-the-cfg-panes` | 0013-no-combined-cfg-view |
+
+Next free number is **0014**. Anything adding an ADR from here has to check the other
+branches, not just `master` - `master` still shows only 0001 and 0002.
+
+### Three branches now add a browser test, and one of them says it is the only one
+
+`fix/69`, `fix/74` and `fix/80` each add playwright-driven tests. Two consequences at
+integration:
+
+- `fix/80` adds `tests/testBrowser.py` **and** a sentence to AGENTS.md calling it "the one
+  module that runs a browser". That is false the moment any of the other two lands.
+- `fix/74`'s `live_server` fixture and `fix/80`'s are duplicates. They belong in
+  `tests/conftest.py` once the branches meet, not copied per module.
+
+Neither is a merge conflict. Both are wrong-after-merge.
+
+## #74: the one issue where the answer is "no", with the measurements to back it
+
+Asked for the BinDiff-style combined view or a rigorous verdict, the agent produced the
+verdict and the evidence for it. A combined view needs a 1:1 correspondence between the
+two functions' basic blocks; `get_matches_node_colors` produces a *relation*. Three of its
+four passes are set intersections over a hash - they answer "does something over there
+look like this", never "which one" - and the single pass that does compute an assignment
+runs last over leftovers and discards its pairs in favour of colours.
+
+Both obvious recoveries were measured against the captured fixtures and fail in opposite
+directions:
+
+    hash intersection      174 of 230 matched blocks ambiguous across ten pairs
+                           (same-PicHash pair: 27 of 33 ambiguous, largest class 7 x 7)
+    Weisfeiler-Lehman      fixes the identical case, destroys the useful one -
+                           31/42 matched at round 0 -> 8/42 at round 2
+
+Coverage and unambiguity are available one at a time. So #74 keeps `Closes` **off**, box 2
+is recommended for its own issue, and the ADR carries a 25-line reproduction script so the
+next person re-runs it rather than re-deriving it.
+
+## A gate I ran past
+
+I pushed `fix/fake-status-fidelity` with `ruff` exiting **1** - my own gate, skipped
+because I read the suite line and moved on. Caught it on the next command; the import I
+had added went above the flask block instead of into isort's order. Fixed and re-pushed,
+with the reason in the commit message rather than amended away.
+
+Also, for the second time this session, I asserted an attribute with the wrong quote style
+(`name="mcrit_server_url"`, where the template writes `name='mcrit_server_url'`). The
+status assertion in the same test had already proved the fix worked, so only my assertion
+was wrong - but it is the same mistake twice, and the lesson is to assert on something
+whose spelling I have actually read.
