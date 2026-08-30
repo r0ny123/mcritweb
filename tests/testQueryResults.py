@@ -229,3 +229,31 @@ def test_a_table_holding_both_a_query_and_a_stored_sample_keeps_the_columns(app)
 
     assert "Version | Component | Library" in both
     assert "Version | Component | Library" not in query_only
+
+
+def test_the_query_column_of_a_mixed_table_still_claims_no_family(app):
+    """Keeping the rows for the stored sample must not hand its neighbour a family.
+
+    The first version of this change gated the family and version cells on the table
+    as a whole, so a query filtered to one matched sample got the rows back - and with
+    them the linked "Unnamed" family 0 this change exists to remove. Found by Codex
+    review. Each cell is gated on its own sample now.
+    """
+    query_entry = SampleEntry.fromDict(load("matches_for_query.result")["info"]["sample"])
+    stored_entry = SampleEntry.fromDict(load("samples")["1"])
+    template = (
+        "{% from 'table/column_table.html' import sample_column_table %}"
+        "{{ sample_column_table(*pairs) }}"
+    )
+
+    with app.test_request_context("/"):
+        both = app.jinja_env.from_string(template).render(
+            pairs=[("Reference Sample", query_entry), ("Other Sample", stored_entry)])
+
+    # the stored sample keeps its own identity
+    assert "Version | Component | Library" in both
+    assert stored_entry.family in both
+    # and the query is given none of it: exactly one family link, the stored one's
+    family_links = re.findall(r'href="/explore/families/(\d+)"', both)
+    assert family_links == [str(stored_entry.family_id)], (
+        f"the query column was given a family too: {family_links}")
