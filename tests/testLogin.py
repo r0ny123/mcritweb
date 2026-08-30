@@ -1,8 +1,9 @@
 #!/usr/bin/python
 """What a failed login is allowed to reveal.
 
-`/login` is unauthenticated and unthrottled, so anything it says about *why* a login
-failed is something a caller can ask for as many times as it likes. Saying "Incorrect
+`/login` is unauthenticated, so anything it says about *why* a login failed is
+something a caller can ask for - now at a metered rate (see testLoginThrottle.py), but
+still far more often than any oracle should be answerable. Saying "Incorrect
 username." for one case and "Incorrect password." for the other answers "does this
 account exist?" one request at a time. Issue #101.
 """
