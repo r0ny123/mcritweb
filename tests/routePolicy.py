@@ -144,6 +144,10 @@ ROUTE_POLICY = {
     # for a recalculation, so a repeat, a prefetch or a double-click costs nothing.
     "analyze.compare_all": (VISITOR, WRITES_ON_GET),
     "analyze.compare_vs": (VISITOR, WRITES_ON_GET),
+    # same shape one level down: it queues the *parent sample's* 1-vs-N and lands on
+    # that report filtered to the function, because the backend has no per-function
+    # job. Reuses an existing job unless asked to rematch, so it is idempotent too.
+    "analyze.compare_function": (VISITOR, WRITES_ON_GET),
     "analyze.blocks_family": (VISITOR, WRITES_ON_GET),
     "analyze.blocks_sample": (VISITOR, WRITES_ON_GET),
     "analyze.start_cross_compare": (VISITOR, WRITES_ON_GET),
