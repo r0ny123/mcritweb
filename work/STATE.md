@@ -54,36 +54,36 @@ every PR. It is not an upstream issue - see `work/LOG.md`, 22:05Z.
 | 52 | 12 | Line breaks in table headers and export/analyze buttons | can't (screenshot only) | cosmetic | S | PR opened — [#13](https://github.com/r0ny123/mcritweb/pull/13) |
 | 41 | 13 | Long job names need line breaks | can't (screenshot only) | cosmetic | S | PR opened — [#14](https://github.com/r0ny123/mcritweb/pull/14) |
 | 61 | 14 | Undeclared JS globals | partially | cosmetic | M | PR opened — [#15](https://github.com/r0ny123/mcritweb/pull/15) |
-| 35 | 15 | "Analyze" on a function row starts a 1vsN for the parent *sample* | **yes** (code) | wrong behaviour | L | not started — needs a function-analysis flow that does not exist |
-| 66 | 16 | Import page gives no progress indication | no | UX | M | **in progress** (worktree agent) |
+| 35 | 15 | "Analyze" on a function row starts a 1vsN for the parent *sample* | **yes** (code) | wrong behaviour | S–M (corrected) | **in progress** (worktree agent) |
+| 66 | 16 | Import page gives no progress indication | **yes** (measured, headless Chromium) | UX | M | PR opened — [#32](https://github.com/r0ny123/mcritweb/pull/32) |
 | 99 | 17 | Result template rendering only covered for five report types | n/a (meta) | — | L | PR opened — [#26](https://github.com/r0ny123/mcritweb/pull/26) |
 | 93 | 18 | Configurable Unique Blocks page under Analyze | n/a (feature) | — | L | not started |
 | 80 | 19 | Block isolation table improvements | can't | — | M | not started |
 | 75 | 20 | Export raw results as JSON | n/a (feature) | — | M | PR opened — [#24](https://github.com/r0ny123/mcritweb/pull/24) |
-| 72 | 21 | Allow modifying functions (samples/families already possible) | n/a (feature) | — | L | not started |
+| 72 | 21 | Allow modifying functions (samples/families already possible) | n/a (feature) | — | L | **in progress** (worktree agent) |
 | 69 | 22 | FunctionVs: loop visualization correctness | can't (needs click-through) | — | M | not started |
-| 55 | 23 | "Rerun job" button | n/a (feature) | — | M | **in progress** (worktree agent) |
-| 58 | 24 | Search should remember last sort order | n/a (feature) | — | M | **in progress** (worktree agent) |
+| 55 | 23 | "Rerun job" button | n/a (feature) | — | M | PR opened — [#30](https://github.com/r0ny123/mcritweb/pull/30) |
+| 58 | 24 | Search should remember last sort order | n/a (feature) | — | M | PR opened — [#28](https://github.com/r0ny123/mcritweb/pull/28) |
 | 56 | 25 | Mark id/SHA matches in search (blocked on #53) | n/a (feature) | — | M | not started |
 | 53 | 26 | Special triggers for rows in table rendering | n/a (feature) | — | M | not started |
 | 50 | 27 | Table widgets for result-page tables | n/a (refactor) | — | L | not started |
-| 45 | 28 | Mark the search term in results | n/a (feature, labelled `wait`) | — | M | **in progress** (worktree agent — XSS-sensitive) |
+| 45 | 28 | Mark the search term in results | n/a (feature, labelled `wait`) | — | M | PR opened — [#33](https://github.com/r0ny123/mcritweb/pull/33) |
 | 48 | 29 | Minify/prettify HTML | n/a (feature) | — | M | not started |
 | 63 | 30 | Optimize browser performance (render-blocking JS) | can't measure here | — | L | not started |
 | 62 | 31 | Preload navbar icons | **yes** (measured with headless Chromium) | UX | S | PR opened — [#17](https://github.com/r0ny123/mcritweb/pull/17) |
 | 60 | 32 | Consider htmx for table reload + pagination | n/a (refactor) | — | L | not started |
 | 68 | 33 | Improve MatchingResults performance | can't measure here | — | L | not started |
 | 67 | 34 | Investigate export→import bugs | can't (needs a real backend) | — | L | not started |
-| 40 | 35 | Polish query matching results (filename missing, job name) | partially | — | M | **in progress** (worktree agent) |
+| 40 | 35 | Polish query matching results (filename missing, job name) | **yes** (3 of 5 complaints) | wrong behaviour | M | PR opened — [#31](https://github.com/r0ny123/mcritweb/pull/31) |
 | 39 | 36 | Inconsistent names between job and result - six headings render *empty* | **yes** (measured) | wrong behaviour | M | PR opened — [#19](https://github.com/r0ny123/mcritweb/pull/19) |
 | 38 | 37 | Filter 'Matching Method Statistics' with the result | can't (needs backend) | — | M | not started |
-| 36 | 38 | Job list tabs do not change the URL, so back/refresh lose the tab | partially | wrong behaviour | M | **in progress** (worktree agent) |
-| 34 | 39 | Improve function pages (accordion, minhash flag, analyze button, shingles) | n/a (feature) | — | L | not started |
+| 36 | 38 | Job list tabs do not change the URL, so back/refresh lose the tab | **yes** (plus a 500) | wrong behaviour | M | PR opened — [#29](https://github.com/r0ny123/mcritweb/pull/29) |
+| 34 | 39 | Improve function pages (accordion, minhash flag, analyze button, shingles) | n/a (feature) | — | L | **in progress** (worktree agent) |
 | 32 | 40 | Show the MinHash matching parameter in job results | n/a (feature) | — | M | PR opened — [#25](https://github.com/r0ny123/mcritweb/pull/25) |
 | 9 | 41 | Promote a query to a full sample | n/a (feature) | — | L | not started |
 | 42 | 42 | How to handle clustered sample sequences in cross compare (open question) | n/a (question) | — | — | not started |
 | 44 | 43 | Treat "dedumped" filenames as unmapped? (open question) | n/a (question) | — | — | not started |
-| 43 | 44 | Handle all kinds of errors from McritClient | n/a (design) | — | L | not started |
+| 43 | 44 | Handle all kinds of errors from McritClient | **yes** (transport half: 4 of 5 failure modes were HTTP 500) | crash | M | PR opened (partial) — [#27](https://github.com/r0ny123/mcritweb/pull/27) |
 | 37 | 45 | Annotate jobs with user uuids (labelled `wait`) | n/a (feature) | — | L | not started |
 | 46 | 46 | Cross job duration/progress is meaningless (labelled `wait`) | can't (backend) | — | M | not started |
 | 47 | 47 | Queue result cache destroyed by force rematch | can't (backend) | — | M | not started — `mcrit` issue |

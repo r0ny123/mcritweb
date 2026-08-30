@@ -659,3 +659,112 @@ Two got extra constraints worth recording:
   button for a job whose original request cannot be faithfully rebuilt is worse than
   not offering it at all: it would silently run a different analysis than the user
   believes they re-ran.
+
+---
+
+## 2026-08-30, ~06:00Z — seven more PRs, and what the fleet cost
+
+### PRs opened
+
+| PR | issue | what |
+|---|---|---|
+| [#27](https://github.com/r0ny123/mcritweb/pull/27) | 43 | answer a failed backend call with a page, not a stack trace |
+| [#28](https://github.com/r0ny123/mcritweb/pull/28) | 58 | remember the sort order a listing was last viewed with |
+| [#29](https://github.com/r0ny123/mcritweb/pull/29) | 36 | name the job list's tab in its own URL |
+| [#30](https://github.com/r0ny123/mcritweb/pull/30) | 55 | rerun the jobs a request can be faithfully rebuilt from |
+| [#31](https://github.com/r0ny123/mcritweb/pull/31) | 40 | name the queried file; stop giving it a family it has none of |
+| [#32](https://github.com/r0ny123/mcritweb/pull/32) | 66 | say what the import is doing while it does it |
+| [#33](https://github.com/r0ny123/mcritweb/pull/33) | 45 | mark the search term in the rows that matched it |
+
+Six were implemented by worktree agents; #27 I did myself. **Every one was
+re-verified here before landing** — I re-ran the reproduction against
+`origin/master` and against the branch myself rather than quoting the agent's
+transcript, and mutation-checked the load-bearing test in each (delete the guard,
+confirm the test fails).
+
+### The single most valuable finding: a live XSS on master
+
+While checking what an attacker-controlled filename could reach, the #40 work found
+that `clipboard_btn` built `onclick="copy_to_clipboard(this, '{{ value }}')"`. Jinja
+escapes `'` to `&#39;`, which *looks* safe — but the HTML parser decodes the entity
+**before** the attribute is compiled as script. Reproduced on pristine `master`:
+
+```
+  onclick as the JS engine sees it: "copy_to_clipboard(this, 'a');alert(1);//')"
+  payload executes: True
+```
+
+Reachable today through a contributor-chosen sample filename, and in a
+malware-analysis UI the filename is chosen by the adversary. Fixed in #31 (the value
+moves to `data-clipboard-value`, read with `getAttribute`), because #31 would have
+*widened* it to any visitor who can run a query — shipping the widening without the
+mitigation was not an option. Offered to split it out if the maintainer wants it
+merged ahead of the rest.
+
+### Codex found three real defects I had shipped
+
+Not one of them was cosmetic, and each exposed the same *kind* of blind spot:
+
+1. **#26 / all 23 branches** — `make init` still didn't install pytest. I had fixed
+   this once on `fix/ci-install-pytest` and then cherry-picked the *older* commit
+   everywhere else, so it was live in 23 of 24 open PRs. Ported the fix to all 23.
+2. **#27** — the 503 page linked an admin to `url_for('administration.server')`; the
+   blueprint is registered as `admin`, so it raised `BuildError` and served an admin a
+   500 *for the one condition the page exists to report*. **Every test in the file
+   signed in as a visitor**, which is exactly why none of them saw it.
+3. **#27** — `mcrit_server_required` runs before the view, so a probe failure never
+   reached the API blueprint's handler and API callers still got a 302 to HTML. I had
+   *flagged this in the PR body as a follow-up* — which made the PR's headline claim
+   true only in the narrow case. Fixed rather than documented.
+4. **#30** — the rerun route enforced the request shape but not the finished-or-failed
+   gate. I had written the reason that gate exists and then put it only in the function
+   that decides whether to draw the button. **Withholding a button hides the door; it
+   doesn't lock it.**
+5. **#31** — the query/stored gate was table-wide, so a *mixed* table (query filtered
+   to one match) still gave the query column the fabricated family the change exists to
+   remove.
+
+### The lessons, stated plainly
+
+- **A test suite that only exercises one role is not a test suite.** Findings 2 and 3
+  both survived because every test in the file used the same fixture defaults —
+  `as_role("visitor")` and a probe stubbed to succeed. Vary the axis the branch
+  depends on.
+- **"What I didn't do" is not a place to park a defect.** Finding 3 was in my own PR
+  body as a known gap. Writing it down did not make the PR's claim true.
+- **A gate in the template is not a gate.** Finding 4.
+- **A test that asserts a row is *present* cannot see that its contents are wrong.**
+  Finding 5 sailed past a test that checked exactly that.
+
+Every fix above is mutation-checked: I put the bug back and confirmed the new test
+fails. That is now the standing bar for a fix to a review finding.
+
+### An environment hazard that cost real work
+
+`git stash` shares `refs/stash` across **every worktree of a repository**. Three
+agents used it concurrently to measure a clean baseline and their stashes crossed —
+one agent's `stash pop` retrieved another's work into its tree, and the #66 agent's
+worktree ended up holding the #45 agent's row-template edits while its own work sat
+in the stack.
+
+Nothing was lost: both agents detected it, recovered from the dangling stash commits,
+and independently audited their final diffs. I verified all three trees from here
+before landing anything, and confirmed each branch's committed diff contained only
+its own files.
+
+**Standing rule added to every agent brief from now on: never run `git stash` in this
+repository.** For a clean baseline, `git worktree add --detach /tmp/baseline origin/master`.
+
+I also corrected a figure I had been giving agents: the suite baseline on
+`origin/master` is **239**, not 261. My number came from a feature branch. Three
+separate agents measured 239 and flagged the discrepancy rather than quietly
+adjusting their arithmetic, which is the right instinct.
+
+### Next fleet
+
+Four agents on **#35**, **#72**, **#34**, and a research pass over the nine issues
+triaged as "can't reproduce / belongs in mcrit" (**#38, #68, #80, #69, #47, #64, #59,
+#76, #77**) — that last one exists because those triage calls were made fast and some
+of them are probably wrong. Several "backend" issues plausibly have a client-side half
+(a filter over data already on the page, an N+1 fetch), and an N+1 is measurable
+offline with `RecordingMcritClient` even without a large database.
