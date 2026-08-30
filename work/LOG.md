@@ -361,3 +361,54 @@ found today, and it was invisible from the inside — Ruff stayed green througho
 pipeline read as healthy while the suite had not executed a line since `mcrit` moved
 pytest behind its `dev` extra. Worth checking, on any repo, that a green pipeline is
 actually running the tests it claims to.
+
+---
+
+## 2026-08-30T02:20Z — user redirected: work every issue until each has a PR
+
+`/goal`: "work on all the issues ... until every issue has a PR", and separately:
+"address all the codex review findings in each PR as those lands".
+
+Consequences for the plan in `work/SUMMARY.md`:
+
+- The original brief said feature requests come "last or not at all". That is
+  superseded: work down the ranked table and open a PR per issue.
+- The PR check-in routine now also reads reviews and review comments on every PR each
+  hour and treats a Codex finding as a bug report - verify, fix, push, reply, resolve.
+  As of 02:20Z no review has landed on any PR; the only comments are CodeRabbit's
+  "Review skipped - auto reviews are disabled on this repository", which needs none.
+
+## 2026-08-30T02:00-02:20Z — PRs 8-14
+
+Same method throughout: reproduce, failing-first test where the setup allows it,
+minimal fix, self-review to zero findings, `pytest` + `ruff` green, PR with
+before/after.
+
+- **#79** → PR #10. Reworded the failure, and gave a SHA-256 a real answer:
+  `getSampleBySha256` is a different endpoint from the search, so it still answers
+  when the search cannot. Measured before/after in the PR. Also **corrected my own
+  earlier triage**: I had marked this "not fixable here" because the root cause is in
+  mcrit. The message *was* still MCRITweb's to fix, and the direct lookup delivers
+  exactly what the issue asked for.
+- **#89** → PR #11. TTL cache on the reachability probe, default 5s, `0` restores the
+  old behaviour exactly. Measured: 8 page loads, 8 round-trips before, 1 after.
+  **The suite caught a real bug in my first draft**: a module-global cache leaked
+  between tests and broke `testFixtures.py::test_backend_check_still_applies_to_authorized_users`,
+  which passed alone and failed in the suite. `create_app` now clears it, and a test
+  pins that.
+- **#51** → PR #12. **My triage was wrong**: I recorded it as blocked on a backend
+  change, but `McritClient.getQueueData` already takes a `filter` string. The search
+  box is back (as a GET) and the term reaches the backend. The genuinely-blocked part
+  is narrower than I said: mcrit filters *after* slicing, so the counts stay
+  unfiltered. Written at the call site and in the PR.
+- **#52** → PR #13, **#41** → PR #14. Both screenshot-only issues, and I say so in the
+  PRs: no browser here, so I reproduced the *mechanism* in the markup and the tests
+  pin the plumbing rather than the pixels. The two want opposite behaviour (headings
+  and buttons must not wrap; job descriptions must) and their CSS is deliberately
+  placed in different parts of `style.css` so the branches do not conflict.
+- **#61** → PR #15. 20 undeclared assignments across 8 templates, now a ratchet test.
+  **The one that needed reading rather than a sed**: `families_ac` is top-level in two
+  script blocks that land on the same page, so `const` there would have been a
+  SyntaxError on four pages - a "tidy-up" that breaks them. It stays `var`.
+- **#65** → PR #16. The empty-state message becomes the caller's to choose, defaulting
+  to today's text; 11 of 13 tests fail on master.
