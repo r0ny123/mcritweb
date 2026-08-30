@@ -1140,3 +1140,41 @@ install for every branch — every page came out "byte-identical" because nothin
 compared. They caught it themselves and redid the work with an
 `assert mcritweb.__file__.startswith(os.getcwd())`. My own render harness for #40 carries
 the same assertion for the same reason.
+
+### What the review round landed
+
+Eight fix agents, one PR each, each in its own worktree, each told to mutation-check
+every test it touched. Six have landed; two are still out (#43, #44/#50).
+
+| PR | what shipped | suite |
+|---|---|---|
+| #37 | the promote path now checks the stored file against `Job.sha256` - the hash the *backend* recorded for the payload the job ran on. Plus the kernel-mode `base_addr`, the `+` in family/version, and a guard test that passed with its guard deleted | 265 → 278 |
+| #38 | no YARA rule at all when the bounds select no blocks; a stale selection settles in one request instead of 25 redirects; nothing is discarded on an unproven negative | 288 → 296 |
+| #39 | `de-dumped` / `de_dumped` / `dedump` / `dedumping` recognised; the SMDA path stops demanding a base address it never reads; the parse behind that gets its own 400 | 276 → 315 |
+| #35 | the fake honours `with_xcfg`, so the flag that makes the feature work is finally guarded; `get_api_usage` answers None for a broken shape | 250 → 255 |
+| #41 | the offset above the sign bit is pinned; the search test searches by name so it reaches the loop it names | 242 → 243 |
+| #46 | six more truncating score cells, one of them default-visible; the test now renders all four changed templates | 242 → 250 |
+
+**Three agents disagreed with their brief, and each was right.**
+
+- The #41 agent refused Finding 1: `explore.sample_by_id` has called `fromDict` since
+  55aa4d6, on master and on the branch. Verified by blame before accepting; the reviewer
+  had quoted a line that does not exist there.
+- The #38 agent rejected "clamp `condition_required` at render" on better grounds than
+  the brief gave: `min(len(yara_blocks), condition_required)` would write `1 of them`,
+  but the *empty `strings:` section* is itself the syntax error, so clamping swaps one
+  uncompilable rule for another. Confirmed against `UniqueBlocksResult.renderRule`.
+- The #37 agent rejected both shapes the brief offered - store under `sha256(bytes)`
+  everywhere (needs a mapping that does not exist, breaks every stored upload) and
+  require filename == `sha256(bytes)` (would make `.smda` promotion permanently
+  impossible, since the file is the report JSON while the name is the sample's hash) -
+  and found a third: the descriptor hash the backend already computed. It also closes
+  the TOCTOU between `os.path.isfile` and `open`, because what is hashed is what was read.
+
+**One place I overrode an agent.** The #39 agent flagged that its own fix newly exposed a
+500 - moving the base-address check off the SMDA path leaves an unreadable report body
+reaching `json.loads` unguarded - and declined to fix it as a drive-by. That is the right
+instinct in general and the wrong call here: this PR's headline is "an empty base address
+was a 500, now a 400", and leaving a sibling 500 in the same route is inconsistent. Fixed,
+with five unreadable bodies across both routes now answering 400 and reaching no backend
+call; mutation-checked.
