@@ -7,9 +7,32 @@ issue → branch → PR map at the end of it), `work/LOG.md` (what was tried, wh
 happened, what was decided, and where I was wrong) and `work/SETUP.md` (how to
 reproduce any of it).
 
-All PRs are against `r0ny123/mcritweb`, base `master`. **Never upstream.**
+All PRs are against `r0ny123/mcritweb`, base `master`, **except three opened upstream on
+explicit later instruction** — see "Three PRs upstream" below.
 
 ---
+
+## Three PRs upstream
+
+Opened against `fkie-cad/mcritweb` on 2026-08-30, on explicit instruction that overrode
+the fork-only guardrail. These are the same three branches as the fork PRs beside them —
+one head, two PRs — so merging either side lands identical code.
+
+| upstream | fork | branch | what |
+|---|---|---|---|
+| [#103](https://github.com/fkie-cad/mcritweb/pull/103) | #9 | `fix/ci-install-pytest` | the CI unblocker |
+| [#104](https://github.com/fkie-cad/mcritweb/pull/104) | #58 | `fix/query-upload-path-traversal` | security: a visitor picks the upload path |
+| [#105](https://github.com/fkie-cad/mcritweb/pull/105) | #37 | `fix/9-promote-a-query-to-a-sample` | feature: issue #9 |
+
+**#103 came back green on all five upstream jobs** (Ruff + Python 3.11/3.12/3.13/3.14),
+which is the direct evidence that the `No module named pytest` breakage is real on
+upstream `master` and that this is what clears it.
+
+The bodies were rewritten for an upstream audience rather than copied: clone URLs point
+at `fkie-cad`, cross-references name upstream PR numbers, and each of #104/#105 carries a
+closing note explaining why the CI hunk rides along on its branch.
+
+Everything else stays on the fork, as the standing rule says.
 
 ## Where to start reading
 
@@ -110,8 +133,13 @@ rather than re-derived.
 
 ## Guardrails held
 
-No force-push, no rewritten shared history, no commits to `master`. No PR against upstream
-`fkie-cad/mcritweb`. No secrets or `.env` content committed — checked mechanically before
-each push. **No test was deleted or disabled to make a suite pass**; where a test was
+No force-push, no rewritten shared history, no commits to `master`. No secrets or `.env`
+content committed — checked mechanically before each push.
+
+**One guardrail was deliberately overridden, and this says so rather than quietly
+dropping it.** The standing rule was "never open PRs against upstream
+`fkie-cad/mcritweb` — my fork only". A later instruction asked for three specific PRs to
+be opened upstream. The newer instruction governs and those three were opened; the rule
+still holds for the other 57. Listed below. **No test was deleted or disabled to make a suite pass**; where a test was
 wrong it was rewritten in place and the rewrite mutation-checked. Nothing is claimed fixed
 or reproduced that was not run, with the output pasted into the log or the PR.
