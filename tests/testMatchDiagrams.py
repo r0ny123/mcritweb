@@ -12,17 +12,20 @@ must produce the same picture on demand, and every way the render can fail must 
 in a missing image rather than in a 500 or a half-written file that gets served.
 """
 
+import copy
 import io
 import logging
 import os
+import re
 import unittest
 
 import pytest
 from fixtureData import job_id_of
 from mcrit.storage.MatchingResult import MatchingResult
+from PIL import Image
 
-from mcritweb.views.data import DIAGRAM_FILENAME_RE
-from mcritweb.views.MatchReportRenderer import MatchReportRenderer
+from mcritweb.views.data import DIAGRAM_FILENAME_RE, match_diagram_size
+from mcritweb.views.MatchReportRenderer import MatchReportRenderer, count_diagram_blocks, stacked_diagram_size
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
@@ -391,6 +394,130 @@ def test_a_filter_id_that_is_not_how_the_app_spells_it_is_not_read_as_a_filter(f
 )
 def test_a_filename_the_app_never_wrote_is_not_parsed(filename):
     assert DIAGRAM_FILENAME_RE.match(filename) is None
+
+
+# --- the page reserves the box the diagram will land in ---------------------------
+
+#: The <img> the four result templates build through templates/match_diagram.html.
+DIAGRAM_IMG_RE = re.compile(r'<div class="mcrit-diagram">\s*<img [^>]*>')
+
+
+def diagram_img(response):
+    match = DIAGRAM_IMG_RE.search(response.data.decode())
+    assert match is not None, "the page shows no diagram"
+    return match.group(0)
+
+
+def report_trimmed_to_the_fixture_pool(corpus_mcrit, report):
+    """The report with only the functions the fixtures kept an entry for.
+
+    `tests/fixtures/regenerate.py` captures the first 100 functions of a reference
+    sample, while the report summarises all of them - so against this corpus the two
+    sources of instruction counts describe different sets, and only here. On a live
+    backend they are one list: mcrit's MatcherSample/MatcherVs summarise the report
+    from `getFunctionsBySampleId(sample_id)`, which is what the renderer then fetches
+    again. Trimming restores that equality so the assertion is about the arithmetic
+    rather than about the fixture.
+    """
+    result_json = corpus_mcrit.getResultForJob(job_id_of(report))
+    sample_id = result_json["info"]["sample"]["sample_id"]
+    pool = {entry.function_id for entry in corpus_mcrit.getFunctionsBySampleId(sample_id)}
+    trimmed = copy.deepcopy(result_json)
+    trimmed["matches"]["functions"] = [summary for summary in result_json["matches"]["functions"] if abs(summary["fid"]) in pool]
+    return trimmed
+
+
+@pytest.mark.parametrize(
+    "num_instructions_per_function, num_blocks",
+    [
+        # one block per ten instructions, plus a separator block between functions,
+        # and nothing at all for a function too short to be matched
+        ([], -1),
+        ([9], -1),
+        ([10], 1),
+        ([10, 25], 4),
+        ([100, 9, 10], 12),
+    ],
+)
+def test_the_block_count_is_what_the_diagram_draws(num_instructions_per_function, num_blocks):
+    assert count_diagram_blocks(num_instructions_per_function) == num_blocks
+
+
+@pytest.mark.parametrize(
+    "num_blocks, size",
+    [
+        # 240 blocks fit across the 2400px band, and each further row of three bands
+        # adds 27px. An empty report comes to -1 blocks and still gets a one-row frame.
+        (-1, (2440, 107)),
+        (239, (2440, 107)),
+        (240, (2440, 134)),
+        (959, (2440, 188)),
+        (960, (2440, 215)),
+    ],
+)
+def test_the_image_size_is_what_the_block_count_implies(num_blocks, size):
+    assert stacked_diagram_size(num_blocks) == size
+
+
+@pytest.mark.parametrize("report", ["matches_for_sample", "matches_for_sample_vs"])
+def test_the_reserved_size_is_the_size_the_diagram_renders_to(app, corpus_mcrit, report):
+    """The whole point of the reservation: it has to be the picture's real size.
+
+    match_diagram_size reads the per-function instruction counts out of the report;
+    MatchReportRenderer reads them back off the backend. The two share the arithmetic
+    - pinned by the two tests above - but not the data, and nothing but this holds
+    those together.
+    """
+    trimmed = report_trimmed_to_the_fixture_pool(corpus_mcrit, report)
+    with app.test_request_context("/"):
+        renderer = MatchReportRenderer()
+        renderer.processReport(MatchingResult.fromDict(trimmed))
+        rendered = renderer.renderStackedDiagram()
+
+    assert match_diagram_size(trimmed) == rendered.size
+
+
+@pytest.mark.parametrize("suffix", ["-famid_1", "-samid_1", "-funid_0"])
+def test_every_filtered_diagram_is_the_size_of_the_unfiltered_one(client, as_role, suffix):
+    """Why one size serves all four result templates.
+
+    _calculateOutputMap lays a block out for every function of the reference sample
+    whichever filter is set - the filters only decide the colours - so all four
+    variants come out the same size. If that stopped holding, the three filtered
+    pages would be reserving the unfiltered diagram's box.
+    """
+    as_role("visitor")
+    job_id = job_id_of("matches_for_sample")
+    unfiltered = client.get(f"/data/diagrams/{job_id}.png")
+    filtered = client.get(f"/data/diagrams/{job_id}{suffix}.png")
+
+    assert Image.open(io.BytesIO(unfiltered.data)).size == Image.open(io.BytesIO(filtered.data)).size
+
+
+@pytest.mark.parametrize("query", ["", "?famid=1", "?funid=0"])
+def test_the_result_page_reserves_the_diagram_box(client, as_role, corpus_mcrit, query):
+    """Without width and height the browser gives the <img> no room until the bytes
+    arrive, and every table below it jumps once they do - the diagram is only async
+    now because the page stopped rendering it."""
+    as_role("visitor")
+    report = corpus_mcrit.getResultForJob(job_id_of("matches_for_sample"))
+    width, height = match_diagram_size(report)
+
+    response = client.get(f"/data/result/{job_id_of('matches_for_sample')}{query}")
+
+    assert response.status_code == 200
+    assert f'width="{width}" height="{height}"' in diagram_img(response)
+
+
+def test_a_query_report_reserves_nothing(client, as_role):
+    """A query's reference sample is not stored, so MatchReportRenderer has no
+    function entries for it and draws an empty diagram. Reserving a box for that
+    would be a guess, and the <img> is left to size itself."""
+    as_role("visitor")
+    response = client.get(f"/data/result/{job_id_of('matches_for_query')}")
+
+    assert response.status_code == 200
+    assert "width=" not in diagram_img(response)
 
 
 if __name__ == "__main__":
