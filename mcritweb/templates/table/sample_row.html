@@ -179,6 +179,9 @@
 
 
 {% macro minisample_header(no_family=False, compact_view=False, show_analyze=True, show_export=False, show_hint=False, show_edit=False, sort_pagination=None) %}
+  {# accept but discard additional kwargs - see _table_base in table.html, which
+     forwards the caller's kwargs to the header as well as to the row macro #}
+  {% if False %}{{ kwargs }}{% endif %}
   <tr>
     <th style="min-width: 90px;">
       Uploaded
