@@ -15,6 +15,30 @@
   edgesAll = {};
   edgeLabelsAll = {}; 
 
+  // mcritweb: issue #69 - this page draws two graphs, so every per-graph store
+  // needs one of its own. Sharing a single set of the dicts above let the panel
+  // that finished loading second overwrite the first's entries for every block
+  // offset the two functions have in common, and sharing loopsObj let it erase
+  // the first's loops outright.
+  // "colors" records the diff colour each block was rendered with, so the loop
+  // and cycle highlights can be taken back off again without leaving the graph
+  // uncoloured.
+  var cfgPanels = {
+    a: {graph: null, loops: [], nodes: {}, edges: {}, edgeLabels: {}, colors: {}},
+    b: {graph: null, loops: [], nodes: {}, edges: {}, edgeLabels: {}, colors: {}}
+  };
+
+  // Points the shared dicts at one panel. The vendored modules and most of the
+  // code below reach for them by name, so a panel is made current for the span of
+  // the code that fills it rather than every reader being rewritten.
+  function usePanel(panel){
+    nodesAll = panel.nodes;
+    edgesAll = panel.edges;
+    edgeLabelsAll = panel.edgeLabels;
+    loopsObj = panel.loops;
+    return panel;
+  }
+
   // keys are nodeId and values are the array of p elements that are instances of the node/CFG block
   var nodeToTextGroups = {};
 
@@ -87,6 +111,8 @@
   var isRtDragStarted = false;
 
   var isCycleShown = false;
+
+  var isLoopShown = false;
 
   var isTraceSupplied = false;
 
@@ -1246,6 +1272,25 @@ function highlightUERs(UERtype){
         }
       );
 
+  // mcritweb: issue #69 - reads a /explore/findLoops/ response. Loop detection
+  // needs a single entry node and reports an error for a CFG that has more than
+  // one, so a failure here is expected rather than exceptional; it must leave the
+  // panel without loops instead of aborting the render that follows it.
+  function parseLoops(err, result){
+    if(err || !result){
+      console.warn("loop detection request failed", err);
+      return [];
+    }
+    var parsed;
+    try {
+      parsed = JSON.parse(result.responseText);
+    } catch(e) {
+      console.warn("loop detection returned no usable result", e);
+      return [];
+    }
+    return Array.isArray(parsed) ? parsed : [];
+  }
+
     function loadWithDotGraphAndFunctionIdA(function_id, node_colors) {
       isTraceSupplied = false;
       // Send request for loop information; load when ready
@@ -1254,6 +1299,7 @@ function highlightUERs(UERtype){
           dot_graph = result.responseText;
           dotFile_a = dot_graph.replace(/\\l/g, "\n");
           g_a = graphlibDot.parse(dotFile_a);
+          cfgPanels.a.graph = g_a;  // mcritweb: issue #69
           // Send request for loop information; load when ready
           d3.xhr(window.location.origin + "/explore/findLoops/")
             .header("X-CSRFToken", csrfToken())  // mcritweb: issue #83
@@ -1261,8 +1307,10 @@ function highlightUERs(UERtype){
             .post(dotFile_a,
               function(err, result){
                 // console.log("Response: ", result.responseText);
-                loopsObj = JSON.parse(result.responseText);
-                
+                // mcritweb: issue #69 - each panel keeps its own loops, and the
+                // graph is drawn even when loop detection could not answer.
+                cfgPanels.a.loops = parseLoops(err, result);
+
                 // loopify_dagre.init();
                 var modifiedDotFile_a = loopify_dagre.modifiedDotFile;
                 var modifiedDotFile_a = dotFile_a;
@@ -1290,6 +1338,7 @@ function highlightUERs(UERtype){
         dot_graph = result.responseText;
         dotFile_b = dot_graph.replace(/\\l/g, "\n");
         g_b = graphlibDot.parse(dotFile_b);
+        cfgPanels.b.graph = g_b;  // mcritweb: issue #69
         // Send request for loop information; load when ready
         d3.xhr(window.location.origin + "/explore/findLoops/")
           .header("X-CSRFToken", csrfToken())  // mcritweb: issue #83
@@ -1297,8 +1346,10 @@ function highlightUERs(UERtype){
           .post(dotFile_b,
             function(err, result){
               // console.log("Response: ", result.responseText);
-              loopsObj = JSON.parse(result.responseText);
-              
+              // mcritweb: issue #69 - each panel keeps its own loops, and the
+              // graph is drawn even when loop detection could not answer.
+              cfgPanels.b.loops = parseLoops(err, result);
+
               // loopify_dagre.init();
               var modifiedDotFile_b = loopify_dagre.modifiedDotFile;
               var modifiedDotFile_b = dotFile_b;
@@ -1322,6 +1373,10 @@ function highlightUERs(UERtype){
   function fillNodesandEdgesA(node_colors){
 
     var container_id = "#graphContainer_a"
+
+    // mcritweb: issue #69 - everything below writes into nodesAll/edgesAll/
+    // edgeLabelsAll, so point those at this panel first.
+    var panel = usePanel(cfgPanels.a);
 
     // compute the degrees of the node i.e. sum of indegrees or sum of outdegrees
     var re = /ct:(\d+)/i;
@@ -1390,6 +1445,7 @@ function highlightUERs(UERtype){
             // nodesAll[d].select("rect").style("fill", degreeScale(Math.log10(deg)));
             if (d in node_colors["a"]) {
               nodesAll[d].select("rect").style("fill", node_colors["a"][d]);
+              panel.colors[d] = node_colors["a"][d];  // mcritweb: issue #69
             }
 
             // Change this stroke-width property to stroke property i.e. border fill instead of background fill
@@ -1453,6 +1509,9 @@ function highlightUERs(UERtype){
   function fillNodesandEdgesB(node_colors){
 
     var container_id = "#graphContainer_b"
+
+    // mcritweb: issue #69 - see fillNodesandEdgesA.
+    var panel = usePanel(cfgPanels.b);
 
     // compute the degrees of the node i.e. sum of indegrees or sum of outdegrees
     var re = /ct:(\d+)/i;
@@ -1521,6 +1580,7 @@ function highlightUERs(UERtype){
             // nodesAll[d].select("rect").style("fill", degreeScale(Math.log10(deg)));
             if (d in node_colors["b"]) {
               nodesAll[d].select("rect").style("fill", node_colors["b"][d]);
+              panel.colors[d] = node_colors["b"][d];  // mcritweb: issue #69
             }
             // Change this stroke-width property to stroke property i.e. border fill instead of background fill
             nodesAll[d].select("rect").style("stroke-width", degreeBorderScale(Math.log10(deg)));
@@ -2335,16 +2395,15 @@ function highlightUERs(UERtype){
     
     d3.select("#showCycles")
         .on("click", function(){
-        	if(!isCycleShown){
-          		showCycles();
-          		isCycleShown = true;
-          		d3.select(this).attr("value", "Hide Cycles");
-      		}	else {
-      			d3.selectAll("g.node.enter").select("rect").style("fill", "");
-      			d3.selectAll("g.node.enter").attr("fill", "");
-      			isCycleShown = false;
-            d3.select(this).attr("value", "Show Cycles");
-      		}
+          setHighlightMode(isCycleShown ? null : "cycles");
+        }
+      );
+
+    // mcritweb: issue #69 - Show Loops was only ever bound by loopCollapser.init(),
+    // which this page does not call, so the button did nothing at all.
+    d3.select("#showLoops")
+        .on("click", function(){
+          setHighlightMode(isLoopShown ? null : "loops");
         }
       );
 
@@ -3414,25 +3473,74 @@ function highlightUERs(UERtype){
   }
 
   // Shows cycle nodes in different colors
+  // mcritweb: issue #69 - this used to run against the global g, which this page
+  // never assigns, so every click threw. Each panel is coloured from its own graph.
   function showCycles(){
-    var cycles = graphlib.alg.findCycles(g);
-    // console.log(cycles);
-    var num_cycles = cycles.length;
+    for(var key in cfgPanels) {
+      var panel = cfgPanels[key];
+      colorNodeGroups(panel, panel.graph ? graphlib.alg.findCycles(panel.graph) : []);
+    }
+  }
 
-    for(var i=0; i<num_cycles; i++) {
-      var loop_size = cycles[i].length;
-      // console.log(loop_size);
-    
-      for(var j=0; j<loop_size; j++) {
-        
-          nodesAll[cycles[i][j]]
-          .attr("fill", "white")
+  // Shows the nodes of each natural loop in different colors.
+  // mcritweb: issue #69 - the single-graph page gets this from loopCollapser.init(),
+  // which the duo loaders cannot call: it is a singleton over the same globals and
+  // binds one button, so the second panel would simply displace the first. The
+  // loops themselves come from the server, per panel, and colouring them is the
+  // whole of what the button does.
+  function showLoops(){
+    for(var key in cfgPanels) {
+      var panel = cfgPanels[key];
+      var groups = [];
+      for(var i=0; i<panel.loops.length; i++) {
+        var loop = panel.loops[i];
+        groups.push(loop && loop.nodes ? loop.nodes : []);
+      }
+      colorNodeGroups(panel, groups);
+    }
+  }
+
+  // Paints one color per group over the nodes of a single panel.
+  function colorNodeGroups(panel, groups){
+    for(var i=0; i<groups.length; i++) {
+      var group = groups[i] || [];
+      for(var j=0; j<group.length; j++) {
+        // a loop or cycle may name a node the renderer dropped, and the names come
+        // off the wire - hasOwnProperty so that "constructor" and friends cannot
+        // reach Object.prototype and break the whole highlight
+        if(!panel.nodes.hasOwnProperty(group[j])) { continue; }
+        var node = panel.nodes[group[j]];
+        node.attr("fill", "white")
           .select("rect")
-          .style("fill", function(d){
-              return colores_g[i%colores_g.length];  
-          });  
+          .style("fill", colores_g[i%colores_g.length]);
       }
     }
+  }
+
+  // Puts every node back to the per-block diff color it was rendered with, so
+  // switching a highlight off does not strip the comparison this page is for.
+  function resetNodeFills(){
+    for(var key in cfgPanels) {
+      var panel = cfgPanels[key];
+      for(var nodeId in panel.nodes) {
+        if(!panel.nodes.hasOwnProperty(nodeId)) { continue; }
+        panel.nodes[nodeId]
+          .attr("fill", "")
+          .select("rect")
+          .style("fill", panel.colors.hasOwnProperty(nodeId) ? panel.colors[nodeId] : "");
+      }
+    }
+  }
+
+  // The two highlights paint the same rects, so at most one of them is on.
+  function setHighlightMode(mode){
+    resetNodeFills();
+    isCycleShown = (mode == "cycles");
+    isLoopShown = (mode == "loops");
+    if(isCycleShown) { showCycles(); }
+    if(isLoopShown) { showLoops(); }
+    d3.select("#showCycles").attr("value", isCycleShown ? "Hide Cycles" : "Show Cycles");
+    d3.select("#showLoops").attr("value", isLoopShown ? "Hide Loops" : "Show Loops");
   }
 
   function scrollToNode(node){
