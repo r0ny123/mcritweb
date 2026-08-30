@@ -14,6 +14,7 @@ nobody has taught it still raises NotImplementedError naming itself, so the next
 is a message rather than a silently empty page.
 """
 
+import copy
 import json
 import pathlib
 import re
@@ -43,6 +44,21 @@ def load(name):
 def job_id_of(report):
     """The job id a report fixture was captured under."""
     return load(f"{report}.job")["_id"]["$oid"]
+
+
+def altered_job(report, job_id, **payload_params):
+    """A copy of a captured job under a new id, with its payload fields replaced."""
+    job_dict = copy.deepcopy(load(f"{report}.job"))
+    job_dict["_id"]["$oid"] = job_id
+    job_dict["payload"].update(payload_params)
+    return job_dict
+
+
+def inject_job(fake, job_dict):
+    """Serve one more job from a CorpusMcritClient, as a real backend would answer
+    for any job id its queue holds."""
+    fake._queued_by_id[job_dict["_id"]["$oid"]] = job_dict
+    return job_dict["_id"]["$oid"]
 
 
 # --- the search/cursor protocol ------------------------------------------------

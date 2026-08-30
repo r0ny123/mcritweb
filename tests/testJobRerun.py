@@ -29,12 +29,11 @@ answers from its descriptor cache and returns the *same job id*, so "Rerun" woul
 redirect back to the page it was clicked on and change nothing.
 """
 
-import copy
 import logging
 import unittest
 
 import pytest
-from fixtureData import job_id_of, load
+from fixtureData import altered_job, inject_job, job_id_of, load
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
@@ -71,21 +70,6 @@ def queued_calls(fake):
 def rerun_button_for(page, job_id):
     """Is the page offering a rerun of this job, as a POST?"""
     return f'data-post="/data/jobs/{job_id}/rerun"' in page
-
-
-def inject_job(fake, job_dict):
-    """Serve one more job from the fake backend, as a real one would answer for any
-    job id the queue holds."""
-    fake._queued_by_id[job_dict["_id"]["$oid"]] = job_dict
-    return job_dict["_id"]["$oid"]
-
-
-def altered_job(report, job_id, **payload_params):
-    """A copy of a captured job under a new id, with its payload fields replaced."""
-    job_dict = copy.deepcopy(load(f"{report}.job"))
-    job_dict["_id"]["$oid"] = job_id
-    job_dict["payload"].update(payload_params)
-    return job_dict
 
 
 # --- what the job page offers ----------------------------------------------------
