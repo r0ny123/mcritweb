@@ -12,13 +12,14 @@ The reports come from a live instance - see tests/fixtures/regenerate.py.
 
 import logging
 import re
+import types
 import unittest
 
 import pytest
 from fixtureData import job_id_of
 from mcrit.storage.MatchingResult import MatchingResult
 
-from mcritweb.views.data import count_aggregated_function_matches
+from mcritweb.views.data import count_aggregated_function_matches, order_samples
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
@@ -169,6 +170,63 @@ def test_job_page_renders_for_a_finished_job(client, as_role):
     as_role("visitor")
     response = client.get(f"/data/jobs/{job_id_of('matches_for_sample')}")
     assert response.status_code == 200
+
+
+# --- the cross-compare page orders its samples in one pass -------------------------
+
+class WalkCountingList(list):
+    """A list that records how often something walked it end to end."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.walks = 0
+
+    def __iter__(self):
+        self.walks += 1
+        return super().__iter__()
+
+
+def test_ordering_samples_walks_the_sample_list_once():
+    """One pass to index the samples, then a lookup per position.
+
+    Scanning the list for each position instead - which is what this replaced - walks
+    it once per sample, and the page repeats the whole ordering for every matching
+    method. That is the O(n^2) issue #68 asks about; timing it would be flaky, so
+    count the passes.
+    """
+    samples = WalkCountingList(types.SimpleNamespace(sample_id=sample_id) for sample_id in range(50))
+
+    ordered = order_samples(samples, [str(sample_id) for sample_id in reversed(range(50))])
+
+    assert [sample.sample_id for sample in ordered] == list(reversed(range(50)))
+    assert samples.walks == 1, f"the sample list was walked {samples.walks} times"
+
+
+def test_ordering_samples_reports_an_id_that_is_not_there():
+    samples = [types.SimpleNamespace(sample_id=sample_id) for sample_id in range(3)]
+
+    assert order_samples(samples, ["2", "9"]) is None
+
+
+def test_cross_compare_honours_a_custom_order(client, as_role):
+    """The behaviour the one-pass ordering has to keep: `?custom=` reorders the rows."""
+    as_role("visitor")
+    job_id = job_id_of("cross_compare")
+    default = client.get(f"/data/result/{job_id}")
+    reordered = client.get(f"/data/result/{job_id}?custom=1,0,2,4,6")
+
+    assert default.status_code == 200
+    assert reordered.status_code == 200
+    assert b"are corrupted" not in reordered.data
+    assert reordered.data != default.data
+
+
+def test_cross_compare_rejects_a_custom_order_naming_an_unknown_sample(client, as_role):
+    as_role("visitor")
+    response = client.get(f"/data/result/{job_id_of('cross_compare')}?custom=1,0,9999")
+
+    assert response.status_code == 200
+    assert b"are corrupted" in response.data
 
 
 if __name__ == "__main__":
