@@ -97,5 +97,27 @@ def test_a_write_that_dies_half_way_through_leaves_nothing_behind(app):
     assert os.listdir(incomplete_cache_path(app)) == []
 
 
+def test_a_text_write_does_not_rewrite_the_newlines(app):
+    """What goes in is what lands on disk, byte for byte.
+
+    The report cache is written in text mode and served back verbatim as the raw
+    result, so a newline the writer did not ask for makes the served file stop
+    matching the bytes it claims to be. Python's text mode does that translation on
+    any platform whose line ending is not LF - Windows, in practice.
+
+    Honest limit: on Linux, where text mode translates nothing, this passes with or
+    without the fix, so CI cannot see the regression it guards. It is here so the
+    invariant is written down and so the check exists where it does bite.
+    """
+    body = "first" + chr(10) + "second" + chr(10)
+    write_atomically(app, diagrams_dir(app), "written.txt", lambda fout: fout.write(body), "w")
+
+    with open(os.sep.join([diagrams_dir(app), "written.txt"]), "rb") as fin:
+        on_disk = fin.read()
+
+    assert on_disk == body.encode(), "the cache rewrote the newlines it was handed"
+    assert (chr(13) + chr(10)).encode() not in on_disk, "CRLF where the writer wrote LF"
+
+
 if __name__ == "__main__":
     unittest.main()
