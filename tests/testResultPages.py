@@ -11,6 +11,7 @@ The reports come from a live instance - see tests/fixtures/regenerate.py.
 """
 
 import collections
+import html
 import logging
 import re
 import unittest
@@ -47,10 +48,33 @@ LINE_COMMENT = re.compile(r"//[^\n]*")
 COPIES_THE_MARKUP = ("copyElementToClipboard", ".html()", ".innerHTML")
 
 
+#: The Block column of the unique blocks table: a `/* ... */` comment and then the
+#: hex sequence in braces, which is what a reader copies into a YARA file.
+BLOCK_CELL = re.compile(r"<code style=\"white-space:pre\">(.*?)</code>", re.DOTALL)
+
+#: One byte of a YARA hex string: a pair of hex digits, or `??` for a wildcarded
+#: one. Anything else - an odd-length run, most of all - is a syntax error.
+HEX_TOKEN = re.compile(r"^(?:[0-9a-f]{2}|\?\?)+$")
+
+#: The rule's comment above each selected picblock, as `renderRule` writes it once
+#: `name_functions_in_rule` has been over it.
+RULE_PICBLOCK_COMMENT = re.compile(r"/\* picblockhash: (0x[0-9a-f]+) - coverage: \d+/\d+ samples(?P<tail>[^\n]*)")
+
+
 def statistics_table_of(page):
     """The markup of the "Block Statistics across Samples" table."""
     assert "Block Statistics across Samples" in page, "the statistics table is not on the page"
     return page.split("Block Statistics across Samples")[1].split("</table>")[0]
+
+
+def hex_sequences_of(page):
+    """The `{ ... }` half of every Block cell on the page, unescaped."""
+    sequences = []
+    for cell in BLOCK_CELL.findall(page):
+        _, brace, sequence = html.unescape(cell).partition("{")
+        assert brace, "a Block cell carries no hex sequence"
+        sequences.append(sequence.rsplit("}", 1)[0])
+    return sequences
 
 
 @pytest.mark.parametrize(
@@ -148,6 +172,54 @@ def test_the_yara_copy_icon_is_wired_to_the_textareas_value(client, as_role):
     assert "textarea.value" in code, "the clipboard helper never reads the textarea's value"
     for shape in COPIES_THE_MARKUP:
         assert shape not in code, f"the clipboard helper reads {shape} - that is the markup, not the value"
+
+
+def test_a_long_block_stays_valid_yara_when_it_wraps(client, as_role):
+    """Issue #80, "copy to clipboard break with extensively long yara strings".
+
+    The Block column is YARA syntax and is there to be copied out. It used to be
+    wrapped by breaking every 80th character, which lands mid-byte far more often
+    than not: 41 of the 51 sequences in the captured report were cut inside a
+    token and 23 of those left an odd-length run like "6a3", which no YARA
+    compiler will take. Short sequences never wrapped, so the damage only showed
+    on the long ones the issue names.
+
+    The page's own block-length filter is what puts those on the first page: the
+    default order is by score, and the hundred highest-scoring blocks of the
+    captured report are all short enough that nothing wraps at all.
+    """
+    as_role("visitor")
+    response = client.get(f"/data/result/{job_id_of('unique_blocks')}?tab=blocks&min_block_length=20")
+
+    assert response.status_code == 200
+    sequences = hex_sequences_of(response.data.decode())
+    assert sequences, "no blocks rendered, so nothing was checked"
+    wrapped = [sequence for sequence in sequences if "\n" in sequence]
+    assert len(wrapped) == len(sequences) == 18, "the filtered page is no longer the eighteen long blocks it was"
+    for sequence in wrapped:
+        for token in sequence.split():
+            assert HEX_TOKEN.match(token), f"{token!r} is not a YARA hex byte, in: {sequence!r}"
+
+
+def test_the_yara_rule_names_the_function_each_picblock_came_from(client, as_role):
+    """Issue #80, "maybe include function_id ... (more robustness)".
+
+    mcrit picks the cover blind to which function a block sits in, so a rule can
+    quietly end up fingerprinting one function - and `7 of them` then dies with
+    the next recompile of it. The captured report spreads its ten blocks over
+    seven functions; naming them is what lets a reader see that at all.
+    """
+    as_role("visitor")
+    response = client.get(f"/data/result/{job_id_of('unique_blocks')}?tab=yara")
+    page = html.unescape(response.data.decode())
+
+    assert response.status_code == 200
+    comments = RULE_PICBLOCK_COMMENT.findall(page)
+    assert len(comments) == 10, f"expected the ten picblocks of the captured rule, found {len(comments)}"
+    for pichash, tail in comments:
+        assert tail.startswith(", function_id: "), f"{pichash} does not name the function it came from"
+    # and the annotation is per block, not one id repeated over all of them
+    assert len({tail for _, tail in comments}) == 7
 
 
 def test_unique_blocks_statistics_table_carries_the_sorting_markup(client, as_role):
