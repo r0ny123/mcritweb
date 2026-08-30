@@ -179,6 +179,9 @@
 
 
 {% macro job_header(families_by_id, samples_by_id, order_toggle=None, order_ascending=False) %}
+  {# accept but discard additional kwargs - see _table_base in table.html, which
+     forwards the caller's kwargs to the header as well as to the row macro #}
+  {% if False %}{{ kwargs }}{% endif %}
   <tr>
     {% if order_toggle %}
       {# job number is the one order mcrit can apply to a whole queue - see data.jobs() #}
@@ -228,6 +231,9 @@
 
 
 {% macro minijob_header(families_by_id, samples_by_id) %}
+  {# accept but discard additional kwargs - see _table_base in table.html, which
+     forwards the caller's kwargs to the header as well as to the row macro #}
+  {% if False %}{{ kwargs }}{% endif %}
   <tr>
     <th style="min-width: 150px; text-align: right;" scope="col">Finished</th>
     <th style="width: 99%" scope="col">Type</th>
