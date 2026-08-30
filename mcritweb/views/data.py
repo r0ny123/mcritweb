@@ -2,6 +2,7 @@ import hashlib
 import os
 import re
 from datetime import datetime
+from urllib.parse import urlencode
 
 from flask import Blueprint, Response, current_app, flash, json, redirect, render_template, request, send_from_directory, session, url_for
 from mcrit.queue.LocalQueue import Job
@@ -691,6 +692,11 @@ def linkhunt_for_sample_or_query(job_info, matching_result: MatchingResult):
 # Listing Job information
 ################################################################
 
+# rendered as menu entries below but absent from Job.method_types["all"] in mcrit, so
+# a link the page itself draws would otherwise not be a category this view accepts
+MENU_ONLY_CATEGORIES = frozenset({"recalculatePicHashes", "recalculateMinHashes"})
+
+
 @bp.route('/jobs',methods=('GET', 'POST'))
 @visitor_required
 @mcrit_server_required
@@ -705,7 +711,14 @@ def jobs():
     statistics = client.getQueueStatistics()
     job_template = Job(None, None)
     # dynamically create the job page with nested menu based on groups from statistics and Job.method_types
+    # the menu offers every method mcrit knows, plus the two maintenance jobs the
+    # menu below links to that method_types["all"] omits, plus whatever else the queue
+    # reports; anything outside that is not a category, so fall back to the default
+    # instead of indexing the statistics with it further down
+    known_categories = set(job_template.method_types["all"]) | MENU_ONLY_CATEGORIES | set(statistics)
     active_category = request.args.get('active', None)
+    if active_category not in known_categories:
+        active_category = None
     summarized_groups = {"matching": 0, "query": 0, "blocks": 0, "minhashing": 0, "collection": 0}
     for group in summarized_groups.keys():
         for category in job_template.method_types[group]:
@@ -720,6 +733,16 @@ def jobs():
     state_category = request.args.get('state', None)
     if state_category:
         active_category = None
+    elif request.method != 'POST' and active_category is not None and request.args.get('active') != active_category:
+        # the category picked above is derived from the live queue statistics, so a URL
+        # that does not name it means something different on every request: a refresh
+        # or a step back in history then lands on a different tab (issue #36).
+        # redirect to the URL that does name it, so the browser can reproduce this page.
+        # the query is rebuilt rather than handed to url_for as keyword arguments,
+        # because the names url_for reserves for itself are user input here
+        canonical_args = request.args.to_dict()
+        canonical_args['active'] = active_category
+        return redirect(f"{url_for('data.jobs')}?{urlencode(canonical_args)}")
     totals = {"queued": 0, "in_progress": 0, "finished": 0, "failed": 0, "terminated": 0}
     for category, status_dict in statistics.items():
         for state, count in status_dict.items():
@@ -764,7 +787,8 @@ def jobs():
         max_count = statistics["totals"][state_category] if state_category in statistics["totals"] else 0
         pagination = Pagination(request, max_count, limit=25, query_param="p", limit_param="l")
     else:
-        max_count = sum(statistics[active_category].values()) if active_category else 0
+        # a category the menu offers but nobody has queued yet is absent from the statistics
+        max_count = sum(statistics.get(active_category, {}).values())
         pagination = Pagination(request, max_count, limit=25, query_param="p")
     jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, ascending=ascending)
     samples_by_id = {}
