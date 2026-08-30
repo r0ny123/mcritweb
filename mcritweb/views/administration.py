@@ -211,6 +211,20 @@ def delete_user(user_id, tab = None):
     return redirect(url_for('admin.users', tab=tab))
 
 
+def backend_version(client):
+    """The MCRIT backend's version as a string, or "unknown".
+
+    `McritClient.getVersion()` answers with the dict mcrit's own
+    `MinHashIndex.getVersion` builds - `{"version": "1.4.3"}` - not a bare string, so
+    rendering it directly put `{'version': '1.4.3'}` on the page. It answers None when
+    the backend could not be reached or refused, which is not a version either.
+    """
+    version = client.getVersion()
+    if isinstance(version, dict):
+        version = version.get("version")
+    return version if isinstance(version, str) and version else "unknown"
+
+
 @bp.route('/server')
 @admin_required
 def server():
@@ -218,7 +232,7 @@ def server():
     operation_mode_str = "Multi-User" if server_info.operation_mode == "multi" else "Single-User"
     running_server_version = get_mcritweb_version_from_setup()
     client = get_client()
-    mcrit_version = client.getVersion()
+    mcrit_version = backend_version(client)
     return render_template('admin_server.html', operation_mode=operation_mode_str, server_info=server_info, running_version=running_server_version, mcrit_version=mcrit_version)
 
 
@@ -238,7 +252,7 @@ def change_server():
     operation_mode_str = "Multi-User" if server_info.operation_mode == "multi" else "Single-User"
     running_server_version = get_mcritweb_version_from_setup()
     client = get_client()
-    mcrit_version = client.getVersion()
+    mcrit_version = backend_version(client)
     return render_template('admin_server.html', operation_mode=operation_mode_str, server_info=server_info, running_version=running_server_version, mcrit_version=mcrit_version)
 
 
