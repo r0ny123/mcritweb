@@ -2104,3 +2104,96 @@ Also, for the second time this session, I asserted an attribute with the wrong q
 status assertion in the same test had already proved the fix worked, so only my assertion
 was wrong - but it is the same mistake twice, and the lesson is to assert on something
 whose spelling I have actually read.
+
+## All 22 partial issues addressed: 17 -> 44 closable
+
+Twelve worktrees, one branch each, sixteen agent runs. Every branch verified here - full
+suite, ruff, and a mutation check - before pushing. Fleet at the end: **61 PRs, 61 green,
+0 red.**
+
+Of the 53 issues that have a PR, **44 now carry a closing link** and 9 deliberately do
+not, each with the evidence for why rather than an assertion.
+
+### The last three
+
+**#68** - the PR called the same-size diagram placeholder impossible ("the page cannot
+know the diagram's size without rendering it"). It can: the size follows from the
+instruction counts the report already carries, so it costs no render and no backend call.
+Measured: first render of a result page 84.6 -> 25.0 ms; `load_cached_result` 170.8 ->
+16.1 ms at 40 cached copies (it used to `json.load` every file whose name contained the
+job id); cross-compare ordering 1082.9 -> 2.1 ms at n=2560.
+
+**#63** - the biggest remaining win is not in this repository. Enabling gzip in
+`docker-mcrit`'s NGINX takes a cold first paint from 3872 ms to **1024 ms** - more than
+the whole first bullet of the issue, from three lines of config. Verified upstream that no
+`gzip` directive exists in any of the three configs.
+
+**#70** - the dark mode #70 actually asks for: stored on the profile, resolved server-side
+onto `<html data-theme>`, so no switcher and no flash. Light output is byte-identical,
+match diagrams included (they are cached and never invalidated, so a PNG baked on white
+would have been permanent - the theme is in the filename now).
+
+### Agents overturned three claims, one of them mine
+
+- **#67** - the PR asserted, in its commit message, its code comments *and the text shown
+  to users*, that "the export path drops the xcfg". Five round trips (memory, real
+  MongoDB, live server) disprove it: nothing changes beyond remapped ids and
+  picblockhashes survive 40 -> 40. The cause is `STORAGE_DROP_DISASSEMBLY` dropping the
+  graph at minhash time.
+- **#7** - the arithmetic is correct, reproduced against all 150 shipped percentage cells
+  to 1e-9. What made the value look wrong is ours: 20 tooltips printed
+  `Bytes: X / binweight` above a percentage computed from a different divisor - offering
+  84.28 while stating 85.79, unbounded as the library share grows.
+- **#63 corrected a "key fact" I put in its brief.** I told it, from this campaign's own
+  notes, that tooltip ownership is decided by a load-order race. Measured, it is not:
+  Bootstrap 5.0.2 registers its jQuery plugins on `DOMContentLoaded`, strictly after every
+  plain `<script>`, so it wins in *both* arrangements. The real hazard is lazy loading,
+  now pinned by a test. It also corrected the claim that DataTables selected an element
+  the app never renders - `job_table` still defaults to that id and two other pages use
+  it; only the jobs page passes `table_id=active`.
+
+### I reproduced the exact trap I had documented
+
+The final tally showed **#74 closing** - the one issue I had decided must not. The cause
+was my own note. Its heading read *"Why this does not carry `Closes #74`"*, and the body
+said "close #74 on box 1 once that is done". GitHub read both as keywords, so a note whose
+entire purpose was to prevent the close created it. This is the same failure recorded
+earlier in this log for #158 ("I did not close #57"), and I walked into it while writing
+about it. Fixed on #74 and #34, and verified through the API rather than by re-reading the
+text - which is the only reason it was caught.
+
+### The 9 that do not close
+
+Six are the ADR/blocked-upstream set (#37, #47, #48, #57, #59, #72). The other three:
+
+- **#34** - shingles are discarded by `MinHasher.calculateMinHashFromStorage`, and
+  `MINHASH_TRACK_SHINGLES` defaults off; all 609 captured corpus functions carry `{}`.
+- **#64** - `_search_base` is the only `McritClient` accessor that neither deserialises
+  nor honours `self.raw`. mcritweb is now self-consistent; the rest is upstream, specified
+  in ADR-0010 precisely enough to file as-is.
+- **#74** - a combined view needs a 1:1 block correspondence that does not exist: hash
+  intersection leaves 174 of 230 matched blocks ambiguous, and structural refinement fixes
+  that case while collapsing the useful one from 31/42 to 8/42.
+
+### Integration hazards found, both invisible to any single branch
+
+- **Five branches each wrote `docs/adr/0003`** with different filenames, when 0003-0008
+  were already taken. Different paths merge without conflicting, so the tree would have
+  held several ADRs sharing a number. Renumbered 0009-0015 on landing. `master` shows only
+  0001-0002, so checking `master` is not enough.
+- **Three branches now add a playwright test**, and `fix/80` adds a sentence to AGENTS.md
+  calling its module "the one module that runs a browser" - false once either of the other
+  two lands. Two `live_server` fixtures are duplicates that belong in `conftest.py`.
+- **`fix/40` and `fix/70` both define `SCHEMA_V1_4_8`.** Test-merged: they *conflict*, so
+  this one cannot slip through silently. Recorded anyway so the resolver knows both are
+  real and the constant must end up defined once.
+
+### One gate I ran past
+
+I pushed `fix/fake-status-fidelity` with `ruff` exiting **1** - read the suite line, moved
+on. Caught on the next command, fixed, re-pushed with the reason in the commit message.
+Separately, for the second time this session I asserted an attribute with the wrong quote
+style; the behaviour assertion beside it had already proved the fix worked, so only my
+assertion was wrong.
+
+The MongoDB and mcrit services started for #67 are stopped; nothing is left running.
