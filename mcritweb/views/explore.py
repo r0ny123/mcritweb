@@ -359,7 +359,10 @@ def search():
 
     # a backend that answered None is a failed search, not an empty one, and the two
     # have to look different on the page - see issue #54
-    search_failed = False
+    # per category, not one flag for all three: they are independent searches, and a
+    # single flag suppressed the "nothing matched" message for the categories that had
+    # answered perfectly well just because a different one failed
+    search_failed = set()
 
     #TODO: show id/sha matches in extra place
     families = []
@@ -369,7 +372,7 @@ def search():
         results = client.search_families(query, **family_pagination.getSearchParams(), limit=family_pagination.limit)
         family_pagination.read_cursor_from_result(results)
         if results is None:
-            search_failed = True
+            search_failed.add("family")
             flash(f"Ups, search for {query} in MCRIT's families failed!", category="error")
         else:
             id_match = results['id_match']
@@ -387,7 +390,7 @@ def search():
         results = client.search_samples(query, **sample_pagination.getSearchParams(), limit=sample_pagination.limit)
         sample_pagination.read_cursor_from_result(results)
         if results is None:
-            search_failed = True
+            search_failed.add("sample")
             flash(f"Ups, search for {query} in MCRIT's samples failed!", category="error")
         else:
             sha_match = results['sha_match']
@@ -413,7 +416,7 @@ def search():
         results = client.search_functions(query, **function_pagination.getSearchParams(), limit=function_pagination.limit)
         function_pagination.read_cursor_from_result(results)
         if results is None:
-            search_failed = True
+            search_failed.add("function")
             flash(f"Ups, search for {query} in MCRIT's functions failed!", category="error")
         else:
             id_match = results['id_match']
@@ -436,6 +439,9 @@ def search():
         query=query,
         search_types=types,
         search_failed=search_failed,
+        # the categories that were asked and did answer; "nothing matched" is only a
+        # true statement about those
+        answered_types=[t for t in types if t not in search_failed],
         family_column_setup=family_column_setup,
         sample_column_setup=sample_column_setup,
         function_column_setup=function_column_setup
