@@ -549,3 +549,43 @@ conflicting pairs, because I anchored the marker grep as `^<<<<<<<` and
 `git merge-tree` prefixes its output. A sanity check against a pair I already knew
 conflicts is what caught it. Any future run of this audit should assert a known
 conflict before trusting a clean result.
+
+## Two PRs on one line in `data.jobs`
+
+PR #61 and PR #20 both fix `max_count = sum(statistics[active_category].values())`.
+
+- **#20** (`fix/jobs-500-on-unknown-category`) is the PR *for* that crash: it adds
+  `known_job_category`, flashes on a category that is not a job type, and falls back to
+  the default tab, plus the tolerant lookup.
+- **#61** (`fix/jobs-500-when-the-queue-cannot-be-read`) reached the same line from the
+  other side - review pointed out `?active=` survives the `statistics = {}` substitution.
+
+Neither can assume the other lands first, so both carry the fix and the hunk is
+byte-identical between them. Verified rather than assumed:
+
+    $ git merge-tree $(git merge-base origin/master HEAD) \
+          origin/fix/jobs-500-on-unknown-category HEAD | grep -c "<<<<<<<\|>>>>>>>"
+    0
+    $ # merged in a scratch worktree, full suite:
+    263 passed
+
+(The `grep` is unanchored on purpose - `git merge-tree` prefixes its conflict markers,
+so `^<<<<<<<` matches nothing and silently reports every pair as clean. That mistake
+cost an earlier audit its entire result.)
+
+## CI: one branch was missing #9's hunk
+
+Every branch in this series carries #9's `pip install pytest` because they were cut after
+it. `fix/jobs-500-when-the-queue-cannot-be-read` was cut from `master` directly, after a
+real-backend session, so it did not - and all four unit jobs died before any test body ran:
+
+    /opt/hostedtoolcache/Python/3.11.16/x64/bin/python: No module named pytest
+
+That is why local `pytest -q` was green at the same SHA CI was red on. Ported #9's hunk;
+#61 is green. Swept every other open branch to confirm none is in the same position:
+
+    $ for b in <58 open branches>; do grep -q 'pytest==9.1.1' .github/workflows/test.yml \
+          && echo "SKIP-HAS $b"; done
+    SKIP-HAS ... (58/58)
+
+So `master` remains the only place the breakage lives, and #9 is the PR that clears it.
