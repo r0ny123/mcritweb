@@ -14,6 +14,12 @@ from mcritweb.views.utility import get_user_column_setup, mcrit_server_required
 
 bp = Blueprint('explore', __name__, url_prefix='/explore')
 
+# Row decorations for the two exact hits mcrit reports alongside a search (#53). See
+# templates/table/row_decoration.html for the shape; the variant names a Bootstrap
+# badge colour, which is why it is a name and not a class.
+ID_MATCH_DECORATION = {"badges": [{"text": "ID match", "variant": "success"}]}
+SHA_MATCH_DECORATION = {"badges": [{"text": "SHA256 match", "variant": "success"}]}
+
 
 ##############################################################
 ### Unfiltered Collections: Families, Samples, Function
@@ -358,6 +364,12 @@ def search():
     client = get_client()
 
     #TODO: show id/sha matches in extra place
+    # #53: the exact hit is mixed into the ordinary result rows, so it needs marking
+    # where it lands. A decoration is keyed by the row id the table macro renders.
+    family_decorations = {}
+    sample_decorations = {}
+    function_decorations = {}
+
     families = []
     family_pagination = None
     if 'family' in types:
@@ -371,6 +383,7 @@ def search():
             if id_match is not None:
                 family = FamilyEntry.fromDict(id_match)
                 families.append(family)
+                family_decorations[family.family_id] = ID_MATCH_DECORATION
             for family_entry in results['search_results'].values():
                 family = FamilyEntry.fromDict(family_entry)
                 families.append(family) 
@@ -388,12 +401,14 @@ def search():
             if sha_match is not None:
                 sample_entry = SampleEntry.fromDict(sha_match)
                 samples[sample_entry.sample_id] = sample_entry
+                sample_decorations[sample_entry.sample_id] = SHA_MATCH_DECORATION
             id_match = results['id_match']
             if id_match is not None:
                 # both of these arrive as dicts off the wire, like sha_match above -
                 # which is the one branch here that deserialises before reading a field
                 sample_entry = SampleEntry.fromDict(id_match)
                 samples[sample_entry.sample_id] = sample_entry
+                sample_decorations[sample_entry.sample_id] = ID_MATCH_DECORATION
             for sample_dict in results['search_results'].values():
                 sample_entry = SampleEntry.fromDict(sample_dict)
                 samples[sample_entry.sample_id] = sample_entry
@@ -411,7 +426,9 @@ def search():
         else:
             id_match = results['id_match']
             if id_match is not None:
-                functions.append(FunctionEntry.fromDict(id_match))
+                function_entry = FunctionEntry.fromDict(id_match)
+                functions.append(function_entry)
+                function_decorations[function_entry.function_id] = ID_MATCH_DECORATION
             for function_dict in results['search_results'].values():
                 functions.append(FunctionEntry.fromDict(function_dict))
 
@@ -430,5 +447,8 @@ def search():
         search_types=types,
         family_column_setup=family_column_setup,
         sample_column_setup=sample_column_setup,
-        function_column_setup=function_column_setup
+        function_column_setup=function_column_setup,
+        family_decorations=family_decorations,
+        sample_decorations=sample_decorations,
+        function_decorations=function_decorations,
     )
