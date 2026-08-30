@@ -760,16 +760,27 @@ def jobs():
         ],
         "statistics": statistics
     }
-    if active_category is None:
-        max_count = statistics["totals"][state_category] if state_category in statistics["totals"] else 0
-        pagination = Pagination(request, max_count, limit=25, query_param="p", limit_param="l")
+    limit_param = "l" if active_category is None else "plimit"
+    if query:
+        # The backend's own `filter` cannot be used together with paging: it slices the
+        # page first and filters what is left (mcrit QueueRemoteCalls.getQueueData), so
+        # `start=0, limit=25, filter=x` answers "the matches among jobs 0-24", not "the
+        # first 25 matches". Asking for page 2 of a search would then skip matches, and
+        # page 1 of a search whose only hit is job 60 renders empty. Fetch the category
+        # unpaged and filter here, where the count that drives pagination is the count
+        # of things actually shown. `getQueueData(method=...)` with no start/limit is
+        # already how delete_job_by_id enumerates a category.
+        matches = client.getQueueData(method=active_category, state=state_category, ascending=ascending) or []
+        matches = [job for job in matches if query.casefold() in (job.parameters or "").casefold()]
+        pagination = Pagination(request, len(matches), limit=25, query_param="p", limit_param=limit_param)
+        jobs = matches[pagination.start_index:pagination.end_index]
     else:
-        max_count = sum(statistics[active_category].values()) if active_category else 0
-        pagination = Pagination(request, max_count, limit=25, query_param="p")
-    # `filter` is a substring test against the job's parameters string, applied by the
-    # backend. Note it filters the page it was asked for rather than the whole queue,
-    # so the counts above are of unfiltered jobs - see the PR for issue #51.
-    jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, filter=query or None, ascending=ascending)
+        if active_category is None:
+            max_count = statistics["totals"][state_category] if state_category in statistics["totals"] else 0
+        else:
+            max_count = sum(statistics[active_category].values()) if active_category else 0
+        pagination = Pagination(request, max_count, limit=25, query_param="p", limit_param=limit_param)
+        jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, ascending=ascending)
     samples_by_id = {}
     families_by_id = {}
     if jobs:
@@ -780,7 +791,7 @@ def jobs():
         for job in jobs:
             if job.family_id is not None:
                 families_by_id[job.family_id] = client.getFamily(job.family_id)
-    return render_template('jobs.html', families=families_by_id, samples=samples_by_id, active=active_category, state=state_category, ascending=ascending, jobs=jobs, menu_configuration=menu_configuration, p=pagination, query=query)
+    return render_template('jobs.html', families=families_by_id, samples=samples_by_id, active=active_category, state=state_category, ascending=ascending, jobs=jobs, menu_configuration=menu_configuration, p=pagination, query=query, match_count=len(matches) if query else None)
 
 
 @bp.route('/jobs/<job_id>')
