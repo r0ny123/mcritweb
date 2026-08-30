@@ -108,8 +108,15 @@ def test_score_columns_round_rather_than_truncate(client, as_role, report):
 
     cells = score_cells(response.data.decode())
     assert cells, f"{report} rendered no score cells to check"
-    off_by_one = [(exact, shown) for exact, shown in cells if shown != round(exact)]
-    assert not off_by_one, f"{report}: score cells not rounded: {off_by_one}"
+    # The tooltip is the score to two decimals, so it is not the source value: a score
+    # of 2.501 renders as tooltip "2.50" and cell "3", and asserting shown == round(2.50)
+    # would fail on a correct page. What the tooltip does pin is an interval - the score
+    # is within 0.005 of it - so the cell must be within half a unit of that interval.
+    # Truncation is caught all the same: it is off by the whole fractional part, and
+    # these reports carry plenty above 0.505 (85.88, 82.70, 42.81, 60.99).
+    TOOLTIP_PRECISION = 0.005
+    not_rounded = [(exact, shown) for exact, shown in cells if abs(shown - exact) > 0.5 + TOOLTIP_PRECISION]
+    assert not not_rounded, f"{report}: score cells not rounded: {not_rounded}"
 
 
 if __name__ == "__main__":
