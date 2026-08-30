@@ -177,6 +177,16 @@
            here too or the fix stops at the list. See issue #41. #}
         <td valign="middle" class="job-description">{{ job_info.parameters }}</td>
       </tr>
+      {# the band setting is already in the Task row above, but only as an unlabelled
+         trailing number - getMatchesForSample(0, 2) reads like a second sample id.
+         Omitted entirely for jobs that did not record one, see get_minhash_matching_label. #}
+      {% set minhash_matching = minhash_matching_label(job_info) %}
+      {% if minhash_matching %}
+        <tr>
+          <td valign="middle">MinHash Matching: </td>
+          <td valign="middle">{{ minhash_matching }}</td>
+        </tr>
+      {% endif %}
       <tr>
         <td valign="middle">Job ID:</td>
         <td valign="middle">{{ job_info.job_id }}</td>
