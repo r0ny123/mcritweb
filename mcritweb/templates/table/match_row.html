@@ -13,7 +13,12 @@ looks like, not a deduplication.
 
 The column ids are the ones stored per user in `UserColumnSettings._default_settings`,
 so they are a compatibility surface: rename one here and every user who saved that
-setting silently loses the column.
+setting silently loses the column. They are also the sort ids: pass a table's
+`Pagination` as `sort_pagination` and each header becomes a link that sorts on its own
+column id, which `views/result_sorting.py` looks up to order the rows. That is the
+`sortable_header_col` widget the listing pages already sort through - the only new
+thing is that `Pagination` now answers `sort_by` / `is_ascending` / `get_sort_link`
+the way `CursorPagination` does.
 
 The macros emit cells only. The enclosing `<tr>` stays at the call site, because its
 background colour is per-table and because `result_compare_all.html`'s library table
@@ -26,6 +31,7 @@ read straight from the render context - `matching_result`, the ScoreColorProvide
 why they are not parameters.
 #}
 {% from 'table/links.html' import format_family_name %}
+{% from 'table/pagination_widget.html' import sortable_header_col %}
 
 {# Defaults for when a caller has no stored column settings. Mirrors
    UserColumnSettings._default_settings; keep the two in step. #}
@@ -35,35 +41,44 @@ why they are not parameters.
 
 
 {# Header of the family/library match tables: best matches per family, the
-   library matches on the unfiltered page, and the sample matches of a filtered one. #}
-{% macro famlib_header(ucs_famlib) %}{% set columns = FAMLIB_COLUMNS if ucs_famlib is none else ucs_famlib %}
+   library matches on the unfiltered page, and the sample matches of a filtered one.
+
+   `sort_pagination` is the table's own `Pagination`; pass it to make the header cells
+   sort links, or leave it out for a table there is nothing to sort (the sample-filtered
+   page shows exactly one row, the 1-vs-1 page is not paginated at all).
+
+   `direct_score` and `frequency_score` keep their `colspan="2"` header over themselves
+   and their library-excluded twin, so those two twins have no header of their own to
+   click and are not sortable. Splitting the header would make them sortable at the cost
+   of the grouping the page has always shown. #}
+{% macro famlib_header(ucs_famlib, sort_pagination=None) %}{% set columns = FAMLIB_COLUMNS if ucs_famlib is none else ucs_famlib %}
       {% for column_type in columns %}
         {% if column_type == "family_name" %}
-        <th scope="col"><i class="fa-solid fa-bug " title="Family ID"></th>
+        {% call sortable_header_col(sort_pagination, "family_name") %}<i class="fa-solid fa-bug " title="Family ID"></i>{% endcall %}
         {% elif column_type == "version" %}
-          <th scope="col">Version</th>
+          {% call sortable_header_col(sort_pagination, "version") %}Version{% endcall %}
         {% elif column_type == "sample_id" %}
-        <th style="text-align: right;" scope="col"><i class="fa-solid fa-virus" title="Sample ID"></th>
+        {% call sortable_header_col(sort_pagination, "sample_id", align="right") %}<i class="fa-solid fa-virus" title="Sample ID"></i>{% endcall %}
         {% elif column_type == "sha256" %}
-          <th style="text-align: right;" scope="col">SHA256</th>
+          {% call sortable_header_col(sort_pagination, "sha256", align="right") %}SHA256{% endcall %}
         {% elif column_type == "filename" %}
-          <th scope="col">Filename</th>
+          {% call sortable_header_col(sort_pagination, "filename") %}Filename{% endcall %}
         {% elif column_type == "bitness" %}
-          <th style="text-align: right;" scope="col">Bitness</th>
+          {% call sortable_header_col(sort_pagination, "bitness", align="right") %}Bitness{% endcall %}
         {% elif column_type == "num_functions" %}
-        <th style="text-align: right;" scope="col">FNs</th>
+        {% call sortable_header_col(sort_pagination, "num_functions", align="right") %}FNs{% endcall %}
         {% elif column_type == "num_minhash" %}
-        <th style="text-align: right;" scope="col">Min#</th>
+        {% call sortable_header_col(sort_pagination, "num_minhash", align="right") %}Min#{% endcall %}
         {% elif column_type == "num_pichash" %}
-        <th style="text-align: right;" scope="col">Pic#</th>
+        {% call sortable_header_col(sort_pagination, "num_pichash", align="right") %}Pic#{% endcall %}
         {% elif column_type == "num_library" %}
-        <th style="text-align: right;" scope="col">Lib</th>
+        {% call sortable_header_col(sort_pagination, "num_library", align="right") %}Lib{% endcall %}
         {% elif column_type == "direct_score" %}
-        <th style="text-align: center;" colspan="2" scope="col">Direct</th>
+        {% call sortable_header_col(sort_pagination, "direct_score", align="center", colspan=2) %}Direct{% endcall %}
         {% elif column_type == "frequency_score" %}
-        <th style="text-align: center;" colspan="2" scope="col">Frequency</th>
+        {% call sortable_header_col(sort_pagination, "frequency_score", align="center", colspan=2) %}Frequency{% endcall %}
         {% elif column_type == "uniq_score" %}
-        <th style="text-align: center;" scope="col">Uniq</th>
+        {% call sortable_header_col(sort_pagination, "uniq_score", align="center") %}Uniq{% endcall %}
         {% endif %}
       {% endfor %}{% endmacro %}
 
@@ -105,30 +120,30 @@ why they are not parameters.
 
 
 {# Header of the aggregated function match table (one row per reference function). #}
-{% macro aggregated_function_header(ucs_functions) %}{% set columns = AGGREGATED_FUNCTION_COLUMNS if ucs_functions is none else ucs_functions %}
+{% macro aggregated_function_header(ucs_functions, sort_pagination=None) %}{% set columns = AGGREGATED_FUNCTION_COLUMNS if ucs_functions is none else ucs_functions %}
     {% for column_type in columns %}
     {% if column_type == "matched_function_id" %}
-    <th scope="col">Function ID</th>
+    {% call sortable_header_col(sort_pagination, "matched_function_id") %}Function ID{% endcall %}
     {% elif column_type == "offset" %}
-    <th style="text-align: right;" scope="col">offset</th>
+    {% call sortable_header_col(sort_pagination, "offset", align="right") %}offset{% endcall %}
     {% elif column_type == "num_bytes" %}
-    <th style="text-align: right;" scope="col">num_bytes</th>
+    {% call sortable_header_col(sort_pagination, "num_bytes", align="right") %}num_bytes{% endcall %}
     {% elif column_type == "num_matched_families" %}
-    <th style="text-align: right;" scope="col">Matched Families</th>
+    {% call sortable_header_col(sort_pagination, "num_matched_families", align="right") %}Matched Families{% endcall %}
     {% elif column_type == "num_matched_samples" %}
-    <th style="text-align: right;" scope="col">Matched Samples</th>
+    {% call sortable_header_col(sort_pagination, "num_matched_samples", align="right") %}Matched Samples{% endcall %}
     {% elif column_type == "num_matched_functions" %}
-    <th style="text-align: right;" scope="col">Matched Functions</th>
+    {% call sortable_header_col(sort_pagination, "num_matched_functions", align="right") %}Matched Functions{% endcall %}
     {% elif column_type == "best_score" %}
-    <th style="text-align: right;" scope="col">Best Score</th>
+    {% call sortable_header_col(sort_pagination, "best_score", align="right") %}Best Score{% endcall %}
     {% elif column_type == "num_minhash" %}
-    <th style="text-align: right;" scope="col">Min</th>
+    {% call sortable_header_col(sort_pagination, "num_minhash", align="right") %}Min{% endcall %}
     {% elif column_type == "num_pichash" %}
-    <th style="text-align: right;" scope="col">Pic</th>
+    {% call sortable_header_col(sort_pagination, "num_pichash", align="right") %}Pic{% endcall %}
     {% elif column_type == "is_library_match" %}
-    <th style="text-align: right;" scope="col">Lib</th>
+    {% call sortable_header_col(sort_pagination, "is_library_match", align="right") %}Lib{% endcall %}
     {% elif column_type == "is_unique_match" %}
-    <th style="text-align: right;" scope="col">Uniq</th>
+    {% call sortable_header_col(sort_pagination, "is_unique_match", align="right") %}Uniq{% endcall %}
     {% endif %}
     {% endfor %}{% endmacro %}
 
@@ -176,28 +191,28 @@ why they are not parameters.
    `data.result()` leaves that column out. The column id stays in the caller's
    settings, it just renders nothing - which is what result_compare_vs.html did
    before this was shared. #}
-{% macro matched_function_header(ucs_functions, unique_match_known=True) %}{% set columns = MATCHED_FUNCTION_COLUMNS if ucs_functions is none else ucs_functions %}
+{% macro matched_function_header(ucs_functions, unique_match_known=True, sort_pagination=None) %}{% set columns = MATCHED_FUNCTION_COLUMNS if ucs_functions is none else ucs_functions %}
     {% for column_type in columns %}
       {% if column_type == "function_id_a" %}
-      <th scope="col">Function A <i class="fa-solid fa-project-diagram " title="Function ID"></i></th>
+      {% call sortable_header_col(sort_pagination, "function_id_a") %}Function A <i class="fa-solid fa-project-diagram " title="Function ID"></i>{% endcall %}
       {% elif column_type == "offset_a" %}
-      <th style="text-align: right;" scope="col">Offset A</th>
+      {% call sortable_header_col(sort_pagination, "offset_a", align="right") %}Offset A{% endcall %}
       {% elif column_type == "offset_b" %}
-      <th style="text-align: right;" scope="col">Offset B</th>
+      {% call sortable_header_col(sort_pagination, "offset_b", align="right") %}Offset B{% endcall %}
       {% elif column_type == "function_id_b" %}
-      <th style="text-align: right;" scope="col">Function B <i class="fa-solid fa-project-diagram " title="Function ID"></i></th>
+      {% call sortable_header_col(sort_pagination, "function_id_b", align="right") %}Function B <i class="fa-solid fa-project-diagram " title="Function ID"></i>{% endcall %}
       {% elif column_type == "num_bytes" %}
-      <th style="text-align: right;" scope="col">Bytes</th>
+      {% call sortable_header_col(sort_pagination, "num_bytes", align="right") %}Bytes{% endcall %}
       {% elif column_type == "best_score" %}
-      <th style="text-align: right;" scope="col">Score</th>
+      {% call sortable_header_col(sort_pagination, "best_score", align="right") %}Score{% endcall %}
       {% elif column_type == "is_minhash_match" %}
-      <th style="text-align: center;" scope="col">Min</th>
+      {% call sortable_header_col(sort_pagination, "is_minhash_match", align="center") %}Min{% endcall %}
       {% elif column_type == "is_pichash_match" %}
-      <th style="text-align: center;" scope="col">Pic</th>
+      {% call sortable_header_col(sort_pagination, "is_pichash_match", align="center") %}Pic{% endcall %}
       {% elif column_type == "is_library_match" %}
-      <th style="text-align: center;" scope="col">Lib</th>
+      {% call sortable_header_col(sort_pagination, "is_library_match", align="center") %}Lib{% endcall %}
       {% elif column_type == "is_unique_match" and unique_match_known %}
-      <th style="text-align: center;" scope="col">Uniq</th>
+      {% call sortable_header_col(sort_pagination, "is_unique_match", align="center") %}Uniq{% endcall %}
       {% endif %}
     {% endfor %}{% endmacro %}
 
