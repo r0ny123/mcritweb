@@ -14,6 +14,7 @@ import logging
 import re
 import unittest
 
+import pytest
 from werkzeug.security import generate_password_hash
 
 from mcritweb.db import APITOKEN_BYTES, UserInfo, generate_apitoken, get_user_by_apitoken
@@ -98,17 +99,60 @@ def test_the_old_token_stops_authenticating(client, app):
 
 
 def test_rotating_does_not_touch_anybody_else(client, app):
-    """The user id comes from the session, so there is nothing in the request to
-    point at another account - this is the test that says so."""
+    """The user id comes from the session, so there is nothing in the request that can
+    point at another account - this is the test that says so.
+
+    It has to actually try. The first version posted an empty body and then checked the
+    other account was untouched, which proves nothing about what the request *could*
+    point at: rewrite the view as `request.form.get("user_id", get_session_user_id())`
+    - a real IDOR - and an empty post still leaves the other row alone. So this sends
+    every field name the view might plausibly read.
+    """
     mine = _user(app, username="mine")
     theirs = _user(app, username="theirs")
     with client.session_transaction() as session:
         session["user_id"] = mine.user_id
 
-    client.post("/admin/regenerate_apitoken")
+    client.post("/admin/regenerate_apitoken", data={
+        "user_id": theirs.user_id,
+        "id": theirs.user_id,
+        "username": "theirs",
+        "apitoken": theirs.apitoken,
+    })
 
     with app.app_context():
-        assert UserInfo.fromDb(user_id=theirs.user_id).apitoken == theirs.apitoken
+        assert UserInfo.fromDb(user_id=theirs.user_id).apitoken == theirs.apitoken, \
+            "a request field steered the rotation at another account"
+        assert UserInfo.fromDb(user_id=mine.user_id).apitoken != mine.apitoken, \
+            "and the caller's own token still rotated"
+
+
+@pytest.mark.parametrize("role", ["visitor", "contributor", "admin"])
+def test_everyone_whose_token_works_can_see_and_replace_it(client, app, role):
+    """token_required admits visitor, contributor and admin. The settings page used to
+    show the token to the last two only, so a visitor whose token leaked - and it works
+    against every read route - had no way to retire it short of deleting the account,
+    which is exactly what this PR exists to stop being the only option."""
+    user = _user(app, username=f"{role}user", role=role)
+    with client.session_transaction() as session:
+        session["user_id"] = user.user_id
+
+    page = client.get("/settings").get_data(as_text=True)
+
+    assert user.apitoken in page, f"a {role} cannot see the token the API accepts"
+    assert "regenerate_apitoken" in page, f"a {role} cannot replace it"
+
+
+def test_a_pending_user_is_shown_no_token(client, app):
+    """The other side: token_required refuses pending, so there is nothing to show."""
+    user = _user(app, username="pendinguser", role="pending")
+    with client.session_transaction() as session:
+        session["user_id"] = user.user_id
+
+    page = client.get("/settings").get_data(as_text=True)
+
+    assert user.apitoken not in page
+    assert "regenerate_apitoken" not in page
 
 
 def test_a_get_cannot_rotate_a_token(client, app):
