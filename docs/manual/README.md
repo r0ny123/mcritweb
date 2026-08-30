@@ -68,6 +68,10 @@ Those exact hits are flagged with a badge in a `Match` column naming what they m
 on, so they can be told apart from an incidental substring hit. This works the same way
 on the search page and on the family, sample and function listings.
 
+The result tables can be sorted by clicking a column header.
+The sort order you last chose is remembered separately for families, samples, and functions, and stays in effect for the rest of your browser session - a new search or a return to one of the lists keeps it, while logging out clears it.
+A link that already carries sort parameters always wins over the remembered order, so a shared URL shows everyone the same table.
+
 #### Families
 
 By default, there will be always a family with `family_id=0`, which is reserved for all samples that have not been assigned to another family with a `family_name`.
