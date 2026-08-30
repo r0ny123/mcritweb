@@ -718,10 +718,32 @@ def jobs():
     # It used to be a POST whose value was read and then never used - see issue #51.
     query = request.args.get('Search', '').strip()
     client = get_client()
-    # sort order
+    # sort order. Job creation order is the only thing mcrit can sort a queue by, but it
+    # does sort the whole queue: mongoqueue's get_jobs orders by _id *before* it skips
+    # and limits, so `ascending` reorders the category rather than the page. Nothing in
+    # the chain from getQueueData down to the collection accepts a sort key, so Type,
+    # Started, Finished and Progress cannot be ordered across pages at all - see the note
+    # in jobs.html on why they are not offered as a client-side sort instead. Issue #51.
     ascending = request.args.get('ascending', 'false').lower() == "true"
+    # Carry what the page understands rather than all of request.args: the page number
+    # is deliberately dropped, because page 3 of one order is an unrelated slice of the
+    # other, and forwarding arbitrary keys would hand url_for its own reserved ones
+    # (`_method`, `_scheme`, ...) straight from the query string.
+    order_args = {key: value for key, value in request.args.items()
+                  if key in ("Search", "active", "state", "plimit", "l")}
+    order_args["ascending"] = "false" if ascending else "true"
+    order_toggle = url_for('data.jobs', **order_args)
     statistics = client.getQueueStatistics()
     job_template = Job(None, None)
+    # A cross compare runs as one getMatchesForSampleVsGroup job per sample plus a
+    # combineMatchesToCross job that merges them once they have all finished. mcrit's
+    # Job.method_types never learned about the group jobs, so without this they have no
+    # tab at all: browsing cannot reach them, the search cannot narrow them, and the
+    # "Matching" count leaves them out while the totals row above it counts them.
+    # This is issue #51's "what about cross jobs?" - the jobs a cross compare actually
+    # does the work in were the ones the page could not list.
+    for group in ("matching", "all"):
+        job_template.method_types[group].append("getMatchesForSampleVsGroup")
     # dynamically create the job page with nested menu based on groups from statistics and Job.method_types
     active_category = request.args.get('active', None)
     summarized_groups = {"matching": 0, "query": 0, "blocks": 0, "minhashing": 0, "collection": 0}
@@ -750,9 +772,10 @@ def jobs():
     pagination = None
     menu_configuration = {
         "menu": [
-            {"group": "matching", "title": f"Matching ({summarized_groups['matching']})", "active": active_category in ["getMatchesForSample", "getMatchesForSampleVs", "combineMatchesToCross"], "available": True, "submenu": [
+            {"group": "matching", "title": f"Matching ({summarized_groups['matching']})", "active": active_category in ["getMatchesForSample", "getMatchesForSampleVs", "getMatchesForSampleVsGroup", "combineMatchesToCross"], "available": True, "submenu": [
                 {"name": "getMatchesForSample", "title": f"getMatchesForSample ({sum(statistics['getMatchesForSample'].values()) if 'getMatchesForSample' in statistics else 0})", "active": "getMatchesForSample" == active_category, "available": "getMatchesForSample" in statistics},
                 {"name": "getMatchesForSampleVs", "title": f"getMatchesForSampleVs ({sum(statistics['getMatchesForSampleVs'].values()) if 'getMatchesForSampleVs' in statistics else 0})", "active": "getMatchesForSampleVs" == active_category, "available": "getMatchesForSampleVs" in statistics},
+                {"name": "getMatchesForSampleVsGroup", "title": f"getMatchesForSampleVsGroup ({sum(statistics['getMatchesForSampleVsGroup'].values()) if 'getMatchesForSampleVsGroup' in statistics else 0})", "active": "getMatchesForSampleVsGroup" == active_category, "available": "getMatchesForSampleVsGroup" in statistics},
                 {"name": "combineMatchesToCross", "title": f"combineMatchesToCross ({sum(statistics['combineMatchesToCross'].values()) if 'combineMatchesToCross' in statistics else 0})", "active": "combineMatchesToCross" == active_category, "available": "combineMatchesToCross" in statistics},
             ]}, 
             {"group": "query", "title": f"Query ({summarized_groups['query']})", "active": active_category in ["getMatchesForUnmappedBinary", "getMatchesForMappedBinary", "getMatchesForSmdaReport"], "available": True, "submenu": [
@@ -809,7 +832,7 @@ def jobs():
         for job in jobs:
             if job.family_id is not None:
                 families_by_id[job.family_id] = client.getFamily(job.family_id)
-    return render_template('jobs.html', families=families_by_id, samples=samples_by_id, active=active_category, state=state_category, ascending=ascending, jobs=jobs, menu_configuration=menu_configuration, p=pagination, query=query, match_count=len(matches) if query else None)
+    return render_template('jobs.html', families=families_by_id, samples=samples_by_id, active=active_category, state=state_category, ascending=ascending, order_toggle=order_toggle, jobs=jobs, menu_configuration=menu_configuration, p=pagination, query=query, match_count=len(matches) if query else None)
 
 
 @bp.route('/jobs/<job_id>')
