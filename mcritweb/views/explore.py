@@ -14,6 +14,11 @@ from mcritweb.views.utility import get_user_column_setup, mcrit_server_required
 
 bp = Blueprint('explore', __name__, url_prefix='/explore')
 
+#: what `?type=` may name on the search page. The page defaults to all three when the
+#: parameter is absent, and anything else in it is a hand-written URL rather than
+#: something the form can produce.
+SEARCHABLE_TYPES = ("family", "sample", "function")
+
 
 ##############################################################
 ### Unfiltered Collections: Families, Samples, Function
@@ -441,7 +446,9 @@ def search():
         search_failed=search_failed,
         # the categories that were asked and did answer; "nothing matched" is only a
         # true statement about those
-        answered_types=[t for t in types if t not in search_failed],
+        # filtered to categories that exist: `?type=` (empty) splits to [""], which is
+        # truthy, and would let the page say nothing matched when nothing was searched
+        answered_types=[t for t in types if t in SEARCHABLE_TYPES and t not in search_failed],
         family_column_setup=family_column_setup,
         sample_column_setup=sample_column_setup,
         function_column_setup=function_column_setup
