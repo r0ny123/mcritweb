@@ -145,7 +145,10 @@ Jobs
     <input type='submit' hidden>
   </form>
   {% if query %}
-  <p>Results for "{{ query }}" &mdash; <a href="{{ url_for('data.jobs', active=active, state=state) }}">clear</a></p>
+  <p>
+    {{ match_count }} job{{ '' if match_count == 1 else 's' }} matching "{{ query }}"
+    &mdash; <a href="{{ url_for('data.jobs', active=active, state=state) }}">clear</a>
+  </p>
   {% endif %}
 
   {% if active %}
@@ -159,9 +162,15 @@ Jobs
 </p>
 {% endif %}
 
-  {{ job_table(jobs, table_id=active, families_by_id=families, samples_by_id=samples) }}
-  {% if p %}
-    {{ pagination_widget(p) }}
+  {% if query and not jobs %}
+    {# the table's empty state invites you to create your first job, which is the wrong
+       thing to say to someone whose search simply matched nothing on a full queue #}
+    <center class="mt-3">No job's parameters contain "{{ query }}".</center>
+  {% else %}
+    {{ job_table(jobs, table_id=active, families_by_id=families, samples_by_id=samples) }}
+    {% if p %}
+      {{ pagination_widget(p) }}
+    {% endif %}
   {% endif %}
 
   <!-- based on https://stackoverflow.com/a/8983053 -->
