@@ -2282,3 +2282,85 @@ recording: the note quoted the earlier accident verbatim - the phrase in which a
 it was not closing #57 - and that quotation is itself a closing keyword next to an issue
 number. Writing about the trap would have sprung it, on five PRs at once. The check that
 caught it was mechanical, not a re-read.
+
+## The integration rebuild: 60 of 60, 1,551 passed
+
+`integration/all-60-v2` @ `e824698`, pushed. The old `integration/all-60` was built before
+this round and 24 branch tips had moved past it, so its proof had expired.
+
+**25 branches merged clean, 36 conflicted** - up from 27 last time, which is what a round
+of real feature work across overlapping files looks like. Worst offenders: `views/data.py`
+(conflicted in 11 separate merges), `templates/table/*`, `tests/testResultPages.py`.
+
+    ruff check .   -> All checks passed!      RUFF_EXIT=0
+    pytest -q      -> 4 failed, 1551 passed   PYTEST_EXIT=1
+
+The four are the usual Windows platform artefacts. Playwright is installed here, so all
+five browser modules ran rather than skipping.
+
+### The trap it existed to catch, caught
+
+#50 replaces the inline result tables with shared macros written against **master**, so
+merging it silently reverts #7's work - and nothing conflicts, and no test fails, because
+the tests moved with the macros. A cell-by-cell comparator over every `column_type`
+reported **25 differing columns**, all of them #7's: the `%3.0f` rounding and the
+recovered tooltip divisors. Ported into the macro, `divisors` threaded through as a
+parameter, then re-compared to identical. Verified again by hand afterwards: zero
+truncating format specifiers left on a score, six rounding ones, and the two byte counts
+still integer - because a byte count is not a score.
+
+### Integration defects no single branch could see
+
+- **A stray `@bp.route('/jobs', methods=('GET','POST'))` left decorating
+  `job_parameters_or_blank`**, dragged in from a conflict tail. It registered a helper as
+  the `/jobs` endpoint; ~40 tests failed with `TypeError: missing 1 required positional
+  argument`.
+- **#70 vs #68 on the diagram cache.** #70 puts the theme in the filename; #68 renders
+  from *the filename asked for*. Merged naively, `<job>-dark.png` parsed as a job id
+  nobody has, so the themed diagram would never have been rendered at all. The regex now
+  carries an optional `-dark` group.
+- **#53 and #56 both marked the exact hit**, without conflicting - the search page rendered
+  **two adjacent badge columns saying the same thing**. Kept #56's labelled column (it
+  also covers the three listing pages), kept #53's mechanism for the cross-compare tints.
+- **#46 shadowed `db.utc_now`** with its own `utc_now` in `data.py`. Renamed and
+  reimplemented on top of `db.utc_now`, so the deprecated `datetime.utcnow` does not come
+  back in through the side door.
+- **#55 and #32 defined the same slider table under two names**; unified.
+- **#63 vs #70**: #70's `base.html` re-added the stylesheets #63 had removed.
+- **#70's colour lint caught 17 literals in templates #70 never saw** - `unique_blocks.html`
+  arrived from #93 after #70 branched, and the rest were macros #50 extracted from master.
+- **#99's coverage ratchet** disagreed with the later #2/#73 fix about what an unknown
+  linkhunt id renders.
+- Plus a run of tests from older branches meeting #36's canonical redirect, #79's reworded
+  flash, #7's rounding, and #77's narrowed default search set.
+
+### `SCHEMA_V1_4_8`, the hazard flagged in advance
+
+#40 and #70 both defined it. The resolution asserted the two literals were **byte-identical**
+before keeping one - if they had differed, keeping either would have silently changed what
+one branch's migration test was starting from.
+
+### ADR numbering: renumbered files, unrenumbered references
+
+`docs/adr/` now holds 0001-0016, all unique. But the renumbering done branch-by-branch
+moved the **files** and left the **references**: three `[ADR-0003]` labels in AGENTS.md, one
+label pointing at a different number than its own link, and four `docs/adr/0003` paths that
+meant the export/import ADR. All corrected. Worth remembering that renaming a file is only
+half of renumbering it.
+
+### A check of mine that reported everything broken
+
+My first ancestry check said **59 of 60 branches were not merged**. The merge was fine;
+`merge_order.txt` has CRLF endings, so every branch name carried a trailing `\r` and
+`origin/<name>\r` resolves to nothing. The single "pass" was the last line, which has no
+trailing newline and therefore no `\r`.
+
+This is the third time in this campaign that a verification command has reported a
+uniform, confident, wrong answer - after `git merge-tree`'s anchored grep and awk's `$NF`.
+The fix each time was the same: run the check against a case you *know* should fail. Here
+that was `origin/agent/add-deepwiki-badge`, which is deliberately not in the merge and was
+correctly reported missing. A check that cannot fail is not evidence.
+
+Re-run correctly: 59 merged, 0 missing - and then the 60th separately, because
+`while read` skips a final line with no trailing newline. Then a third way, over every
+`fix/*` ref on origin: 60 found, 0 missing.
