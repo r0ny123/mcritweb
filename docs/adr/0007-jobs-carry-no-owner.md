@@ -34,14 +34,30 @@ per `AGENTS.md` a column change means touching `sql/`, `db.py`, `db.migrate()` a
 README version history — four files, one of them among the most contended in the repo —
 for no user-visible effect, and `db.py` would then carry a field nothing reads.
 
-There is a design question that should be settled **before** any of this, and it decides
-whether MCRITweb needs a schema change at all: **`username` is already on the wire.** If
-usernames cannot be renamed or reused in a deployment, `username` gets accountability with
-zero change on this side. A uuid is only better if they can. The issue should ask that
-question rather than assume the uuid.
+**`username` is already on the wire**, so the tempting shortcut is to persist that and be
+done with no schema change on this side. It does not work, and the reason is in this
+repository rather than upstream, so it is a settled requirement rather than an open
+question:
+
+- **Usernames are renameable.** `administration.change_username` lets any user rename
+  themselves with their own password - no admin involved. Every job created before the
+  rename would keep the old name, so one user's history splits in two with nothing tying
+  the halves together.
+- **Usernames are reusable.** `administration.delete_user` does
+  `DELETE FROM user WHERE id = ?`, which frees the name; the next registration can take
+  it. Old jobs then read as belonging to whoever holds the name now.
+
+So an owner field has to key on something stable, and MCRITweb does not currently have
+one to send: `sql/create_table_user.sql` gives an autoincrement `id`, which is stable but
+local to one MCRITweb instance and meaningless to a backend that several could share.
+That is what makes the uuid the right shape - not a preference, and not something to ask
+the maintainers about.
+
+The order still matters, though. The uuid is only worth adding once the backend has
+somewhere to put it, or it is the dead schema the previous paragraph rules out.
 
 ## Outcome
 
 Re-file the substance on `danielplohmann/mcrit` as a request for an owner field on the
-job document, and put the username-versus-uuid question to the maintainers there, since
-the answer determines what MCRITweb has to send.
+job document, stating the stable-identifier requirement as established rather than as a
+question: the field cannot be a username, because MCRITweb renames and frees them.
