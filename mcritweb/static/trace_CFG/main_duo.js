@@ -1336,8 +1336,8 @@ function highlightUERs(UERtype){
                 // highlight switched on while this one was still in flight has
                 // already painted the other and would never reach these nodes.
                 reapplyHighlight();
-                // loopify_dagre.addBackground();
-      
+                renderLoopBoundaries("a");  // mcritweb: issue #69, was loopify_dagre.addBackground()
+
                 fnManip.init();
                 // loopCollapser.init();
               });
@@ -1377,8 +1377,8 @@ function highlightUERs(UERtype){
               showGraph("b", node_colors);
               // mcritweb: issue #69 - see the "a" loader.
               reapplyHighlight();
-              // loopify_dagre.addBackground();
-    
+              renderLoopBoundaries("b");  // mcritweb: issue #69, see the "a" loader
+
               fnManip.init();
               // loopCollapser.init();
             });
@@ -2290,21 +2290,10 @@ function highlightUERs(UERtype){
   });
 
   d3.select("#loopBgFill").on("change", function(){
+     // mcritweb: issue #69 - the boundaries are drawn per panel here, so this
+     // toggles both groups instead of the one-graph page's single #bgFill.
      isLoopBoundaryShown = this.checked;
-
-     if(isLoopBoundaryShown){
-        //remove bgFill
-        // d3.select("#bgFill").remove();
-        // loopify_dagre.addBackground();
-
-        d3.select("#bgFill").style("display", "unset");
-
-        
-     }  else {
-
-        d3.select("#bgFill").style("display", "none");
-     }
-
+     setLoopBoundaryVisibility();
   });
 
   //enable or disable brush using checkbox
@@ -3561,6 +3550,123 @@ function highlightUERs(UERtype){
   function reapplyHighlight(){
     if(isCycleShown) { showCycles(); }
     if(isLoopShown) { showLoops(); }
+  }
+
+  // mcritweb: issue #69 - loop boundaries.
+  //
+  // "Show Loop Boundaries" was inert on this page. loopify_dagre draws them on the
+  // single-graph page, but it cannot be reused here: it is a singleton over the
+  // globals `dotFile` and `loopsObj`, it rewrites the dot graph into a layout of its
+  // own that this page deliberately does not render (`modifiedDotFile_a = dotFile_a`
+  // above), and it appends its one `#bgFill` to a `#graphContainer g.zoom` that does
+  // not exist here. What the control actually shows is a filled hull per loop, so
+  // that is what these draw - per panel, from the panel's own loops and its own
+  // rendered blocks.
+
+  // Fill per nesting depth. loopify_dagre's palette, so the two views read alike -
+  // and the first of these is the swatch on the checkbox in the template.
+  var loopBgColors = ['#fdd0a2', '#fdae6b', '#fd8d3c', '#f16913', '#d94801', '#8c2d04'];
+
+  // How far outside the blocks the hull is drawn, in layout units. loopify_dagre
+  // hulls the block corners exactly, which leaves the fill showing only in the gaps
+  // between blocks; a margin is what makes it read as a boundary around the loop.
+  var loopBoundaryPadding = 12;
+
+  // Nesting depth of every loop in a /explore/findLoops/ response. The detector
+  // sorts loops by size and gives each the index of the smallest loop containing it
+  // as "parent" ("" for an outermost one), so the depth is the length of that chain.
+  function loopDepths(loops){
+    var depths = [];
+    for(var i=0; i<loops.length; i++) {
+      var depth = 0;
+      var at = i;
+      // parent indices are strictly increasing by construction, so this terminates -
+      // but the response comes off the wire, so bound the walk rather than trust it
+      while(depth < loops.length) {
+        var parent = loops[at] ? loops[at].parent : "";
+        if(parent === "" || parent === null || parent === undefined) { break; }
+        parent = parseInt(parent, 10);
+        if(isNaN(parent) || parent < 0 || parent >= loops.length || parent === at) { break; }
+        at = parent;
+        depth++;
+      }
+      depths.push(depth);
+    }
+    return depths;
+  }
+
+  // The four corners of one block, in its panel's layout coordinates, grown by the
+  // padding. Mirrors loopify_dagre's getRectanglePoints, but reads the panel's own
+  // node dict rather than the shared one.
+  function blockCorners(panel, nodeId){
+    if(!panel.nodes.hasOwnProperty(nodeId)) { return []; }
+    var node = panel.nodes[nodeId];
+    var rect = node.select("rect");
+    if(rect.empty()) { return []; }
+    var translate = d3.transform(node.attr("transform")).translate;
+    var x = Number(rect.attr("x")) + translate[0] - loopBoundaryPadding;
+    var y = Number(rect.attr("y")) + translate[1] - loopBoundaryPadding;
+    var width = Number(rect.attr("width")) + 2 * loopBoundaryPadding;
+    var height = Number(rect.attr("height")) + 2 * loopBoundaryPadding;
+    return [
+      {x: x, y: y},
+      {x: x + width, y: y},
+      {x: x, y: y + height},
+      {x: x + width, y: y + height}
+    ];
+  }
+
+  // Draws one panel's loop boundaries. Call after its showGraph(), which is what
+  // fills panel.nodes with the rendered blocks these are measured from.
+  function renderLoopBoundaries(key){
+    var panel = cfgPanels[key];
+    var svg = d3.select("#graphContainer_" + key);
+    // the group dagre rendered into, which is also the one zoom transforms - so the
+    // boundaries pan and scale with the graph instead of drifting off it
+    var inner = svg.select("g");
+    if(inner.empty()) { return; }
+
+    svg.select("#bgFill_" + key).remove();
+    var group = inner.append("g")
+      .attr("id", "bgFill_" + key)
+      .attr("class", "bgFill");
+    // first child, so the fills sit behind the blocks and edges rather than over them
+    group.node().parentNode.insertBefore(group.node(), group.node().parentNode.firstChild);
+
+    var depths = loopDepths(panel.loops);
+    var order = [];
+    for(var i=0; i<panel.loops.length; i++) { order.push(i); }
+    // outermost first, so a nested loop's fill lands on top of the one containing it
+    order.sort(function(x, y){ return depths[x] - depths[y]; });
+
+    for(var j=0; j<order.length; j++) {
+      var loop = panel.loops[order[j]];
+      var blocks = (loop && loop.nodes) ? loop.nodes : [];
+      var points = [];
+      for(var k=0; k<blocks.length; k++) {
+        Array.prototype.push.apply(points, blockCorners(panel, blocks[k]));
+      }
+      var hull = points.length ? convexHull(points) : [];
+      // a loop whose blocks the renderer dropped, or that came back collinear, has
+      // no area to fill - skip it rather than emit a degenerate path
+      if(hull.length < 3) { continue; }
+      var d = "M " + hull[0].x + " " + hull[0].y;
+      for(var p=1; p<hull.length; p++) {
+        d += " L " + hull[p].x + " " + hull[p].y;
+      }
+      group.append("path")
+        .attr("fill", loopBgColors[depths[order[j]] % loopBgColors.length])
+        .attr("stroke", "none")
+        .attr("d", d + " Z");
+    }
+
+    // the checkbox may have been unticked while this panel was still loading
+    setLoopBoundaryVisibility();
+  }
+
+  function setLoopBoundaryVisibility(){
+    // one group per panel here, rather than the single #bgFill the one-graph page has
+    d3.selectAll("g.bgFill").style("display", isLoopBoundaryShown ? null : "none");
   }
 
   // The two highlights paint the same rects, so at most one of them is on.
