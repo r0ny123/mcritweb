@@ -294,8 +294,11 @@ def get_sample_versions(client, family_entry, sample_ids):
     caller is holding that entry. Whatever the family did not supply is fetched by
     id, which for a job naming samples directly is one call per row of the table.
 
-    A sample the backend no longer has is simply absent from the result; the column
-    is not worth failing a whole report over.
+    A lookup that comes back None leaves that row's version blank. It does not say
+    the sample is gone: `handle_response` in `McritClient` collapses a 404 and a 500
+    into the same None, so a blank cell means "no version to show" and nothing more.
+    Telling the two apart would take the raw response, which this seam does not
+    carry - and neither of them is worth failing a whole report over.
     """
     versions = {}
     family_samples = getattr(family_entry, "samples", None) or {}

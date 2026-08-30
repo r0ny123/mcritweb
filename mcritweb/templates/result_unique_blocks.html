@@ -207,8 +207,11 @@ Unique Blocks for Sample: {{ sample_id }}
         var b = sortValue(rowB, index);
         var order;
         if (isNumeric) {
-          // a cell holding something unparseable must not make the comparator
-          // return NaN, which leaves the resulting order unspecified
+          // Number() answers NaN for anything that is not a number, and a
+          // comparator that returns NaN leaves the resulting order unspecified -
+          // so those sort as the smallest value instead. This is not a guard for
+          // an empty cell: Number("") is 0, not NaN. Neither case arises in this
+          // table today, where every data-sort="number" cell carries a count.
           var x = Number(a);
           var y = Number(b);
           x = Number.isNaN(x) ? -Infinity : x;
