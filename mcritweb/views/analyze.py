@@ -295,8 +295,9 @@ def query():
 
         base_address = None
         form_options = request.form['options']
-        is_dump_or_smda = form_options in ['dumped', 'smda']
-        if is_dump_or_smda:
+        # only a memory dump needs a base address: an SMDA report carries its own, and
+        # requestMatchesForSmdaReport() - where the smda branch below ends - takes none
+        if form_options == "dumped":
             # the form also carries a bitness field, but McritClient has no parameter for it -
             # the server derives bitness from the mapped binary itself
             base_address = parse_base_addr_form_param(request)
@@ -312,8 +313,17 @@ def query():
         # persist the upload in binary format
 
         if form_options == "smda":
-            content_as_dict = json.loads(binary_content)
-            smda_report = SmdaReport.fromDict(content_as_dict)
+            # the file is whatever was dropped on the page, so a body that is not a
+            # readable SMDA report is ordinary user input and has to become a message.
+            # It used to be covered by accident: the base address was demanded first,
+            # and an empty one answered 400 before anything was parsed. That check is
+            # now correctly limited to a dump, so this needs its own.
+            try:
+                smda_report = SmdaReport.fromDict(json.loads(binary_content))
+            except Exception:
+                current_app.logger.warning("analyze.query - the uploaded file is not a readable SMDA report")
+                flash('That file could not be read as an SMDA report.', category='error')
+                return "", 400 # Bad Request
             upload_sha256 = smda_report.sha256
         else:
             # check here if it is already part of corpus
