@@ -412,3 +412,86 @@ before/after.
   SyntaxError on four pages - a "tidy-up" that breaks them. It stays `var`.
 - **#65** → PR #16. The empty-state message becomes the caller's to choose, defaulting
   to today's text; 11 of 13 tests fail on master.
+
+---
+
+## 2026-08-30 02:30-02:45Z — #62, and a stray file found in every open PR
+
+### #62 (preload navbar icons) → PR [#17](https://github.com/r0ny123/mcritweb/pull/17)
+
+The issue has a title and no body ("Preload icons in navbar -> explore", migrated from
+the old private repo). So the first job was to establish there is a real symptom rather
+than guess at one.
+
+**Measured, not inferred.** Chromium is preinstalled in this environment
+(`/opt/pw-browsers/chromium-1194/chrome-linux/chrome`); `pip install playwright` with
+`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` gets the driver without a download. Driving the
+corpus harness with it and recording the request waterfall of `/`:
+
+```
+ 1. +   19ms  stylesheet  bootstrap.css      <- 7 stylesheets, 8 scripts, 2 logos
+...                                              all go out in one burst
+18. +   25ms  script      dropzone.js
+19. +  159ms  font        fa-solid-900.woff2  <<< 145ms after the last of them
+```
+
+Same shape at 1280x800 (last script +203 ms, font +355 ms). The cause is that a font is
+invisible to the preload scanner - it is named inside `all.css`, not in the HTML, so it
+is only fetched once that sheet is parsed *and* layout finds an element drawing with it.
+`all.css` sets `font-display: block`, so every `fa-` icon is a blank box until then.
+
+Fix is one `<link rel="preload" as="font" type="font/woff2" crossorigin>` in `base.html`.
+After: the font is request #1 at +13 ms, still fetched exactly once.
+
+**The trap, and why there is a test for it.** `crossorigin` is not decoration. Fonts are
+fetched in CORS mode even same-origin, so without it the preload does not match the
+CSS-driven fetch. I removed the attribute and re-measured to check rather than assert it:
+two requests for the same 150 KB, +221 ms and +400 ms. `tests/testIconPreload.py` pins it.
+
+Only the solid face is preloaded. `base.html`'s help icon sits outside the
+`{% if g.user %}` block, so the solid face is drawn on every page including `/login`
+(checked); the regular face is three copy buttons, brands and v4compat are unused.
+Preloading those would waste the transfer and log a console warning. There is a test
+asserting the premise ("base.html still draws a solid icon on every page") so that if the
+help icon ever goes, the unconditional preload gets reconsidered rather than silently
+becoming dead weight. 4 of 5 tests fail on master; the 5th is that premise guard and
+passes there by design. `244 passed` on 3.11 and 3.13, ruff clean.
+
+### The stray file — a real finding, and mine
+
+Cherry-picking the CI fix onto the #62 branch aborted:
+
+```
+error: The following untracked working tree files would be overwritten by merge:
+	work/harness/cookies.txt
+```
+
+`git show --stat 8268666` showed why: **the CI-fix commit committed
+`work/harness/cookies.txt`**, a cookie jar my own harness writes. And because that commit
+was cherry-picked onto every fix branch, `git ls-tree` confirmed the file was sitting in
+**all 15 pushed branches**, i.e. in every open PR.
+
+What it actually contains: a Flask session cookie for `user_id 1`, signed with
+`harness-secret` — a string hardcoded in `work/harness/devserver.py` — against a
+throwaway SQLite database in `/tmp`. So it is not a credential for anything real. But the
+guardrail says *never commit secrets, tokens, or anything from a local `.env`*, and this
+is exactly that shape: a session token, in a diff that has no business containing one, in
+15 PRs a reviewer is being asked to read. It stays out on both counts.
+
+**How it was removed.** Not by rewriting the branches — the guardrail forbids force-push
+and history rewriting, and these branches have open PRs pointing at them. One ordinary
+commit per branch deleting the file, 16 branches including the CI source branch so future
+cherry-picks stay clean. Verified afterwards with `git ls-tree -r --name-only` across
+every `origin/fix/*`: 0 hits everywhere.
+
+**How it got in and what stops a recurrence.** The `git add` for the CI commit was made
+from a working tree that had the harness cookie sitting in an untracked `work/` on a
+branch where `work/.gitignore` (which does cover it) is not present — that file only
+exists on `claude/mcritweb-triage-fixes-a5adho`. The harness now writes its cookie jar to
+the scratchpad via `--cookie-file` rather than into the repo, so there is nothing to pick
+up. Rule for the rest of this run: **read `git show --stat` of every commit before
+pushing it**, not just the diff of the files I meant to touch.
+
+This is the second time a mistake of mine was caught by reading rather than by a test
+(the first was the #54 `str.replace` that patched the wrong views). Both were textual
+operations whose *scope* was wrong while each individual edit looked fine.
