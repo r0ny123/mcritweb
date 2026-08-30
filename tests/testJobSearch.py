@@ -228,5 +228,49 @@ def test_the_jobs_page_no_longer_accepts_a_post(client, as_role):
     assert client.post("/data/jobs", data={"Search": "anything"}).status_code == 405
 
 
+class CorruptJobInTheQueue(PagedQueue):
+    """One job whose payload cannot be parsed, in the middle of the category.
+
+    Job.parameters does not return None for such a job - it raises. A truncated Mongo
+    write, a hand-edit, or a document from an older mcrit produces one.
+    """
+
+    def _params(self, index):
+        if index == 40:
+            return "{not json"
+        return super()._params(index)
+
+
+@pytest.fixture
+def corrupt_queue(app, as_role):
+    backend = CorruptJobInTheQueue()
+    app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: backend
+    as_role("visitor")
+    return backend
+
+
+def test_one_unreadable_job_does_not_break_the_whole_search(client, corrupt_queue):
+    """Filtering the category rather than a page means the search touches every job in
+    it, so a single unreadable one would take the search down for the entire category
+    - where before it only broke the one page of the browse view that showed it."""
+    response = client.get("/data/jobs?Search=evil.exe")
+
+    assert response.status_code == 200
+    assert b"job0060" in response.data, "the match is still found"
+
+
+def test_the_unreadable_job_is_not_listed_as_a_match(client, corrupt_queue):
+    """It cannot contain the term - nothing can be read out of it - so leaving it out
+    is the honest answer rather than a workaround. Its neighbours are unaffected: 98 of
+    the 100 jobs match (one is unreadable, one is the evil.exe needle), and page 2 holds
+    the ones either side of the gap."""
+    first = client.get("/data/jobs?Search=benign").get_data(as_text=True)
+    assert "98 jobs matching" in first
+
+    page_two = client.get("/data/jobs?Search=benign&p=2").get_data(as_text=True)
+    assert "job0040" not in page_two
+    assert "job0039" in page_two and "job0041" in page_two
+
+
 if __name__ == "__main__":
     unittest.main()
