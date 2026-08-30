@@ -293,8 +293,8 @@ NO_XCFG_DOT_GRAPH = (
     'digraph "No CFG" {\n'
     '  label="No control flow graph stored";\n'
     '  NodeNoXcfg [shape=record,comment="",label="No disassembly stored for this function.'
-    '\\lThe control flow graph is not part of exported data, so functions that were added '
-    'through an import cannot be displayed here.\\l"];\n'
+    '\\lThe backend discards the control flow graph when it is configured not to keep '
+    'disassembly, and there is nothing left to draw.\\l"];\n'
     '}\n'
 )
 
@@ -306,8 +306,9 @@ NO_XCFG_DOT_GRAPH = (
 def fetchDotGraph(function_id):
     client = get_client()
     function_entry = client.getFunctionById(function_id, with_xcfg=True)
-    # An entry can reach us without its control flow graph: export/import drops the
-    # xcfg and the backend deletes it for some entries (see #67, and the NotImplemented
+    # An entry can reach us without its control flow graph: mcrit deletes the xcfg after
+    # minhashing when STORAGE_DROP_DISASSEMBLY is set, and an export copies that empty
+    # graph on to whoever imports it (see docs/adr/0003 and the NotImplemented
     # getFunctionGraph in mcrit's MinHashIndex). toSmdaFunction() raises on that, which
     # took the whole request down with a 500 and left the CFG panel blank without ever
     # saying why. picblockhashes can come back empty or null for the same reason.
