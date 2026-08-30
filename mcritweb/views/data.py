@@ -1029,13 +1029,26 @@ def rerun_request(job_info, child_jobs=None):
     return RERUNNABLE_METHODS[job_info.method], tuple(sample_ids), kwargs
 
 
-def is_rerunnable(job_info, child_jobs=None):
-    """Whether to offer a rerun of this job on its page.
+def has_run_its_course(job_info):
+    """Whether a job is finished or failed, as opposed to queued or in progress.
 
-    Only for a job that has run its course: forcing a recalculation of one that is
-    still queued or in progress would queue the same work a second time.
+    Forcing a recalculation of a job that is still running queues the same work a
+    second time, so this gates both the button and the route that button posts to.
+    Withholding the button alone would only hide the door - the POST is reachable
+    without it.
     """
-    if job_info is None or (job_info.finished_at is None and not job_info.is_failed):
+    if job_info is None:
+        return False
+    try:
+        return job_info.finished_at is not None or bool(job_info.is_failed)
+    except (AttributeError, KeyError, TypeError):
+        # a record that does not carry the fields is not one to rerun either
+        return False
+
+
+def is_rerunnable(job_info, child_jobs=None):
+    """Whether to offer a rerun of this job on its page."""
+    if not has_run_its_course(job_info):
         return False
     return rerun_request(job_info, child_jobs) is not None
 
@@ -1062,6 +1075,12 @@ def rerun_job_by_id(job_id):
     if job_info is None:
         flash('There is no job with that id.', category='error')
         return redirect(url_for('data.jobs'))
+    if not has_run_its_course(job_info):
+        # the button is withheld for a job that is still running, but withholding it
+        # only hides the door: this POST is reachable without it, and forcing a
+        # recalculation here would queue the same work alongside the run in progress
+        flash('This job has not finished yet - wait for it rather than running it twice.', category='error')
+        return redirect(url_for('data.job_by_id', job_id=job_id))
     child_jobs = None
     if job_info.method == "combineMatchesToCross":
         # only this one method needs them, so the round trips are not spent on the
