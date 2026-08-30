@@ -691,6 +691,54 @@ def linkhunt_for_sample_or_query(job_info, matching_result: MatchingResult):
 # Listing Job information
 ################################################################
 
+# Job.duration is finished_at - started_at of a single job. A job that waits on
+# dependencies - a cross compare waits on one child per sample - does not start until
+# the last child is done, so its own duration covers only the assembly of the result
+# and reads as ~0 however long the matching took (issue #46). created_at ->
+# finished_at brackets the children too, and both are already on the job document, so
+# it costs no additional backend call.
+JOB_TIMESTAMP_FMT = "%Y-%m-%d-%H:%M:%S"
+
+
+def job_timestamp_as_datetime(value):
+    """One of Job's timestamps as a datetime, or None if it is unreadable.
+
+    Job.created_at / .finished_at normalize the {"$date": ...} the REST API sends into
+    an ISO string, but hand back whatever the queue stored otherwise - a datetime, for
+    an in-process LocalQueue.
+    """
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.strptime(value[:10] + "-" + value[11:19], JOB_TIMESTAMP_FMT)
+        except ValueError:
+            return None
+    return None
+
+
+@bp.app_template_filter('total_duration')
+def total_duration(job_info):
+    """How long a job that waited on dependencies took end to end, or None when that
+    is not a number this job can produce."""
+    try:
+        if not job_info.all_dependencies:
+            return None
+        created_at = job_timestamp_as_datetime(job_info.created_at)
+        finished_at = job_timestamp_as_datetime(job_info.finished_at)
+    except KeyError:
+        # a job document written before one of these fields existed does not carry it
+        return None
+    if created_at is None or finished_at is None:
+        return None
+    if (created_at.tzinfo is None) != (finished_at.tzinfo is None):
+        # one aware, one naive - subtracting them raises, and there is nothing
+        # meaningful to show either way
+        return None
+    duration = finished_at - created_at
+    return duration if duration.total_seconds() >= 0 else None
+
+
 @bp.route('/jobs',methods=('GET', 'POST'))
 @visitor_required
 @mcrit_server_required

@@ -229,6 +229,15 @@
             {% endif %}
           </td>
         </tr>
+        {# a job waiting on dependencies only starts once they are done, so its own
+           duration says nothing about them - see data.total_duration #}
+        {% set job_total_duration = job_info|total_duration %}
+        {% if job_total_duration is not none %}
+          <tr>
+            <td valign="middle">Total (with dependencies): </td>
+            <td valign="middle">{{ job_total_duration }}</td>
+          </tr>
+        {% endif %}
       {% endif %}
       {% if show_progress %}
         <tr>
