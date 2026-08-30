@@ -30,7 +30,7 @@ Live document. Updated after every issue, not at the end.
 > | #37, #47, #48, #57, #59, #72 | the six ADR issues: the fix is not this repository's to make, and each PR ships the ADR saying so. |
 > | #64 | `_search_base` is the only `McritClient` accessor that neither deserialises nor honours `self.raw`. mcritweb is now self-consistent; the rest is upstream (ADR-0010). |
 > | #74 | box 1 (graph sync) is done; box 2 needs a 1:1 block correspondence that does not exist - 174 of 230 matched blocks are ambiguous. Recommended for its own issue. |
-> | #76 | **the one issue with no PR of its own.** Partially addressed by `fix/77`, which took functions out of the default search set so the scan no longer runs unasked; an explicit function search is still slow, and that is mcrit's unindexed regex. Genuinely unfinished. |
+> | #76 | **the one issue with no PR of its own**, and now settled: ADR-0016 on `fix/77`. The MCRITweb side is complete (functions out of the default set, so the scan is no longer charged to every navbar search and pagination click) and nothing here can make the search itself faster, so it should be reassigned to `fkie-cad/mcrit` with the ADR's three ranked asks. Note the correction it carries: `function_name` **is** indexed - the "unindexed" reading earlier in this campaign is right for *samples* and wrong for functions. The index cannot help because MongoDB derives `$regex` bounds only for case-sensitive prefix expressions. |
 
 **Coverage: 54 of 54 open issues have a PR.** The status column of the table below was
 rebuilt mechanically at the end of the campaign - every row's cell is generated from the
