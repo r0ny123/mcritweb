@@ -8,6 +8,8 @@ import functools
 import os
 import re
 import shutil
+import threading
+import time
 
 import requests
 from flask import current_app, flash, g, redirect, session, url_for
@@ -46,14 +48,56 @@ def default_server_probe():
     return result.status_code != 401
 
 
+#: The last probe answer, as (server_url, answered_at, was_up). Module-level, so it is
+#: per worker process - two workers can briefly disagree, which is the cost of not
+#: making this round-trip on every request to all 36 decorated routes. See issue #89.
+_probe_cache = None
+_probe_cache_lock = threading.Lock()
+
+
+def forget_server_probe():
+    """Drop the cached answer. Called when the server settings change, so an operator
+    who has just fixed the URL or token does not wait out the TTL to see it work."""
+    global _probe_cache
+    with _probe_cache_lock:
+        _probe_cache = None
+
+
+def probe_server(probe, ttl, server_url):
+    """`probe()`, but at most once per `ttl` seconds per backend URL.
+
+    A raise is not cached: a connection error is the answer most likely to change on
+    its own, and the caller turns it into a different message than "up" or "down".
+    Keyed by URL so pointing the instance at another backend re-probes immediately;
+    every other settings change calls forget_server_probe().
+
+    The lock covers the write, not the read-then-probe: two threads arriving on a cold
+    cache both probe, and the later answer wins. That costs one extra round-trip and
+    cannot produce a wrong answer, which is a better trade than holding a lock across
+    an HTTP call with a 13-second timeout.
+    """
+    global _probe_cache
+    if ttl <= 0:
+        return probe()
+    now = time.monotonic()
+    cached = _probe_cache
+    if cached is not None and cached[0] == server_url and now - cached[1] < ttl:
+        return cached[2]
+    answer = probe()
+    with _probe_cache_lock:
+        _probe_cache = (server_url, now, answer)
+    return answer
+
+
 def mcrit_server_required(view):
     @functools.wraps(view)
     def wrapped_view(**kwargs):
         # resolved from config so tests can substitute it, in the same way the
         # backend client itself is substituted via MCRIT_CLIENT_FACTORY (issue #88)
         probe = current_app.config.get("MCRIT_SERVER_PROBE", default_server_probe)
+        ttl = current_app.config.get("MCRIT_SERVER_PROBE_TTL", 0)
         try:
-            if not probe():
+            if not probe_server(probe, ttl, get_server_url() if ttl > 0 else None):
                 flash('Connected to MCRIT server but could not authenticate - Did you configure a token in the server settings?', category='error')
                 return redirect(url_for('index'))
         except Exception:
