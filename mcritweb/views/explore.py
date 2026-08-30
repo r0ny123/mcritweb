@@ -172,8 +172,20 @@ def families():
     if results is None:
         flash_search_failed(query, "families")
     else:
+        # the exact-id hit arrives beside the text results, not among them, and this
+        # page used to read only the latter - so searching a family page for an id
+        # rendered "No families available" for a family that exists, while the search
+        # page found it. See issue #56.
+        by_id = {}
+        id_match = results.get('id_match')
+        if id_match is not None:
+            entry = FamilyEntry.fromDict(id_match)
+            by_id[entry.family_id] = entry
         for family_dict in results['search_results'].values():
-            families.append(FamilyEntry.fromDict(family_dict))
+            entry = FamilyEntry.fromDict(family_dict)
+            # the id match can also come back as a text hit; keep its position, not a copy
+            by_id.setdefault(entry.family_id, entry)
+        families = list(by_id.values())
     all_families = client.getFamilies()
     family_names = [family_entry.family_name for family_entry in all_families.values()]
     user_column_setup = get_user_column_setup("family_table")
@@ -252,8 +264,17 @@ def samples():
     if results is None:
         flash_sample_search_failed(client, query)
     else:
+        # as in families above: the exact id, and for samples the exact sha256, arrive
+        # beside the text results rather than among them. See issue #56.
+        by_id = {}
+        for exact in (results.get('sha_match'), results.get('id_match')):
+            if exact is not None:
+                entry = SampleEntry.fromDict(exact)
+                by_id[entry.sample_id] = entry
         for sample_dict in results['search_results'].values():
-            samples.append(SampleEntry.fromDict(sample_dict))
+            entry = SampleEntry.fromDict(sample_dict)
+            by_id.setdefault(entry.sample_id, entry)
+        samples = list(by_id.values())
 
     jobs = client.getQueueData()
     job_collection = JobCollection(jobs)
@@ -281,9 +302,17 @@ def functions():
     if results is None:
         flash_search_failed(query, "functions")
     else:
+        # as in families and samples above. Kept as raw dicts, which is this page's
+        # existing convention - function_row.html reads them by name either way, and
+        # switching the whole page to FunctionEntry is a separate change. See issue #56.
+        by_id = {}
+        id_match = results.get('id_match')
+        if id_match is not None:
+            by_id[id_match['function_id']] = id_match
         for function_dict in results['search_results'].values():
             #functions.append(FunctionEntry.fromDict(function_dict))
-            functions.append(function_dict)
+            by_id.setdefault(function_dict['function_id'], function_dict)
+        functions = list(by_id.values())
     user_column_setup = get_user_column_setup("functions_table")
     return render_template("functions.html", functions=functions, pagination=pagination, query=query, user_column_setup=user_column_setup)
 
