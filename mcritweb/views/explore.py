@@ -358,7 +358,7 @@ def search():
     client = get_client()
 
     #TODO: show id/sha matches in extra place
-    families = []
+    families = {}
     family_pagination = None
     if 'family' in types:
         family_pagination = CursorPagination(request, query_param_prefix="family", default_sort="family_id", limit=25)
@@ -370,10 +370,14 @@ def search():
             id_match = results['id_match']
             if id_match is not None:
                 family = FamilyEntry.fromDict(id_match)
-                families.append(family)
+                families[family.family_id] = family
             for family_entry in results['search_results'].values():
                 family = FamilyEntry.fromDict(family_entry)
-                families.append(family) 
+                families[family.family_id] = family
+    # deduplicate: the id match is also a name match whenever a family is named after
+    # its own id, and the two arrive in separate fields - see issue #78. Keyed by id
+    # rather than filtered afterwards so the id match keeps its place at the top.
+    families = list(families.values())
 
     samples = {}
     sample_pagination = None
@@ -400,7 +404,7 @@ def search():
     # deduplicate in case we have cases such as filename == sha256
     samples = list(samples.values())
 
-    functions = []
+    functions = {}
     function_pagination = None
     if 'function' in types:
         function_pagination = CursorPagination(request, query_param_prefix="function", default_sort="function_id", limit=25)
@@ -411,9 +415,14 @@ def search():
         else:
             id_match = results['id_match']
             if id_match is not None:
-                functions.append(FunctionEntry.fromDict(id_match))
+                function_entry = FunctionEntry.fromDict(id_match)
+                functions[function_entry.function_id] = function_entry
             for function_dict in results['search_results'].values():
-                functions.append(FunctionEntry.fromDict(function_dict))
+                function_entry = FunctionEntry.fromDict(function_dict)
+                functions[function_entry.function_id] = function_entry
+    # deduplicate, as for families and samples above - a name like sub_401000 contains
+    # digits, so a numeric term can match a function by id and by name at once
+    functions = list(functions.values())
 
     family_column_setup = get_user_column_setup("family_table")
     sample_column_setup = get_user_column_setup("samples_table")
