@@ -691,6 +691,24 @@ def linkhunt_for_sample_or_query(job_info, matching_result: MatchingResult):
 # Listing Job information
 ################################################################
 
+def job_parameters_or_blank(job):
+    """`job.parameters`, or "" for a job whose payload cannot be read.
+
+    Job.parameters does not return None - it returns "" or raises. It calls json.loads
+    on payload["params"] and then .items() on the result, so a document whose params is
+    malformed, `null`, or a JSON array raises JSONDecodeError, AttributeError or
+    TypeError. One such job used to break the single page of the browse view that
+    showed it; filtering the whole category for a search would let it break every page
+    of the search instead. A job whose parameters cannot be read cannot contain the
+    search term either, so leaving it out is also the right answer.
+    """
+    try:
+        return job.parameters or ""
+    except Exception:
+        current_app.logger.exception("Could not read parameters for job %s", getattr(job, "job_id", "?"))
+        return ""
+
+
 @bp.route('/jobs')
 @visitor_required
 @mcrit_server_required
@@ -771,7 +789,7 @@ def jobs():
         # of things actually shown. `getQueueData(method=...)` with no start/limit is
         # already how delete_job_by_id enumerates a category.
         matches = client.getQueueData(method=active_category, state=state_category, ascending=ascending) or []
-        matches = [job for job in matches if query.casefold() in (job.parameters or "").casefold()]
+        matches = [job for job in matches if query.casefold() in job_parameters_or_blank(job).casefold()]
         pagination = Pagination(request, len(matches), limit=25, query_param="p", limit_param=limit_param)
         jobs = matches[pagination.start_index:pagination.end_index]
     else:
