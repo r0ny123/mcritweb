@@ -47,6 +47,16 @@ class FailingBackend:
             return fail
         return getattr(self._inner, name)
 
+    def raw_variant(self):
+        """The raw-response client, still failing the same way.
+
+        conftest's MCRIT_CLIENT_FACTORY hands out `fake_mcrit.raw_variant()` whenever a
+        view asks for raw responses, which every /api/ route does. Without this, that
+        call fell through __getattr__ to the *corpus* and returned a healthy client, so
+        the /api/ tests below were asserting against a backend that never failed.
+        """
+        return FailingBackend(self._inner.raw_variant(), self._method, self._exception)
+
 
 TRANSPORT_FAILURES = [
     (requests.exceptions.ConnectionError("connection refused"), UNREACHABLE),
@@ -111,7 +121,13 @@ def test_an_explore_page_says_the_backend_is_unreachable(client, as_role, fake_m
 
 #: every backend call index() makes for a signed-in, non-pending user. Each one is a
 #: way for the index page itself to be the thing that cannot reach the backend.
-INDEX_CALLS = ["getQueueData", "getSampleById", "getFamily", "search_samples"]
+#: The backend calls `index()` actually makes against the captured corpus. `getFamily`
+#: is deliberately not here: it sits behind `if job.family_id is not None`, and the
+#: one finished getMatchesForSample job in the corpus has `family_id = None`, so the
+#: call is never reached and a failure injected into it cannot reach the page.
+#: Measured, not assumed - the index records exactly
+#: [getQueueData, getSampleById, search_samples].
+INDEX_CALLS = ["getQueueData", "getSampleById", "search_samples"]
 
 
 @pytest.mark.parametrize(

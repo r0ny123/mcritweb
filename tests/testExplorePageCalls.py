@@ -329,7 +329,7 @@ def test_the_single_sample_page_survives_a_failed_function_search(client, as_rol
     response = client.get("/explore/samples/0")
 
     assert response.status_code == 200
-    assert "failed" in response.get_data(as_text=True)
+    assert "the backend did not answer" in response.get_data(as_text=True)
 
 
 def test_the_single_sample_page_survives_a_failed_queue_read(client, as_role, fake_mcrit):

@@ -212,7 +212,7 @@ def test_a_search_the_backend_could_not_answer_does_not_claim_nothing_matched(cl
 
     assert response.status_code == 200
     page = response.get_data(as_text=True)
-    assert "failed!" in page, "the flashed error is what tells the reader what happened"
+    assert "the backend did not answer" in page, "the flashed error is what tells the reader what happened"
     assert "Nothing matched" not in page
 
 
@@ -244,9 +244,12 @@ def test_one_category_failing_does_not_silence_the_answer_for_the_others(client,
     as_role("visitor")
     monkeypatch.setattr(fake_mcrit, "search_families", lambda *args, **kwargs: None)
 
-    page = client.get("/explore/search?query=zzzznomatchzzzz").get_data(as_text=True)
+    # all three are named explicitly: issue #76 took functions out of the default set
+    # (a function search scans the whole collection), so a bare query now answers for
+    # two categories and this test would silently stop covering the plural case.
+    page = client.get("/explore/search?query=zzzznomatchzzzz&type=family,sample,function").get_data(as_text=True)
 
-    assert "failed!" in page, "the failure still has to be reported"
+    assert "the backend did not answer" in page, "the failure still has to be reported"
     assert "Nothing matched" in page, "and so does the answer for the categories that worked"
     assert "sample, function" in page, "which should name the ones it is talking about"
 

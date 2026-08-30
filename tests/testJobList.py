@@ -122,7 +122,25 @@ def test_an_invented_category_falls_back_instead_of_failing(client, as_role):
     response = client.get("/data/jobs?active=no-such-category", follow_redirects=True)
 
     assert response.status_code == 200
-    assert b"no-such-category" not in response.data
+    # issue #36's guard names the category in a flash now, so it does reach the page.
+    # That is deliberate - an empty list would read as a fact about the queue rather
+    # than about the URL - and it makes the escaping the thing worth asserting, which
+    # the test below does. What still has to hold is the fallback.
+    assert category_shown(response) in INITIAL_STATISTICS
+
+
+def test_an_invented_category_is_echoed_escaped(client, as_role):
+    """The flash above puts user input on the page, so it has to be inert.
+
+    Jinja autoescapes, and this pins that rather than trusting it: the payload is one
+    that would be unmistakable in the rendered source if it were ever interpolated raw.
+    """
+    as_role("visitor")
+    response = client.get("/data/jobs?active=<script>alert(1)</script>", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert b"<script>alert(1)</script>" not in response.data
+    assert b"&lt;script&gt;alert(1)&lt;/script&gt;" in response.data
     assert category_shown(response) in INITIAL_STATISTICS
 
 

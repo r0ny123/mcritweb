@@ -178,14 +178,20 @@ def test_the_job_page_and_the_result_page_agree(client, as_role, report):
 
 
 @pytest.mark.parametrize(
-    "report,expected",
-    [("matches_for_sample", b"Match 1vN"), ("matches_for_sample_vs", b"Match 1v1")],
+    "category,expected",
+    [("getMatchesForSample", b"Match 1vN"), ("getMatchesForSampleVs", b"Match 1v1")],
 )
-def test_the_job_list_calls_it_the_same_thing(client, as_role, report, expected):
+def test_the_job_list_calls_it_the_same_thing(client, as_role, category, expected):
     """The list is where these names came from, so this is really a check that the
-    extraction did not change its wording."""
+    extraction did not change its wording.
+
+    The category is named in the URL because issue #36 made the jobs page one tab at a
+    time: a bare /data/jobs redirects to whichever category the queue happens to report
+    first, so asking for "the list" without saying which list only ever exercised one
+    of these two.
+    """
     as_role("visitor")
-    response = client.get("/data/jobs")
+    response = client.get(f"/data/jobs?active={category}", follow_redirects=True)
     assert response.status_code == 200
     assert expected in response.data
 

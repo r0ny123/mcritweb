@@ -179,7 +179,13 @@ def write_atomically(app, directory, filename, write, mode="wb"):
         # opened through `open` rather than tempfile, so that the permissions come out
         # the way the in-place writes left them; the opener adds O_EXCL, so a name
         # that somehow already exists is an error rather than a silent clobber
-        with open(temp_path, mode, opener=lambda path, flags: os.open(path, flags | os.O_EXCL, CACHE_FILE_MODE)) as fout:
+        # newline="" for the text modes: the cached report is served back as the raw
+        # result and is supposed to be byte-for-byte what the backend answered, but
+        # text mode rewrites the newline on write - on Windows that silently turns every
+        # newline into CRLF and the download stops matching the bytes it claims to be.
+        # `newline` is not a valid argument in binary mode, hence the conditional.
+        text_kwargs = {} if "b" in mode else {"newline": ""}
+        with open(temp_path, mode, opener=lambda path, flags: os.open(path, flags | os.O_EXCL, CACHE_FILE_MODE), **text_kwargs) as fout:
             write(fout)
         os.replace(temp_path, os.sep.join([directory, filename]))
     finally:
