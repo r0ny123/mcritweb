@@ -30,6 +30,9 @@ from mcrit.storage.SampleEntry import SampleEntry
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
+# the backend scores a function pair against its own minhash defaults
+MINHASH_CONFIG = MinHashConfig()
+
 # fixture name -> the job method it was produced by, for tests that want to say
 # "the cross compare report" instead of carrying an instance-specific job id
 REPORTS = (
@@ -408,14 +411,15 @@ class CorpusMcritClient:
             return None
         sample_a = self._samples[entry_a.sample_id]
         sample_b = self._samples[entry_b.sample_id]
-        bits = MinHashConfig().MINHASH_SIGNATURE_BITS
-        minhash_a = entry_a.getMinHash(minhash_bits=bits).minhash
-        minhash_b = entry_b.getMinHash(minhash_bits=bits).minhash
+        bits = MINHASH_CONFIG.MINHASH_SIGNATURE_BITS
+        minhash_a = entry_a.getMinHash(minhash_bits=bits)
+        minhash_b = entry_b.getMinHash(minhash_bits=bits)
         score = None
-        if minhash_a and minhash_b:
-            score = MinHash.calculateMinHashScore(minhash_a, minhash_b, minhash_bits=bits)
+        if minhash_a.minhash and minhash_b.minhash:
+            # float(), because the real client's value has been through JSON
+            score = float(MinHash.calculateMinHashScore(minhash_a.minhash, minhash_b.minhash, minhash_bits=bits))
         flags = 0
-        flags += MatcherFlags.IS_MINHASH_FLAG if score is not None and score >= MinHashConfig().MINHASH_MATCHING_THRESHOLD else 0
+        flags += MatcherFlags.IS_MINHASH_FLAG if score is not None and score >= MINHASH_CONFIG.MINHASH_MATCHING_THRESHOLD else 0
         flags += MatcherFlags.IS_PICHASH_FLAG if entry_a.pichash == entry_b.pichash else 0
         flags += MatcherFlags.IS_LIBRARY_FLAG if sample_b.is_library else 0
         match_tuple = [entry_b.family_id, entry_b.sample_id, entry_b.function_id, score, flags]
