@@ -158,7 +158,14 @@ def write_atomically(app, directory, filename, write, mode="wb"):
         # opened through `open` rather than tempfile, so that the permissions come out
         # the way the in-place writes left them; the opener adds O_EXCL, so a name
         # that somehow already exists is an error rather than a silent clobber
-        with open(temp_path, mode, opener=lambda path, flags: os.open(path, flags | os.O_EXCL, CACHE_FILE_MODE)) as fout:
+        # newline="" for the text modes. The cached report is served back verbatim as
+        # the raw result, so it has to be byte-for-byte what json.dump wrote - and text
+        # mode rewrites the newline on the way out, which on Windows makes every one a
+        # CRLF and the served file stop matching the bytes it claims to be. Harmless on
+        # Linux, where text mode translates nothing, so CI cannot see this either way.
+        # `newline` is not a valid argument in binary mode, hence the conditional.
+        text_kwargs = {} if "b" in mode else {"newline": ""}
+        with open(temp_path, mode, opener=lambda path, flags: os.open(path, flags | os.O_EXCL, CACHE_FILE_MODE), **text_kwargs) as fout:
             write(fout)
         os.replace(temp_path, os.sep.join([directory, filename]))
     finally:
