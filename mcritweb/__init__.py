@@ -15,6 +15,7 @@ def create_app(test_config=None, instance_path=None):
     from . import backend_errors, db, manual
     from .csrf import CsrfProtect
     from .jobnames import job_method_name
+    from .search_highlighting import get_highlight_terms, split_search_matches
     from .secret_key import INSECURE_DEFAULT, load_or_create_secret_key
     from .views import administration, analyze, api, authentication, data, explore
     from .views.client import get_client
@@ -164,6 +165,12 @@ def create_app(test_config=None, instance_path=None):
     @app.template_global()
     def minhash_matching_label(job_info):
         return get_minhash_matching_label(job_info)
+    # marking the search term in the rows it matched (issue #45). Both hand out plain
+    # strings and never markup - the <mark> element is written by the mark() macro in
+    # templates/table/links.html, so autoescaping still covers the term and the name
+    # it was found in. See mcritweb/search_highlighting.py.
+    app.add_template_filter(get_highlight_terms, 'search_terms')
+    app.add_template_global(split_search_matches, 'split_search_matches')
 
     # the user manual. Public, and deliberately not under /admin: it was the only
     # route in that blueprint without an admin gate, which made the prefix a lie.
