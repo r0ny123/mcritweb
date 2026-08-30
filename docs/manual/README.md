@@ -301,6 +301,11 @@ In this section, you can view all of these jobs, categorized by their type.
 
 ![An example for the job queue](images/jobs.png "An example for the job queue")
 
+Selecting a job opens its own page, with its parameters, its progress and, once it has finished or failed, a link to its result.
+A matching job - 1vsN, 1vs1 or Cross-Compare - also offers a **Rerun job** button there, which submits the same comparison again with the same parameters and takes you to the new job.
+A rerun always recomputes: unlike following a comparison link a second time, it does not return the finished job you started from.
+Jobs that cannot be repeated from what they recorded do not offer the button - a Query, because the uploaded binary is no longer available to resend, and Unique Blocks, because repeating it would only hand back the same result.
+
 
 ### User / Settings
 
