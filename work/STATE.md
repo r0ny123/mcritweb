@@ -550,6 +550,29 @@ conflicting pairs, because I anchored the marker grep as `^<<<<<<<` and
 conflicts is what caught it. Any future run of this audit should assert a known
 conflict before trusting a clean result.
 
+> **2026-08-30 — the fix above was not enough, and this whole audit is unverified.**
+> Re-running it on git 2.52 with the *unanchored* grep still reports `0` for the #35/#36
+> pair this very section names as the one that needs care:
+>
+> ```
+> $ git merge-tree $(git merge-base origin/master origin/fix/35-analyze-a-single-function) \
+>       origin/fix/35-analyze-a-single-function origin/fix/36-job-tab-in-the-url \
+>       | grep -c "<<<<<<<\|>>>>>>>"
+> 0
+> ```
+>
+> Three-argument `git merge-tree` is the **deprecated trivial-merge mode**: it does not
+> run the `ort` strategy and does not emit conflict markers the way this audit assumed,
+> so the grep — anchored or not — was never going to find any. Fixing the grep fixed the
+> second bug in the command and left the first one in place, which is why the sanity
+> check still failed.
+>
+> **Treat the conflict counts in this section as unmeasured.** The reliable form is
+> either `git merge-tree --write-tree <a> <b>` (exit code 1 and a `CONFLICT` line on a
+> real conflict) or an actual `git merge` in a throwaway worktree, which is what the
+> `data.jobs` section below now uses. The sanity assertion this caveat asks for is still
+> the right discipline — it worked, twice; it is the command under it that was wrong.
+
 ## Two PRs on one line in `data.jobs`
 
 PR #61 and PR #20 both fix `max_count = sum(statistics[active_category].values())`.
@@ -561,17 +584,32 @@ PR #61 and PR #20 both fix `max_count = sum(statistics[active_category].values()
   other side - review pointed out `?active=` survives the `statistics = {}` substitution.
 
 Neither can assume the other lands first, so both carry the fix and the hunk is
-byte-identical between them. Verified rather than assumed:
+byte-identical between them. Verified rather than assumed — **re-verified 2026-08-30 by
+performing the merge**, because the `git merge-tree` command previously cited here is
+vacuous (see the caveat above):
 
-    $ git merge-tree $(git merge-base origin/master HEAD) \
-          origin/fix/jobs-500-on-unknown-category HEAD | grep -c "<<<<<<<\|>>>>>>>"
-    0
-    $ # merged in a scratch worktree, full suite:
-    263 passed
+    $ git worktree add --detach <wt> origin/fix/jobs-500-on-unknown-category
+    $ git merge --no-edit origin/fix/jobs-500-when-the-queue-cannot-be-read
+    MERGE_EXIT=0
+    Auto-merging mcritweb/views/data.py
+     mcritweb/views/data.py            |   8 +++
+     tests/testJobsQueueUnavailable.py | 123 ++++++++++++++++++++++++++++++++++++++
 
-(The `grep` is unanchored on purpose - `git merge-tree` prefixes its conflict markers,
-so `^<<<<<<<` matches nothing and silently reports every pair as clean. That mistake
-cost an earlier audit its entire result.)
+`data.py` gains **8 lines** — #61's `statistics is None` guard only. A drifted hunk would
+have merged in twice or conflicted; it did neither. Confirmed three more ways:
+
+    $ cmp <#20's hunk> <#61's hunk>                     -> byte-identical
+    $ grep -n "max_count = " <merged data.py>           -> one of each, no duplicate
+    $ grep -c statistics.get(active_category   1        # the shared fix, once
+    $ grep -c known_job_category               3        # #20's own fix, present
+    $ grep -c "statistics is None"             1        # #61's own fix, present
+    $ pytest -q
+    4 failed, 259 passed, 1 warning in 46.39s
+
+(The 4 are Windows platform artefacts present identically on clean `master` — POSIX mode
+bits and a tempdir teardown. See `work/LOG.md`. On CI's Linux this reads 263 passed.)
+
+Both PRs still stand alone and merge cleanly in either order. Nothing to change.
 
 ## CI: one branch was missing #9's hunk
 
