@@ -411,3 +411,78 @@ with a comment at `explore.py:429-434` naming #76. The scan's own cost is `mcrit
 So all 54 triaged issues are covered by a branch; several branches carry more than one
 issue, and one issue's fix lives under another issue's branch name. Audit by reading the
 branches, not by counting them.
+
+## Coverage: every triaged issue, its branch, and its PR
+
+Regenerated 2026-08-30 directly from `git branch -r` and the open-PR list, not
+from memory. **54 triaged issues, 54 covered by an open PR.**
+
+| issue | branch | PR |
+|---|---|---|
+| #7 | `fix/7-round-the-score-columns` | 46 |
+| #9 | `fix/9-promote-a-query-to-a-sample` | 37 |
+| #32 | `fix/32-show-band-setting` | 25 |
+| #34 | `fix/34-function-page-api-usage` | 35 |
+| #35 | `fix/35-analyze-a-single-function` | 36 |
+| #36 | `fix/36-job-tab-in-the-url` | 29 |
+| #37 | `fix/37-jobs-carry-no-owner` | 55 |
+| #38 | `fix/38-filter-the-matching-statistics` | 40 |
+| #39 | `fix/39-one-name-per-job-method` | 19 |
+| #40 | `fix/40-query-result-identity` | 31 |
+| #41 | `fix/41-wrap-long-job-names` | 14 |
+| #42 | `fix/42-cross-compare-ordering` | 57 |
+| #43 | `fix/43-backend-transport-errors` | 27 |
+| #44 | `fix/44-dedumped-is-not-a-dump` | 39 |
+| #45 | `fix/45-mark-the-search-term` | 33 |
+| #46 | `fix/46-cross-job-duration` | 47 |
+| #47 | `fix/47-job-cache-belongs-to-mcrit` | 53 |
+| #48 | `fix/48-minification-measured` | 52 |
+| #50 | `fix/50-deduplicate-result-tables` | 50 |
+| #51 | `fix/51-job-search` | 12 |
+| #52 | `fix/52-no-line-breaks-in-headers-and-buttons` | 13 |
+| #53 | `fix/53-table-row-kwargs` | 22 |
+| #54 | `fix/54-say-when-a-search-matched-nothing` | 5 |
+| #55 | `fix/55-rerun-job` | 30 |
+| #56 | `fix/56-listing-pages-drop-id-matches` | 21 |
+| #57 | `fix/57-jobs-tracker-state` | 56 |
+| #58 | `fix/58-remember-sort-order` | 28 |
+| #59 | `fix/59-search-indexes-belong-to-mcrit` | 54 |
+| #60 | `fix/60-pagination-spinner` | 60 |
+| #61 | `fix/61-declare-js-variables` | 15 |
+| #62 | `fix/62-preload-navbar-icons` | 17 |
+| #63 | `fix/63-page-specific-libraries` | 23 |
+| #64 | `fix/64-deserialize-the-function-listing` | 41 |
+| #65 | `fix/65-empty-table-messages` | 16 |
+| #66 | `fix/66-import-progress` | 32 |
+| #67 | `fix/67-cfg-without-an-xcfg` | 48 |
+| #68 | `fix/68-result-page-performance` | 43 |
+| #69 | `fix/69-functionvs-loop-visualisation` | 42 |
+| #70 | `fix/70-tokenise-the-palette` | 59 |
+| #72 | `fix/72-function-labels-blocked-upstream` | 51 |
+| #73 | `fix/73-empty-result-vs-unknown-job` | 3 |
+| #74 | `fix/74-synchronise-the-cfg-panes` | 49 |
+| #75 | `fix/75-download-raw-result` | 24 |
+| #76 | `fix/77-explore-page-backend-calls` | 44 (see note) |
+| #77 | `fix/77-explore-page-backend-calls` | 44 |
+| #78 | `fix/78-deduplicate-search-results` | 8 |
+| #79 | `fix/79-say-what-a-failed-search-means` | 10 |
+| #80 | `fix/80-block-isolation-table` | 45 |
+| #89 | `fix/89-cache-the-backend-probe` | 11 |
+| #93 | `fix/93-configurable-unique-blocks` | 38 |
+| #98 | `fix/98-timezone-aware-timestamps` | 4 |
+| #99 | `fix/99-result-template-coverage` | 26 |
+| #100 | `fix/100-apitoken-generation-and-rotation` | 7 |
+| #101 | `fix/101-do-not-confirm-which-accounts-exist` | 6 |
+
+**#76 is the one issue with no branch of its own, and that is a naming artefact rather
+than a gap.** The scan itself is `mcrit`'s - a function search over a large instance takes
+~30 s when it finds nothing, and this repository cannot make it faster. The half that *is*
+ours is that `/explore/search` defaulted to all three types, so a search from the navbar
+charged that scan to a user who only wanted a family hit. That ships on PR #44's branch as
+`DEFAULT_SEARCH_TYPES` (`explore.py:32`), with the comment at `explore.py:437-445` naming
+issue #76. Audit by reading the branches, not by counting them.
+
+**PRs that are not on this table** are defects found in passing rather than triaged
+issues: #2 (linkhunt 500 on an incompatible job), #18 (job overview 500 on a deleted
+dependency), #20 (jobs page 500 on an empty category), #34 (test backend fidelity), #58
+(a visitor choosing where `/analyze/query` writes its upload), and the CI fix in #9.
