@@ -5,9 +5,12 @@ a fake MCRIT backend substituted through the MCRIT_CLIENT_FACTORY config key, so
 test needs a running mcrit-server. See issue #88.
 """
 
+import threading
+
 import pytest
 from mcrit.storage.SampleEntry import SampleEntry
 from werkzeug.security import generate_password_hash
+from werkzeug.serving import make_server
 
 from mcritweb import create_app
 from mcritweb.db import ServerInfo, UserInfo, init_db
@@ -328,3 +331,23 @@ def as_role(client, make_user):
             test_session["user_id"] = user_id
         return user_id
     return _as_role
+
+
+@pytest.fixture
+def live_server(app):
+    """The app under test on a loopback port, for the seconds a test needs it.
+
+    `client` is a WSGI stub with no socket behind it, so a browser cannot reach it.
+    Port 0 lets the OS pick, so concurrent runs do not collide. Here rather than in
+    the browser-driven modules because there are now several of them, and a copy per
+    module is a copy that can drift.
+    """
+    server = make_server("127.0.0.1", 0, app, threaded=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=10)
+        server.server_close()
