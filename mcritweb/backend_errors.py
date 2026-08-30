@@ -17,6 +17,13 @@ handler broad enough to swallow a TypeError in a template would turn every bug i
 this application into a false report about someone else's server, and would hide it
 from the logs that would otherwise show it.
 
+The second half of #43 - "always test for `result is None` after using McritClient"
+- lives here too, as `require_result`. `handle_response` in mcrit maps 400, 404, 410,
+500, 501 *and* every status it does not enumerate to the same `None`, so a call site
+cannot tell "no such thing" from "the backend is on fire". It can still tell that it
+was given nothing, and that is what `require_result` reports. See its docstring for
+why that is the honest answer and not a cop-out.
+
 One boundary worth naming: `requests.HTTPError` is also a RequestException, and it
 would be reported here as a connection failure, which it is not - it means the
 backend answered with an error status. That is unreachable today, because
@@ -37,6 +44,41 @@ API_BLUEPRINT_NAME = "api"
 def wants_a_status_code():
     """True for a request that cannot read an HTML page - i.e. an API caller."""
     return request.blueprint == API_BLUEPRINT_NAME
+
+
+class NoResultFromBackend(Exception):
+    """McritClient answered `None` where the caller needs a value.
+
+    This is the second half of #43. It is deliberately *one* exception rather than a
+    family of them, because the client cannot supply the distinctions a family would
+    need: `handle_response` collapses "bad request", "not found", "gone", "internal
+    error" and every status it has never heard of into the same `None`. Inventing a
+    NotFound here would state as fact something the wire did not say.
+
+    So `what` names the value that is missing rather than the reason it is missing,
+    and the page it renders says both possibilities out loud.
+    """
+
+    def __init__(self, what):
+        super().__init__(f"the MCRIT server did not return {what}")
+        #: what the caller asked for, phrased to follow "did not return".
+        self.what = what
+
+
+def require_result(result, what):
+    """`result`, or a reported failure if the backend supplied nothing.
+
+    For call sites that cannot carry on without the value. A view that *can* - one
+    with a "no such family" branch, or a template that already tests for none - keeps
+    its own handling; this is not for it.
+
+    Wrapping the call rather than testing the variable afterwards is what keeps this
+    to one line per site, and keeps the check next to the call it belongs to instead
+    of three statements later where the next edit can separate them.
+    """
+    if result is None:
+        raise NoResultFromBackend(what)
+    return result
 
 
 def is_timeout(error):
@@ -83,3 +125,13 @@ def register(app):
         # and lets the response carry a status that means what happened.
         current_app.logger.warning("MCRIT backend call failed: %r", error)
         return render_template("backend_unavailable.html", reason=message_for(error)), 503
+
+    @app.errorhandler(NoResultFromBackend)
+    def backend_returned_nothing(error):
+        # Rendered in place for the same reason as above. No handler on the api
+        # blueprint to match: every route there builds its client with
+        # raw_responses=True and forwards the status it got, so nothing under /api/
+        # produces a None to check. A test pins that, so the day it stops being true
+        # is a test failure rather than an unhandled exception.
+        current_app.logger.warning("MCRIT backend returned no %s", error.what)
+        return render_template("backend_no_result.html", what=error.what), 502
