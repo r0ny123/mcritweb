@@ -445,3 +445,61 @@ def test_asking_for_functions_still_searches_them(client, as_role, fake_mcrit):
 
     searched = sorted(name for name, _args, _kwargs in fake_mcrit.calls if name.startswith("search_"))
     assert searched == ["search_families", "search_functions", "search_samples"]
+
+
+# --- what a sample search costs in total ------------------------------------------
+
+#: Every backend call a sample search is allowed to make, and what bounds it. The
+#: tests above are open-world - each says one call is *gone*, none says no other has
+#: arrived - so a view that grows a `getStatus()` or a per-row lookup passes all of
+#: them. This is the closed world, and it is the answer to issue #77 written down:
+#: three calls for a listing, two for the unified search, neither growing with the
+#: corpus, the page, or the age of the instance.
+SEARCH_INVENTORY = {
+    "/explore/samples": [
+        ("search_samples", {"limit": 25}),
+        ("getQueueData", {"method": "getMatchesForSample"}),
+        ("getQueueData", {"method": "getMatchesForSampleVs"}),
+    ],
+    "/explore/samples?query=citadel": [
+        ("search_samples", {"limit": 25}),
+        ("getQueueData", {"method": "getMatchesForSample"}),
+        ("getQueueData", {"method": "getMatchesForSampleVs"}),
+    ],
+    "/explore/search?query=citadel": [
+        ("search_families", {"limit": 25}),
+        ("search_samples", {"limit": 25}),
+    ],
+}
+
+
+def inventory(fake_mcrit):
+    """(call, what narrows it) for every backend call the request made, in order."""
+    return [
+        (name, {key: value for key, value in kwargs.items() if key in ("method", "filter", "limit") and value})
+        for name, _args, kwargs in fake_mcrit.calls
+    ]
+
+
+@pytest.mark.parametrize("path", sorted(SEARCH_INVENTORY))
+def test_a_sample_search_makes_these_backend_calls_and_no_others(client, as_role, fake_mcrit, path):
+    """The two queue reads are the cost that is left, and they are narrowed rather
+    than bounded - `limit` is absent because the badge is a count of *all* of a
+    sample's matching jobs, so a truncated read would undercount it silently.
+
+    Bounding them is not mcritweb's to do. mcrit's `/jobs` narrows by `payload.method`
+    (indexed by `mongoqueue.MongoQueue`), by `state`, and by `filter` - and `filter` is
+    a python-side substring test over one page's worth of already-fetched jobs
+    (`QueueRemoteCalls.getQueueData` filters what `get_jobs` returned), so it takes one
+    substring and cannot be combined with a limit. There is no "jobs for these sample
+    ids" query, and mcrit could not answer one today either: a job's sample id is the
+    first entry of `payload.params`, which is stored as a JSON *string*, so mongo can
+    neither index nor match on it. See the report on issue #77.
+    """
+    as_role("visitor")
+    fake_mcrit.calls.clear()
+
+    response = client.get(path)
+
+    assert response.status_code == 200
+    assert inventory(fake_mcrit) == SEARCH_INVENTORY[path]
