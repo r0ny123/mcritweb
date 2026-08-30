@@ -272,6 +272,36 @@ def compare_all(sample_id_a):
     job_id = client.requestMatchesForSample(sample_id_a, force_recalculation=rematch, band_matches_required=minhash_band_range)
     return redirect(url_for('data.job_by_id', job_id=job_id, refresh=3))
 
+@bp.route('/compare_function/<int:function_id>')
+@visitor_required
+@mcrit_server_required
+def compare_function(function_id):
+    """1 vs N for a single function, which the backend only knows how to do per sample.
+
+    So this is the parent sample's match job, read through the function filter that
+    `data.result` already implements as `?funid=`. Before issue #35 the Analyze button
+    on a function row pointed at the sample picker instead, which lost the function.
+
+    An existing job is reused - `force_recalculation` defaults to False, as on
+    `compare_all` since issue #97 - because a table of function rows is a table of
+    clicks and each one would otherwise queue a full sample match. `?rematch=true`
+    still forces a fresh job for a result that has gone stale.
+
+    The route only accepts a non-negative id: a query sample's functions are numbered
+    negatively and have no sample in the database to match against.
+    """
+    client = get_client()
+    function_entry = client.getFunctionById(function_id)
+    if function_entry is None:
+        flash(f"There is no function with id {function_id}.", category='error')
+        return redirect(url_for('explore.functions'))
+    rematch = parse_checkbox_query_param(request, 'rematch')
+    minhash_band_range = parse_band_range(request)
+    job_id = client.requestMatchesForSample(function_entry.sample_id, force_recalculation=rematch, band_matches_required=minhash_band_range)
+    # forward=1 so a job that is already finished goes straight to the report; while it
+    # is still running the job page auto-refreshes and carries funid along until it is
+    return redirect(url_for('data.job_by_id', job_id=job_id, refresh=3, forward=1, funid=function_id))
+
 @bp.route('/compare/<sample_id_a>/<sample_id_b>')
 @visitor_required
 @mcrit_server_required
