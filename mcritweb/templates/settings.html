@@ -56,7 +56,11 @@ Settings
         <td>Registration:</td>
         <td>{{user_info.registration_date}}</td>
       </tr>
-      {% if user_info.role == "admin" or user_info.role == "contributor" %}
+      {# whoever's token the API accepts has to be able to see and replace it. This
+         used to be admin-or-contributor while token_required admits visitors too, so a
+         visitor whose token leaked had no way to retire it short of deleting the
+         account - which is the thing this PR exists to stop being the only option. #}
+      {% if can_use_api %}
       <tr>
         <td>apitoken:</td>
         <td>
