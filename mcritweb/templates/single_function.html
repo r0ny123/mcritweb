@@ -26,6 +26,13 @@ Function: {{ function_id }}
 <div class="container">
 <span><h1>Function: {{ function_id }}</h1></span>
 <span style="float:right"><a href="#function_xcfg">go to cfg</a></span>
+{# a query sample's functions are numbered negatively and have no sample in the
+   database to match against, so analyze.compare_function does not accept them.
+   url_for still writes the negative id into the href, so without this the page
+   would offer a button that only ever answers 404 #}
+{% if entry is not none and function_id >= 0 %}
+<span style="float:right; margin-right: 1em;"><a class="btn btn-outline-dark btn-sm" href="{{ url_for('analyze.compare_function', function_id=function_id) }}" role="button"><i class="fa-solid fa-flask" title="New: 1 vs N for this function"></i></a></span>
+{% endif %}
     {% if entry is not none %}
       {{ function_column_table(("Function Info", entry, sample_entry, pichash_match_summary)) }}
 
