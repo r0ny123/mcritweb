@@ -207,6 +207,10 @@ class CorpusMcritClient:
         clone.__dict__.update(self.__dict__)
         clone.raw = True
         return clone
+        # the queue holds every job, the report pool only the five with a captured
+        # result - a real backend answers getJobData for both, and the cross compare
+        # page asks it for each of its five children
+        self._queue_by_id = {job["_id"]["$oid"]: job for job in self._queue}
 
     def _record(self, name, *args, **kwargs):
         self.calls.append((name, args, kwargs))
@@ -397,6 +401,8 @@ class CorpusMcritClient:
             return Job(entry[0], None)
         queued = self._queued_by_id.get(job_id)
         return Job(queued, None) if queued else None
+        job = self._queue_by_id.get(job_id)
+        return Job(job, None) if job else None
 
     def getResultForJob(self, job_id, *args, **kwargs):
         self._record("getResultForJob", job_id, *args, **kwargs)
