@@ -295,7 +295,7 @@ def test_score_tooltips_divide_by_the_total_their_percentage_uses(client, as_rol
 
     That is what sets a reader's expectation, and issue #7 is a report of the value
     being "too far from the expected value" - so an inconsistency here is the defect,
-    not a cosmetic one. See docs/adr/0003-nonlib-frequency-score.md.
+    not a cosmetic one. See docs/adr/0009-nonlib-frequency-score.md.
     """
     as_role("visitor")
     response = client.get(f"/data/result/{job_id_of(report)}{query}")
