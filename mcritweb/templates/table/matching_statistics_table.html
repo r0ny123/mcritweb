@@ -21,11 +21,11 @@
     <tbody>
       {% for field in fields %}
         <tr>
-          {% if field == 'num_self_matches' and statistics['is_filtered'] %}
+          {%- if field == 'num_self_matches' and statistics['is_filtered'] %}
             <td valign="middle"><span class="hint--right" data-hint="Matches of the sample against itself are not part of the report's function matches, so this row cannot be narrowed and still counts the whole job.">{{ field }} (whole job)</span>: </td>
-          {% else %}
-            <td valign="middle">{{ field }}: </td>
-          {% endif %}
+          {%- else %}
+          <td valign="middle">{{ field }}: </td>
+          {%- endif %}
           <td style="text-align: right;" valign="middle">{{ statistics["minhash"][field] }}</td>
           <td style="text-align: right;" valign="middle">{{ statistics["pichash"][field] }}</td>
         </tr>

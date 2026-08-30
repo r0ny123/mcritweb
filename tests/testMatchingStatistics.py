@@ -156,5 +156,47 @@ def test_a_family_filtered_page_shows_that_familys_numbers(client, as_role):
     assert table["num_self_matches (whole job)"] == ("183", "50")
 
 
+#: Every filter `MatchingResult.applyFilterValues` understands, and whether it narrows
+#: `filtered_function_matches` - which is what the four recomputed fields count, and
+#: what the page's function table renders. The six that do not are not a bug in this
+#: table: they narrow the *sample* list and leave every function match in place, so the
+#: statistics and the function table below them stay in step. This is here because the
+#: comment in `matching_statistics.py` makes that claim and a comment cannot go red.
+FILTERS_AND_WHETHER_THEY_REACH_THE_STATISTICS = [
+    ({"filter_direct_min_score": 20}, False),
+    ({"filter_direct_nonlib_min_score": 20}, False),
+    ({"filter_frequency_min_score": 20}, False),
+    ({"filter_unique_only": True}, False),
+    ({"filter_exclude_own_family": True}, False),
+    ({"filter_family_name": "win.citadel"}, False),
+    ({"filter_exclude_library": True}, True),
+    ({"filter_exclude_pic": True}, True),
+    ({"filter_func_unique": True}, True),
+]
+
+
+@pytest.mark.parametrize(("filter_values", "reaches_the_statistics"), FILTERS_AND_WHETHER_THEY_REACH_THE_STATISTICS)
+def test_which_filters_the_statistics_follow(filter_values, reaches_the_statistics):
+    report = json.loads((FIXTURES / "matches_for_sample.result.json").read_text())
+
+    unfiltered = MatchingResult.fromDict(report)
+    filtered = MatchingResult.fromDict(report)
+    filtered.setFilterValues(filter_values)
+    filtered.applyFilterValues()
+
+    # every one of them narrows *something*, or the row below says nothing
+    assert (
+        len(filtered.filtered_sample_matches) < len(unfiltered.filtered_sample_matches)
+        or len(filtered.filtered_function_matches) < len(unfiltered.filtered_function_matches)
+    ), f"{filter_values} narrowed neither the samples nor the function matches"
+
+    statistics = matching_statistics(filtered)
+    assert statistics["is_filtered"] is reaches_the_statistics
+    if reaches_the_statistics:
+        assert statistics["minhash"]["num_own_functions_matched"] < matching_statistics(unfiltered)["minhash"]["num_own_functions_matched"]
+    else:
+        assert statistics["minhash"] == matching_statistics(unfiltered)["minhash"]
+
+
 if __name__ == "__main__":
     unittest.main()
