@@ -1819,3 +1819,52 @@ no reason to expect it to matter elsewhere.
 
 **Upstream after both pushes: 61 PRs, 61 green, 0 red, 0 running, all MERGEABLE, no
 review decisions or maintainer comments outstanding.**
+
+## Linking upstream PRs to the issues they close
+
+Asked to add `Closes #N` so a merge closes its issue, **but not for PRs that only partly
+address one**. 53 of the 60 name an issue in their branch (`fix/<issue>-<slug>`); the
+other 7 were found in passing and have no issue to link.
+
+The judgement was made from each PR's own words, not from the branch name:
+
+- **close** - the body opens with an unqualified "Fixes \<issue\>", *and* its "What I
+  didn't do" names no unaddressed ask **of that issue**
+- **leave** - anything qualified ("Part of #43", "the mcritweb-side half of #7", "Partly
+  addresses #101", "Implements the first half of #55"), the six ADR PRs that open "**No
+  code change**", and PRs whose caveats name something the issue actually asks for
+
+That last test changed several answers. #109 fixes the empty-search message but leaves
+the browse pages saying nothing, which is the same ask. #111 leaves hashed-tokens-at-rest,
+which #100 sequences explicitly. #119 leaves the compare pickers on the generic message.
+#142 says outright that "the sample-level filters still leave the statistics job-wide" -
+which *is* #38. #144 disables the `Show Loop Boundaries` checkbox that #69 asks for. #107
+leaves the same finished-but-empty hole in `data.linkhunt`. None of those close their
+issue, though all six open with "Fixes".
+
+Two that looked partial are not, and were checked rather than assumed:
+
+    #127 "No pagination, filtering or format options on the download. The issue asks for
+          the raw result; that's what this serves."
+    #131 "...left alone. They're a selection workflow rather than the browsing surface
+          #58 names."
+
+**Seven PRs gained a closing keyword**: #108→#98, #113→#79, #116→#52, #117→#41, #118→#61,
+#139→#35, #140→#93. Ten already had a working one.
+
+### Three PRs were closing an issue by accident, one of them the exact opposite of what it says
+
+GitHub's own `closingIssuesReferences` - not the body text, which is what I would have
+guessed from - showed three links nobody intended, all read out of ordinary prose:
+
+    #112  "...close #78 as fixed and open a..."          - describing an option
+    #134  "One note for whoever closes #40: ..."          - explicitly deferring
+    #158  "**I did not close #57.** It is a tracker..."   - saying it does NOT close it
+
+#158 is the one that mattered: it is the ADR for the Jobs **meta-issue**, it changes no
+code, it says in so many words that it does not close #57 - and merging it would have
+closed #57 anyway. Neutralised by putting the word "issue" between the keyword and the
+reference, which breaks GitHub's pattern and leaves the sentence intact.
+
+**Result, verified through the API rather than by reading bodies back: 17 of 61 PRs carry
+a closing link, to 17 distinct issues, and every one is a PR that fully resolves it.**
