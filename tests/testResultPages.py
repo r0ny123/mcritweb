@@ -10,6 +10,7 @@ renderer that miscounts a filtered report, fails here rather than in a browser.
 The reports come from a live instance - see tests/fixtures/regenerate.py.
 """
 
+import collections
 import copy
 import json
 import logging
@@ -20,21 +21,12 @@ from html.parser import HTMLParser
 
 import pytest
 from fixtureData import job_id_of, load
+from flask import template_rendered
 from mcrit.queue.LocalQueue import Job
-import collections
-import logging
-import re
-import unittest
-from html.parser import HTMLParser
-
-import pytest
-from fixtureData import job_id_of
 from mcrit.storage.MatchingResult import MatchingResult
 
-from mcritweb.views.data import count_aggregated_function_matches
-from flask import template_rendered
-
 from mcritweb.db import UserColumnSettings
+from mcritweb.views.data import count_aggregated_function_matches
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")

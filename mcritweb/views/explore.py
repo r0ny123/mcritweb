@@ -274,8 +274,6 @@ def families():
             # the id match can also come back as a text hit; keep its position, not a copy
             by_id.setdefault(entry.family_id, entry)
         families = list(by_id.values())
-    all_families = client.getFamilies()
-    family_names = [family_entry.family_name for family_entry in all_families.values()]
     user_column_setup = get_user_column_setup("family_table")
     return render_template("families.html", families=families, pagination=pagination, query=query, user_column_setup=user_column_setup)
 
