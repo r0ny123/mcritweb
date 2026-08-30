@@ -14,6 +14,7 @@ nobody has taught it still raises NotImplementedError naming itself, so the next
 is a message rather than a silently empty page.
 """
 
+import copy
 import json
 import pathlib
 import re
@@ -212,9 +213,26 @@ class CorpusMcritClient:
         self._record("getFunctionsByIds", function_ids, *args, **kwargs)
         return {int(fid): self._functions[int(fid)] for fid in function_ids if int(fid) in self._functions}
 
-    def getFunctionById(self, function_id, *args, **kwargs):
-        self._record("getFunctionById", function_id, *args, **kwargs)
-        return self._functions.get(int(function_id))
+    def getFunctionById(self, function_id, with_xcfg=False, *args, **kwargs):
+        """The entry, with its control flow graph only if it was asked for.
+
+        The backend keeps the disassembly in its own collection and injects it only
+        under `with_xcfg` (`MongoDbStorage.getFunctionById`), so an entry fetched
+        without the flag arrives with `xcfg` None - "not requested", as distinct from
+        the `{}` of "disassembly dropped". A fake that always handed the graph back
+        would let a caller that forgot the flag pass here and render nothing in
+        production, so the flag is honoured.
+
+        The stripped entry is a shallow copy: `xcfg` is rebound on the copy, never
+        mutated through it, so the shared corpus entry keeps its graph.
+        """
+        self._record("getFunctionById", function_id, *args, with_xcfg=with_xcfg, **kwargs)
+        entry = self._functions.get(int(function_id))
+        if entry is None or with_xcfg:
+            return entry
+        stripped = copy.copy(entry)
+        stripped.xcfg = None
+        return stripped
 
     def isFunctionId(self, function_id, *args, **kwargs):
         self._record("isFunctionId", function_id, *args, **kwargs)
@@ -251,7 +269,11 @@ class CorpusMcritClient:
         so one function contributes several rows when a block repeats inside it. The
         summary counts distinct ids per kind plus the number of matching blocks
         (`QueryResource.on_get_query_picblockhash_summary`). This is what the CFG
-        viewer's block tooltip asks for.
+        viewer's block tooltip asks for, through `/explore/getPicBlockMatches`, and
+        the summary branch is the one that route - and so the test suite - drives.
+        The full list is here because the real client answers it for `summary=False`;
+        mcritweb only reaches it through the `/api/` pass-through, which hands the
+        result to `handle_raw_response` and so needs a wire response, not a fake's.
         """
         self._record("getMatchesForPicBlockHash", picblockhash, summary=summary)
         matches = [
