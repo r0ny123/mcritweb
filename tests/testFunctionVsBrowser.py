@@ -19,10 +19,8 @@ module skips there rather than failing.
 
 import json
 import logging
-import threading
 
 import pytest
-from werkzeug.serving import make_server
 
 sync_api = pytest.importorskip("playwright.sync_api", reason="playwright is not installed")
 
@@ -46,24 +44,6 @@ FUNCTION_B = 943
 def fake_mcrit(corpus_mcrit):
     """Wire the app in this module to the captured corpus (see conftest)."""
     return corpus_mcrit
-
-
-@pytest.fixture
-def live_server(app):
-    """The app under test on a loopback port, for the seconds a test needs it.
-
-    `client` is a WSGI stub with no socket behind it, so a browser cannot reach it.
-    Port 0 lets the OS pick, so concurrent runs do not collide.
-    """
-    server = make_server("127.0.0.1", 0, app, threaded=True)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}"
-    finally:
-        server.shutdown()
-        thread.join(timeout=10)
-        server.server_close()
 
 
 @pytest.fixture
