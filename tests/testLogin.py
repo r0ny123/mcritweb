@@ -85,18 +85,87 @@ def test_an_unknown_username_costs_a_password_check(client, registered_user, mon
     assert checked == ["not the password"], "no password check ran for an absent user"
 
 
-def test_the_dummy_hash_never_admits_anyone():
+def test_the_dummy_hash_never_admits_anyone(app, registered_user):
     """It is a hash of a random secret, so nothing should verify against it - least of
     all the empty password, which is what an unauthenticated probe would send."""
     from werkzeug.security import check_password_hash
 
     from mcritweb.views import authentication
 
-    authentication._spend_a_password_check("")
+    with app.app_context():
+        authentication._spend_a_password_check("")
 
     assert authentication._ABSENT_USER_PASSWORD_HASH is not None
     for guess in ("", " ", "password", "admin"):
         assert not check_password_hash(authentication._ABSENT_USER_PASSWORD_HASH, guess)
+
+
+def test_the_dummy_costs_what_the_stored_passwords_cost(app):
+    """The message is not the only tell, and neither is the mere fact of hashing.
+
+    check_password_hash costs whatever the *stored* hash asks for. Werkzeug's default
+    has moved across the versions this app has been pinned to, and on werkzeug 3.1.8
+    one check costs 66 ms for pbkdf2:sha256:260000, 150 ms for pbkdf2:sha256:600000 and
+    93 ms for scrypt:32768:8:1. A dummy built with today's default would leave a ~30%
+    gap on any database whose rows predate the last upgrade - which is to say, on the
+    accounts an attacker most wants to find.
+
+    Asserting on the clock would be flaky. Asserting that the dummy carries the same
+    method as the stored hashes is the same claim without the flake, because the method
+    is exactly what determines the cost.
+    """
+    from mcritweb.views import authentication
+
+    legacy_method = "pbkdf2:sha256:260000"
+    with app.app_context():
+        user_info = UserInfo()
+        user_info.username = "legacy"
+        user_info.password = generate_password_hash(PASSWORD, method=legacy_method)
+        user_info.role = "visitor"
+        user_info.apitoken = "apitoken-legacy"
+        user_info.saveToDb()
+
+        authentication._ABSENT_USER_PASSWORD_HASH = None
+        authentication._ABSENT_USER_HASH_METHOD = None
+        authentication._spend_a_password_check("whatever")
+
+    assert authentication._ABSENT_USER_PASSWORD_HASH.split("$", 1)[0] == legacy_method
+
+
+def test_a_login_moves_an_old_hash_onto_the_current_method(app, client):
+    """One dummy cannot match two methods, so a table carrying a mix keeps a gap the
+    dummy cannot close. Rehashing on a password we have just verified is what makes it
+    converge - and it is safe precisely because the plaintext was just checked."""
+    from mcritweb.views import authentication
+
+    with app.app_context():
+        user_info = UserInfo()
+        user_info.username = "legacy"
+        user_info.password = generate_password_hash(PASSWORD, method="pbkdf2:sha256:260000")
+        user_info.role = "visitor"
+        user_info.apitoken = "apitoken-legacy"
+        user_info.saveToDb()
+
+    response = client.post("/login", data={"username": "legacy", "inputPassword": PASSWORD})
+    assert response.status_code == 302, "the old hash must still let its owner in"
+
+    with app.app_context():
+        stored = UserInfo.fromDb(username="legacy")
+        assert stored.password.split("$", 1)[0] == authentication._current_hash_method()
+        from werkzeug.security import check_password_hash
+        assert check_password_hash(stored.password, PASSWORD), "the rewritten hash must still verify"
+
+
+def test_a_current_hash_is_left_alone(app, client, registered_user):
+    """The rewrite has to be conditional - rehashing on every login is a write per
+    request and would churn the row for no gain."""
+    with app.app_context():
+        before = UserInfo.fromDb(username=registered_user).password
+
+    client.post("/login", data={"username": registered_user, "inputPassword": PASSWORD})
+
+    with app.app_context():
+        assert UserInfo.fromDb(username=registered_user).password == before
 
 
 if __name__ == "__main__":

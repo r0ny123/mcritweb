@@ -70,6 +70,22 @@ class UserInfo:
     def registration_date(self):
         return self.registered.strftime("%Y-%m-%d")
     
+def get_stored_password_hash_method():
+    """The hashing method the user table's passwords were made with, or None.
+
+    check_password_hash costs whatever the *stored* hash asks for, not whatever
+    generate_password_hash would pick today, and werkzeug's default has moved
+    (pbkdf2:sha256:260000 -> 600000 -> scrypt) across the versions this app has been
+    pinned to. Werkzeug writes the method into the hash ahead of the first '$', so the
+    answer can simply be read off a row. See issue #101 and _spend_a_password_check.
+    """
+    record = get_db().execute("SELECT password FROM user LIMIT 1;").fetchone()
+    if record is None or not record["password"]:
+        return None
+    method = record["password"].split("$", 1)[0]
+    return method or None
+
+
 def get_all_user_info():
     all_user_infos = []
     database = get_db() 
