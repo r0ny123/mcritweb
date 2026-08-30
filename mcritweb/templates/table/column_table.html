@@ -1,6 +1,15 @@
 {% from 'table/links.html' import format_pichash, format_function_id, format_family_name, format_family_id, format_sample_id, format_sha_short_clipboard, clipboard_btn %}
 
 {% macro sample_column_table()%}
+  {# A query is matched without being stored, so it has no family, version, component
+     or library flag - the backend sends those back empty and rendering them anyway
+     presented the queried binary as a member of family 0, captioned "Unnamed" (#40).
+     Only dropped when every sample here is a query: a query filtered to one matched
+     sample shows both, and that one does have them. #}
+  {% set identity = namespace(is_stored=false) %}
+  {% for name_and_sample in varargs %}
+    {% if name_and_sample[1].sample_id is not none and name_and_sample[1].sample_id >= 0 %}{% set identity.is_stored = true %}{% endif %}
+  {% endfor %}
   <table class="table table-hover">
     <thead class="thead-light">
       <tr>
@@ -12,14 +21,15 @@
     </thead>
     <tbody>
       <tr>
-        <td valign="middle">Sample ID | Family: </td>
+        <td valign="middle">Sample ID{% if identity.is_stored %} | Family{% endif %}: </td>
         {% for name_and_sample in varargs %}
-          <td valign="middle">{% if name_and_sample[1].sample_id < 0 %}*{{ name_and_sample[1].sample_id|abs }}{% else%}<a href="{{ url_for('explore.sample_by_id', sample_id=name_and_sample[1].sample_id) }}">{{ name_and_sample[1].sample_id }}</a>{% endif %} | 
-            {{ format_family_name(name_and_sample[1].family, name_and_sample[1].family_id) }}
+          <td valign="middle">{% if name_and_sample[1].sample_id < 0 %}*{{ name_and_sample[1].sample_id|abs }}{% else%}<a href="{{ url_for('explore.sample_by_id', sample_id=name_and_sample[1].sample_id) }}">{{ name_and_sample[1].sample_id }}</a>{% endif %}{% if identity.is_stored %} | 
+            {{ format_family_name(name_and_sample[1].family, name_and_sample[1].family_id) }}{% endif %}
           </td>
         {% endfor %}
       </tr>
 
+      {% if identity.is_stored %}
       <tr>
         <td valign="middle">Version | Component | Library: </td>
         {% for name_and_sample in varargs %}
@@ -29,6 +39,7 @@
             <i {% if name_and_sample[1].is_library %} style="color:green;" class="fa-solid fa-square-check" {% else %} style="color:darkred;" class="fa-solid fa-times-circle"> {% endif %}</i></td>
         {% endfor %}
       </tr>
+      {% endif %}
       <tr>
         <td valign="middle">SHA256 | Filename: </td>
         {% for name_and_sample in varargs %}
