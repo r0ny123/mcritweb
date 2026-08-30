@@ -62,6 +62,10 @@ Additionally, you can also use operands to further limit the term:
 Furthermore, search terms can be combined using the `AND` and `OR` directives, e.g. like so:
 * `family_id:1 AND offset:<=0x2399fff AND offset:>=0x2398fff`
 
+The result tables can be sorted by clicking a column header.
+The sort order you last chose is remembered separately for families, samples, and functions, and stays in effect for the rest of your browser session - a new search or a return to one of the lists keeps it, while logging out clears it.
+A link that already carries sort parameters always wins over the remembered order, so a shared URL shows everyone the same table.
+
 #### Families
 
 By default, there will be always a family with `family_id=0`, which is reserved for all samples that have not been assigned to another family with a `family_name`.
