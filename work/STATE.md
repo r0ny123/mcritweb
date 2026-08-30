@@ -60,7 +60,7 @@ every PR. It is not an upstream issue - see `work/LOG.md`, 22:05Z.
 | 93 | 18 | Configurable Unique Blocks page under Analyze | n/a (feature) | — | L | not started |
 | 80 | 19 | Block isolation table improvements | can't | — | M | not started |
 | 75 | 20 | Export raw results as JSON | n/a (feature) | — | M | PR opened — [#24](https://github.com/r0ny123/mcritweb/pull/24) |
-| 72 | 21 | Allow modifying functions (samples/families already possible) | n/a (feature) | — | L | **in progress** (worktree agent) |
+| 72 | 21 | Allow modifying functions (samples/families already possible) | n/a (feature) | — | — | **blocked upstream** — mcrit has no way to modify a function; see below |
 | 69 | 22 | FunctionVs: loop visualization correctness | can't (needs click-through) | — | M | not started |
 | 55 | 23 | "Rerun job" button | n/a (feature) | — | M | PR opened — [#30](https://github.com/r0ny123/mcritweb/pull/30) |
 | 58 | 24 | Search should remember last sort order | n/a (feature) | — | M | PR opened — [#28](https://github.com/r0ny123/mcritweb/pull/28) |
@@ -299,3 +299,53 @@ those were reset to their remotes and rebuilt.
 
 Severity: blocks a contributor's first `make test`. Effort: S. Status: **closed on all
 24 branches.**
+
+---
+
+## #72 — allow modifying functions: blocked upstream, with evidence
+
+This one cannot be done in mcritweb, and the reason was checked at three layers of the
+installed `mcrit` **1.8.1** — which is also the newest release on PyPI (1.6.1, 1.6.2,
+1.7.0, 1.7.1, 1.8.0, 1.8.1), so this is not a "bump the dependency" problem.
+`mcritweb` pins `mcrit>=1.5.3`.
+
+1. **`McritClient` has no function-mutating call.** Its entire `### Functions ###`
+   section is getters: `getFunctionsBySampleId`, `getFunctions`, `getFunctionsByIds`,
+   `isFunctionId`, `getFunctionById`. The mutating HTTP calls in the whole client are
+   `POST /respawn`, `POST /samples`, `POST /samples/binary`, `PUT /families/{id}`,
+   `DELETE /families/{id}`, `PUT /samples/{id}`, `DELETE /samples/{id}`,
+   `DELETE /jobs*`, `POST /import` — plus `POST /functions`, which is
+   `getFunctionsByIds`, a **read** that uses POST only because the id list travels in
+   the body.
+2. **The server exposes no route.** `mcrit/server/FunctionResource.py` defines
+   `on_get`, `on_post_collection`, `on_get_collection` — no `on_put`, `on_patch` or
+   `on_delete` — so a `PUT /functions/{id}` would answer 405.
+3. **The business layer has no such operation.** Every function method on
+   `MinHashIndex` is a read, and its own docstring listing the operations that "need
+   to be jobs to ensure database consistency" names exactly `deleteSample`,
+   `deleteFamily`, `modifyFamily`, `modifySample`. Functions are deliberately absent.
+
+The near-miss is `StorageInterface.updateFunctionLabels(smda_report, username)`, which
+is called only from inside `MinHashIndex.addReport`. It fires when a *whole sample* is
+submitted, takes a full `SmdaReport`, **appends** a `FunctionLabelEntry` rather than
+changing `FunctionEntry.function_name`, and is unreachable from `McritClient` except by
+re-uploading the entire sample — which mcritweb already offers as `data.submit`. It is
+not a per-function modify.
+
+**What upstream `fkie-cad/mcrit` would need**, mirroring the sample path:
+
+1. `MinHashIndex.modifyFunction(function_id, update_information)` plus a storage method
+   that writes `function_name` / `function_labels`, added to the job-redirected set
+   alongside `modifySample`;
+2. `FunctionResource.on_put` handling `PUT /functions/{function_id:int}` — the route
+   already exists for GET, so only the handler is needed;
+3. `McritClient.modifyFunction(...)` issuing that PUT, shaped like `modifySample`.
+
+Until at least (3) exists, any mcritweb form would post to a route whose only possible
+implementation calls a method that does not exist. **No PR is opened for #72 on
+purpose**: a form that cannot work is worse than none, and tests for it would assert a
+fiction — `RecordingMcritClient` will happily record a call the real client cannot make.
+
+**Caveat, stated:** `fkie-cad/mcrit`'s unreleased branch could not be read from here
+(the org is unreachable through this proxy). The evidence above is the newest published
+release. The three-layer list is the checklist to re-verify against if that changes.
