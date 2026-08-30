@@ -183,3 +183,43 @@ def test_a_failed_search_with_no_search_term_still_reads_as_a_sentence(client, a
 
     assert "Could not search MCRIT&#39;s samples - the backend did not answer." in page
     assert "for &#39;&#39;" not in page
+
+
+def test_an_uppercase_hash_finds_the_sample_that_is_there(client, as_role, fake_mcrit, monkeypatch):
+    """A hash pasted out of a report or a mail often arrives uppercase. The stored
+    value is a lowercase hexdigest and the backend's lookup is an exact match, so
+    forwarding the term unchanged reported a sample that is present as absent - a
+    confident wrong answer, which is the failure mode #79 exists to remove."""
+    as_role("visitor")
+    known = next(iter(fake_mcrit._samples.values()))
+    _search_fails(monkeypatch, fake_mcrit)
+
+    page = client.get(f"/explore/samples?query={known.sha256.upper()}", follow_redirects=True).get_data(as_text=True)
+
+    assert "is in the collection" not in page, "reported a known sample as absent"
+    assert f"does exist, as sample {known.sample_id}" in page
+
+
+def test_an_uppercase_hash_that_is_absent_is_still_reported_as_absent(client, as_role, fake_mcrit, monkeypatch):
+    """And the message quotes the hash the way it was typed, not the folded form."""
+    as_role("visitor")
+    _search_fails(monkeypatch, fake_mcrit)
+    typed = ABSENT_SHA256.upper()
+
+    page = client.get(f"/explore/samples?query={typed}", follow_redirects=True).get_data(as_text=True)
+
+    assert f"No sample with SHA-256 {typed} is in the collection." in page
+
+
+def test_the_lookup_is_asked_with_the_folded_hash(client, as_role, fake_mcrit, monkeypatch):
+    """Pinning the fold at the boundary rather than through the message, so a future
+    change to the wording cannot hide it."""
+    as_role("visitor")
+    known = next(iter(fake_mcrit._samples.values()))
+    _search_fails(monkeypatch, fake_mcrit)
+
+    client.get(f"/explore/samples?query={known.sha256.upper()}", follow_redirects=True)
+
+    asked = [call for call in fake_mcrit.calls if call[0] == "getSampleBySha256"]
+    assert asked, "the second opinion was never asked"
+    assert asked[-1][1][0] == known.sha256

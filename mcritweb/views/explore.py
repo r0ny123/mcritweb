@@ -75,7 +75,11 @@ def flash_sample_search_failed(client, query):
     """
     if SHA256_PATTERN.fullmatch(query or ""):
         try:
-            answer = sha256_second_opinion(query)
+            # samples store their hash lowercase (it is an SMDA hexdigest) and the
+            # backend's lookup is an exact match - `find_one({"sha256": ...})` - so an
+            # uppercase paste would come back 404 and be reported as absence. The
+            # message still quotes what the reader typed.
+            answer = sha256_second_opinion(query.lower())
         except Exception:
             # the lookup is a best-effort second opinion; if it fails too, the generic
             # message below is still true
