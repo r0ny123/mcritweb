@@ -174,9 +174,14 @@
 {% endmacro %}
 
 
-{% macro job_header(families_by_id, samples_by_id) %}
+{% macro job_header(families_by_id, samples_by_id, order_toggle=None, order_ascending=False) %}
   <tr>
-    <th scope="col">#</th>
+    {% if order_toggle %}
+      {# job number is the one order mcrit can apply to a whole queue - see data.jobs() #}
+      <th scope="col"><a href="{{ order_toggle }}" title="Order the whole queue by job number">#</a>&nbsp;<i class="fa fa-sort-{{ 'up' if order_ascending else 'down' }}"></i></th>
+    {% else %}
+      <th scope="col">#</th>
+    {% endif %}
     <th scope="col">Type</th>
     <th style="text-align: right;" scope="col">Started</th>
     <th style="text-align: right;" scope="col">Finished</th>

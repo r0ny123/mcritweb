@@ -748,19 +748,59 @@ def linkhunt_for_sample_or_query(job_info, matching_result: MatchingResult):
 # Listing Job information
 ################################################################
 
-@bp.route('/jobs',methods=('GET', 'POST'))
+def job_parameters_or_blank(job):
+    """`job.parameters`, or "" for a job whose payload cannot be read.
+
+    Job.parameters does not return None - it returns "" or raises. It calls json.loads
+    on payload["params"] and then .items() on the result, so a document whose params is
+    malformed, `null`, or a JSON array raises JSONDecodeError, AttributeError or
+    TypeError. One such job used to break the single page of the browse view that
+    showed it; filtering the whole category for a search would let it break every page
+    of the search instead. A job whose parameters cannot be read cannot contain the
+    search term either, so leaving it out is also the right answer.
+    """
+    try:
+        return job.parameters or ""
+    except Exception:
+        current_app.logger.exception("Could not read parameters for job %s", getattr(job, "job_id", "?"))
+        return ""
+
+
+@bp.route('/jobs')
 @visitor_required
 @mcrit_server_required
 def jobs():
-    query = None
-    if request.method == 'POST':
-        query = request.form['Search']
-    # used for job/method collections
+    # a search is a read, so it travels in the URL: the result is linkable, survives a
+    # refresh, and is carried by the pagination links, which build from request.args.
+    # It used to be a POST whose value was read and then never used - see issue #51.
+    query = request.args.get('Search', '').strip()
     client = get_client()
-    # sort order
+    # sort order. Job creation order is the only thing mcrit can sort a queue by, but it
+    # does sort the whole queue: mongoqueue's get_jobs orders by _id *before* it skips
+    # and limits, so `ascending` reorders the category rather than the page. Nothing in
+    # the chain from getQueueData down to the collection accepts a sort key, so Type,
+    # Started, Finished and Progress cannot be ordered across pages at all - see the note
+    # in jobs.html on why they are not offered as a client-side sort instead. Issue #51.
     ascending = request.args.get('ascending', 'false').lower() == "true"
+    # Carry what the page understands rather than all of request.args: the page number
+    # is deliberately dropped, because page 3 of one order is an unrelated slice of the
+    # other, and forwarding arbitrary keys would hand url_for its own reserved ones
+    # (`_method`, `_scheme`, ...) straight from the query string.
+    order_args = {key: value for key, value in request.args.items()
+                  if key in ("Search", "active", "state", "plimit", "l")}
+    order_args["ascending"] = "false" if ascending else "true"
+    order_toggle = url_for('data.jobs', **order_args)
     statistics = client.getQueueStatistics()
     job_template = Job(None, None)
+    # A cross compare runs as one getMatchesForSampleVsGroup job per sample plus a
+    # combineMatchesToCross job that merges them once they have all finished. mcrit's
+    # Job.method_types never learned about the group jobs, so without this they have no
+    # tab at all: browsing cannot reach them, the search cannot narrow them, and the
+    # "Matching" count leaves them out while the totals row above it counts them.
+    # This is issue #51's "what about cross jobs?" - the jobs a cross compare actually
+    # does the work in were the ones the page could not list.
+    for group in ("matching", "all"):
+        job_template.method_types[group].append("getMatchesForSampleVsGroup")
     # dynamically create the job page with nested menu based on groups from statistics and Job.method_types
     active_category = request.args.get('active', None)
     summarized_groups = {"matching": 0, "query": 0, "blocks": 0, "minhashing": 0, "collection": 0}
@@ -789,9 +829,10 @@ def jobs():
     pagination = None
     menu_configuration = {
         "menu": [
-            {"group": "matching", "title": f"Matching ({summarized_groups['matching']})", "active": active_category in ["getMatchesForSample", "getMatchesForSampleVs", "combineMatchesToCross"], "available": True, "submenu": [
+            {"group": "matching", "title": f"Matching ({summarized_groups['matching']})", "active": active_category in ["getMatchesForSample", "getMatchesForSampleVs", "getMatchesForSampleVsGroup", "combineMatchesToCross"], "available": True, "submenu": [
                 {"name": "getMatchesForSample", "title": f"getMatchesForSample ({sum(statistics['getMatchesForSample'].values()) if 'getMatchesForSample' in statistics else 0})", "active": "getMatchesForSample" == active_category, "available": "getMatchesForSample" in statistics},
                 {"name": "getMatchesForSampleVs", "title": f"getMatchesForSampleVs ({sum(statistics['getMatchesForSampleVs'].values()) if 'getMatchesForSampleVs' in statistics else 0})", "active": "getMatchesForSampleVs" == active_category, "available": "getMatchesForSampleVs" in statistics},
+                {"name": "getMatchesForSampleVsGroup", "title": f"getMatchesForSampleVsGroup ({sum(statistics['getMatchesForSampleVsGroup'].values()) if 'getMatchesForSampleVsGroup' in statistics else 0})", "active": "getMatchesForSampleVsGroup" == active_category, "available": "getMatchesForSampleVsGroup" in statistics},
                 {"name": "combineMatchesToCross", "title": f"combineMatchesToCross ({sum(statistics['combineMatchesToCross'].values()) if 'combineMatchesToCross' in statistics else 0})", "active": "combineMatchesToCross" == active_category, "available": "combineMatchesToCross" in statistics},
             ]}, 
             {"group": "query", "title": f"Query ({summarized_groups['query']})", "active": active_category in ["getMatchesForUnmappedBinary", "getMatchesForMappedBinary", "getMatchesForSmdaReport"], "available": True, "submenu": [
@@ -817,13 +858,27 @@ def jobs():
         ],
         "statistics": statistics
     }
-    if active_category is None:
-        max_count = statistics["totals"][state_category] if state_category in statistics["totals"] else 0
-        pagination = Pagination(request, max_count, limit=25, query_param="p", limit_param="l")
+    limit_param = "l" if active_category is None else "plimit"
+    if query:
+        # The backend's own `filter` cannot be used together with paging: it slices the
+        # page first and filters what is left (mcrit QueueRemoteCalls.getQueueData), so
+        # `start=0, limit=25, filter=x` answers "the matches among jobs 0-24", not "the
+        # first 25 matches". Asking for page 2 of a search would then skip matches, and
+        # page 1 of a search whose only hit is job 60 renders empty. Fetch the category
+        # unpaged and filter here, where the count that drives pagination is the count
+        # of things actually shown. `getQueueData(method=...)` with no start/limit is
+        # already how delete_job_by_id enumerates a category.
+        matches = client.getQueueData(method=active_category, state=state_category, ascending=ascending) or []
+        matches = [job for job in matches if query.casefold() in job_parameters_or_blank(job).casefold()]
+        pagination = Pagination(request, len(matches), limit=25, query_param="p", limit_param=limit_param)
+        jobs = matches[pagination.start_index:pagination.end_index]
     else:
-        max_count = sum(statistics[active_category].values()) if active_category else 0
-        pagination = Pagination(request, max_count, limit=25, query_param="p")
-    jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, ascending=ascending)
+        if active_category is None:
+            max_count = statistics["totals"][state_category] if state_category in statistics["totals"] else 0
+        else:
+            max_count = sum(statistics[active_category].values()) if active_category else 0
+        pagination = Pagination(request, max_count, limit=25, query_param="p", limit_param=limit_param)
+        jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, ascending=ascending)
     samples_by_id = {}
     families_by_id = {}
     if jobs:
@@ -834,7 +889,7 @@ def jobs():
         for job in jobs:
             if job.family_id is not None:
                 families_by_id[job.family_id] = client.getFamily(job.family_id)
-    return render_template('jobs.html', families=families_by_id, samples=samples_by_id, active=active_category, state=state_category, jobs=jobs, menu_configuration=menu_configuration, p=pagination, query=query)
+    return render_template('jobs.html', families=families_by_id, samples=samples_by_id, active=active_category, state=state_category, ascending=ascending, order_toggle=order_toggle, jobs=jobs, menu_configuration=menu_configuration, p=pagination, query=query, match_count=len(matches) if query else None)
 
 
 @bp.route('/jobs/<job_id>')
