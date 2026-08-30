@@ -18,7 +18,7 @@ MCRIT server unavailable
 {% endif %}
 {% if g.user and g.user.role == 'admin' %}
 <p>Check that the server is running and that its address in
-   <a href="{{ url_for('administration.server') }}">server settings</a> is correct,
+   <a href="{{ url_for('admin.server') }}">server settings</a> is correct,
    then try again.</p>
 {% else %}
 <p>Try again in a moment, or ask an administrator to check the server.</p>
