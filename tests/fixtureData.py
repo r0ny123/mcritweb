@@ -19,9 +19,13 @@ import json
 import pathlib
 import re
 
+import mcrit.matchers.MatcherFlags as MatcherFlags
+from mcrit.config.MinHashConfig import MinHashConfig
+from mcrit.minhash.MinHash import MinHash
 from mcrit.queue.LocalQueue import Job
 from mcrit.storage.FamilyEntry import FamilyEntry
 from mcrit.storage.FunctionEntry import FunctionEntry
+from mcrit.storage.MatchedFunctionEntry import MatchedFunctionEntry
 from mcrit.storage.SampleEntry import SampleEntry
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
@@ -299,6 +303,8 @@ class CorpusMcritClient:
         self._record("isFunctionId", function_id, *args, **kwargs)
         return int(function_id) in self._functions
 
+    # --- direct matching ---------------------------------------------------------
+
     def getMatchesForPicHash(self, pichash, summary=False, *args, **kwargs):
         """Every function sharing a PicHash, as the backend reports them.
 
@@ -350,6 +356,41 @@ class CorpusMcritClient:
             "samples": len({match[1] for match in matches}),
             "functions": len({match[2] for match in matches}),
             "offsets": len(matches),
+        }
+
+    def getMatchFunctionVs(self, function_id_a, function_id_b, *args, **kwargs):
+        """The four entries and the match tuple the function-vs page is built from.
+
+        Scored the way MinHashIndex.getMatchesFunctionVs does it - the minhashes are
+        in the captured entries, so the score is computed here rather than invented,
+        and the flags follow the same three rules.
+        """
+        self._record("getMatchFunctionVs", function_id_a, function_id_b)
+        entry_a = self._functions.get(int(function_id_a))
+        entry_b = self._functions.get(int(function_id_b))
+        if entry_a is None or entry_b is None:
+            return None
+        sample_a = self._samples[entry_a.sample_id]
+        sample_b = self._samples[entry_b.sample_id]
+        bits = MinHashConfig().MINHASH_SIGNATURE_BITS
+        minhash_a = entry_a.getMinHash(minhash_bits=bits).minhash
+        minhash_b = entry_b.getMinHash(minhash_bits=bits).minhash
+        score = None
+        if minhash_a and minhash_b:
+            score = MinHash.calculateMinHashScore(minhash_a, minhash_b, minhash_bits=bits)
+        flags = 0
+        flags += MatcherFlags.IS_MINHASH_FLAG if score is not None and score >= MinHashConfig().MINHASH_MATCHING_THRESHOLD else 0
+        flags += MatcherFlags.IS_PICHASH_FLAG if entry_a.pichash == entry_b.pichash else 0
+        flags += MatcherFlags.IS_LIBRARY_FLAG if sample_b.is_library else 0
+        match_tuple = [entry_b.family_id, entry_b.sample_id, entry_b.function_id, score, flags]
+        return {
+            "function_entry_a": entry_a.toDict(),
+            "function_entry_b": entry_b.toDict(),
+            "sample_entry_a": sample_a.toDict(),
+            "sample_entry_b": sample_b.toDict(),
+            "match_entry": MatchedFunctionEntry(
+                int(function_id_a), entry_a.binweight, entry_a.offset, match_tuple
+            ).toDict(),
         }
 
     # --- job submission ----------------------------------------------------------
