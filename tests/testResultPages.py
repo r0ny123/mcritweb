@@ -11,6 +11,7 @@ The reports come from a live instance - see tests/fixtures/regenerate.py.
 """
 
 import logging
+import re
 import unittest
 
 import pytest
@@ -80,6 +81,35 @@ def test_job_page_renders_for_a_finished_job(client, as_role):
     as_role("visitor")
     response = client.get(f"/data/jobs/{job_id_of('matches_for_sample')}")
     assert response.status_code == 200
+
+
+# every score cell renders the exact percentage into its hover text and an integer
+# into the cell itself:  ... Percent: 85.88%">  85</span>
+SCORE_CELL = re.compile(r"Percent:\s*(\d+\.\d+)%\">\s*(-?\d+)\s*</span>")
+
+
+def score_cells(page):
+    """(exact percent, integer shown) for every score cell on a rendered page."""
+    return [
+        (float(percent), int(shown))
+        for percent, shown in SCORE_CELL.findall(page)
+    ]
+
+
+@pytest.mark.parametrize("report", ["matches_for_sample", "matches_for_sample_vs", "matches_for_query"])
+def test_score_columns_round_rather_than_truncate(client, as_role, report):
+    """`%d` truncates toward zero, so a sample scoring 85.88 showed as 85 - a whole
+    point below what the tooltip on the same cell says, and 0.76 showed as 0 next to
+    a neighbour at 1.04 that had scored barely more (issue #7).
+    """
+    as_role("visitor")
+    response = client.get(f"/data/result/{job_id_of(report)}")
+    assert response.status_code == 200
+
+    cells = score_cells(response.data.decode())
+    assert cells, f"{report} rendered no score cells to check"
+    off_by_one = [(exact, shown) for exact, shown in cells if shown != round(exact)]
+    assert not off_by_one, f"{report}: score cells not rounded: {off_by_one}"
 
 
 if __name__ == "__main__":
