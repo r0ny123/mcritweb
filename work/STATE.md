@@ -2,6 +2,36 @@
 
 Live document. Updated after every issue, not at the end.
 
+> **Current state, 2026-08-31.** Read this box before the table; several statements
+> further down were written on 2026-08-29 and are corrected here rather than deleted, so
+> the change is visible.
+>
+> - **54 open issues, all with a PR. 44 of them now carry a `Closes #N` link** and will
+>   close on merge. **10 will not**, deliberately - see "The ten that do not close" below.
+> - Every PR exists **twice**: on the fork `r0ny123/mcritweb`, and upstream on
+>   `fkie-cad/mcritweb` as **#103-#162**. The table below still cites only the fork
+>   numbers; `work/SUMMARY.md` carries the full upstream map.
+> - **A real MCRIT backend WAS available and was used**, which contradicts the
+>   "Reproduction environment" paragraph below as originally written. MongoDB 8.0.29 plus
+>   mcrit 1.8.1 on real mongo storage were run on 2026-08-30: 29 pages walked with no
+>   500s, the path-traversal fix re-verified against it, and two real queries submitted
+>   through the UI and rendered back. Several rows below still say `can't` for that
+>   reason; those cells are corrected in place with `(was: ...)`.
+> - **The suite baseline of "239 passed" below is the old Linux figure.** On this machine
+>   a clean `master` is **235 passed, 4 failed**, and all four are platform artefacts -
+>   one asserts POSIX mode bits on NTFS, three fail in `tearDown` because Windows will not
+>   unlink an open sqlite file. Branch suites now run from ~242 to ~365 passed.
+>
+> ### The ten that do not close, and why
+>
+> | issue | why not |
+> |---|---|
+> | #34 | shingles are discarded by `MinHasher` and `MINHASH_TRACK_SHINGLES` defaults off - all 609 captured functions carry `{}`. Needs a new mcrit endpoint. |
+> | #37, #47, #48, #57, #59, #72 | the six ADR issues: the fix is not this repository's to make, and each PR ships the ADR saying so. |
+> | #64 | `_search_base` is the only `McritClient` accessor that neither deserialises nor honours `self.raw`. mcritweb is now self-consistent; the rest is upstream (ADR-0010). |
+> | #74 | box 1 (graph sync) is done; box 2 needs a 1:1 block correspondence that does not exist - 174 of 230 matched blocks are ambiguous. Recommended for its own issue. |
+> | #76 | **the one issue with no PR of its own.** Partially addressed by `fix/77`, which took functions out of the default search set so the scan no longer runs unasked; an explicit function search is still slow, and that is mcrit's unindexed regex. Genuinely unfinished. |
+
 **Coverage: 54 of 54 open issues have a PR.** The status column of the table below was
 rebuilt mechanically at the end of the campaign - every row's cell is generated from the
 actual `fix/*` branch and its actual PR number, not written by hand - so the claim is
@@ -31,11 +61,17 @@ verified to be complete — the count matches GitHub's own "Issues 54" header ex
 Codebase under triage: `r0ny123/mcritweb` @ `df53db9` (identical to `origin/master`),
 which tracks upstream v1.4.8.
 
-**Reproduction environment:** `work/SETUP.md`. Short version — the offline suite and
+**Reproduction environment:** `work/SETUP.md`. ~~Short version — the offline suite and
 `ruff` run clean (239 passed), the app boots, and pages can be walked against the
 project's own captured corpus through `work/harness/devserver.py`. There is **no real
 MCRIT backend** (no MongoDB, no docker daemon), so anything whose symptom needs a
-populated Mongo collection is marked `can't` with the reason.
+populated Mongo collection is marked `can't` with the reason.~~
+
+**Superseded 2026-08-30.** The offline harness is still how most of this was reproduced,
+but the second sentence stopped being true: MongoDB 8.0.29 and mcrit 1.8.1 on real mongo
+storage were stood up and used (`work/LOG.md`). The suite figure is also wrong for this
+machine - see the box at the top. Rows still marked `can't` on backend grounds are
+annotated where that was later disproved; the rest stand.
 
 ## Severity ladder used
 
@@ -80,10 +116,10 @@ every PR. It is not an upstream issue - see `work/LOG.md`, 22:05Z.
 | 66 | 16 | Import page gives no progress indication | **yes** (measured, headless Chromium) | UX | M | PR [#32](https://github.com/r0ny123/mcritweb/pull/32) — `fix/66-import-progress` |
 | 99 | 17 | Result template rendering only covered for five report types | n/a (meta) | — | L | PR [#26](https://github.com/r0ny123/mcritweb/pull/26) — `fix/99-result-template-coverage` |
 | 93 | 18 | Configurable Unique Blocks page under Analyze | n/a (feature) | — | L | PR [#38](https://github.com/r0ny123/mcritweb/pull/38) — `fix/93-configurable-unique-blocks` |
-| 80 | 19 | Block isolation table improvements | can't | — | M | PR [#45](https://github.com/r0ny123/mcritweb/pull/45) — `fix/80-block-isolation-table` |
+| 80 | 19 | Block isolation table improvements | **yes**, later (was: can't) - clipboard driven in Chromium at 30 B to 112 KB; the real defect was the Block column wrapping on a character count and cutting hex bytes in half, 41 of 51 | — | M | PR [#45](https://github.com/r0ny123/mcritweb/pull/45) — `fix/80-block-isolation-table` |
 | 75 | 20 | Export raw results as JSON | n/a (feature) | — | M | PR [#24](https://github.com/r0ny123/mcritweb/pull/24) — `fix/75-download-raw-result` |
 | 72 | 21 | Allow modifying functions (samples/families already possible) | n/a (feature) | — | — | PR [#51](https://github.com/r0ny123/mcritweb/pull/51) — `fix/72-function-labels-blocked-upstream` |
-| 69 | 22 | FunctionVs: loop visualization correctness | can't (needs click-through) | — | M | PR [#42](https://github.com/r0ny123/mcritweb/pull/42) — `fix/69-functionvs-loop-visualisation` |
+| 69 | 22 | FunctionVs: loop visualization correctness | **yes**, later (was: can't - needs click-through) - driven in Chromium; the checkbox toggled `#bgFill`, which nothing on this page creates | — | M | PR [#42](https://github.com/r0ny123/mcritweb/pull/42) — `fix/69-functionvs-loop-visualisation` |
 | 55 | 23 | "Rerun job" button | n/a (feature) | — | M | PR [#30](https://github.com/r0ny123/mcritweb/pull/30) — `fix/55-rerun-job` |
 | 58 | 24 | Search should remember last sort order | n/a (feature) | — | M | PR [#28](https://github.com/r0ny123/mcritweb/pull/28) — `fix/58-remember-sort-order` |
 | 56 | 25 | Mark id/SHA matches in search (blocked on #53) | n/a (feature) | — | M | PR [#21](https://github.com/r0ny123/mcritweb/pull/21) — `fix/56-listing-pages-drop-id-matches` |
@@ -91,14 +127,14 @@ every PR. It is not an upstream issue - see `work/LOG.md`, 22:05Z.
 | 50 | 27 | Table widgets for result-page tables | n/a (refactor) | — | L | PR [#50](https://github.com/r0ny123/mcritweb/pull/50) — `fix/50-deduplicate-result-tables` |
 | 45 | 28 | Mark the search term in results | n/a (feature, labelled `wait`) | — | M | PR [#33](https://github.com/r0ny123/mcritweb/pull/33) — `fix/45-mark-the-search-term` |
 | 48 | 29 | Minify/prettify HTML | n/a (feature) | — | M | PR [#52](https://github.com/r0ny123/mcritweb/pull/52) — `fix/48-minification-measured` |
-| 63 | 30 | Optimize browser performance (render-blocking JS) | can't measure here | — | L | PR [#23](https://github.com/r0ny123/mcritweb/pull/23) — `fix/63-page-specific-libraries` |
+| 63 | 30 | Optimize browser performance (render-blocking JS) | **measured**, later (was: can't measure here) - cold first paint 8112 ms, 3872 ms after, 1024 ms with gzip in the proxy | — | L | PR [#23](https://github.com/r0ny123/mcritweb/pull/23) — `fix/63-page-specific-libraries` |
 | 62 | 31 | Preload navbar icons | **yes** (measured with headless Chromium) | UX | S | PR [#17](https://github.com/r0ny123/mcritweb/pull/17) — `fix/62-preload-navbar-icons` |
 | 60 | 32 | Consider htmx for table reload + pagination | n/a (refactor) | — | L | PR [#60](https://github.com/r0ny123/mcritweb/pull/60) — `fix/60-pagination-spinner` |
-| 68 | 33 | Improve MatchingResults performance | can't measure here | — | L | PR [#43](https://github.com/r0ny123/mcritweb/pull/43) — `fix/68-result-page-performance` |
-| 67 | 34 | Investigate export→import bugs | can't (needs a real backend) | — | L | PR [#48](https://github.com/r0ny123/mcritweb/pull/48) — `fix/67-cfg-without-an-xcfg` |
+| 68 | 33 | Improve MatchingResults performance | **measured**, later (was: can't measure here) - first render 84.6 to 25.0 ms; cache read 170.8 to 16.1 ms at 40 copies | — | L | PR [#43](https://github.com/r0ny123/mcritweb/pull/43) — `fix/68-result-page-performance` |
+| 67 | 34 | Investigate export→import bugs | **yes**, later (was: can't - needs a real backend) - five round trips incl. a live mongo-backed server; nothing changes beyond remapped ids | — | L | PR [#48](https://github.com/r0ny123/mcritweb/pull/48) — `fix/67-cfg-without-an-xcfg` |
 | 40 | 35 | Polish query matching results (filename missing, job name) | **yes** (3 of 5 complaints) | wrong behaviour | M | PR [#31](https://github.com/r0ny123/mcritweb/pull/31) — `fix/40-query-result-identity` |
 | 39 | 36 | Inconsistent names between job and result - six headings render *empty* | **yes** (measured) | wrong behaviour | M | PR [#19](https://github.com/r0ny123/mcritweb/pull/19) — `fix/39-one-name-per-job-method` |
-| 38 | 37 | Filter 'Matching Method Statistics' with the result | can't (needs backend) | — | M | PR [#40](https://github.com/r0ny123/mcritweb/pull/40) — `fix/38-filter-the-matching-statistics` |
+| 38 | 37 | Filter 'Matching Method Statistics' with the result | **yes**, later (was: can't - needs backend) - a 1-vs-1 report's `?samid=` page does render offline | — | M | PR [#40](https://github.com/r0ny123/mcritweb/pull/40) — `fix/38-filter-the-matching-statistics` |
 | 36 | 38 | Job list tabs do not change the URL, so back/refresh lose the tab | **yes** (plus a 500) | wrong behaviour | M | PR [#29](https://github.com/r0ny123/mcritweb/pull/29) — `fix/36-job-tab-in-the-url` |
 | 34 | 39 | Improve function pages (accordion, minhash flag, analyze button, shingles) | n/a (feature) | — | L | PR [#35](https://github.com/r0ny123/mcritweb/pull/35) — `fix/34-function-page-api-usage` |
 | 32 | 40 | Show the MinHash matching parameter in job results | n/a (feature) | — | M | PR [#25](https://github.com/r0ny123/mcritweb/pull/25) — `fix/32-show-band-setting` |
@@ -107,16 +143,16 @@ every PR. It is not an upstream issue - see `work/LOG.md`, 22:05Z.
 | 44 | 43 | Treat "dedumped" filenames as unmapped? (open question) | n/a (question) | — | — | PR [#39](https://github.com/r0ny123/mcritweb/pull/39) — `fix/44-dedumped-is-not-a-dump` |
 | 43 | 44 | Handle all kinds of errors from McritClient | **yes** (transport half: 4 of 5 failure modes were HTTP 500) | crash | M | PR [#27](https://github.com/r0ny123/mcritweb/pull/27) — `fix/43-backend-transport-errors` |
 | 37 | 45 | Annotate jobs with user uuids (labelled `wait`) | n/a (feature) | — | L | PR [#55](https://github.com/r0ny123/mcritweb/pull/55) — `fix/37-jobs-carry-no-owner` |
-| 46 | 46 | Cross job duration/progress is meaningless (labelled `wait`) | can't (backend) | — | M | PR [#47](https://github.com/r0ny123/mcritweb/pull/47) — `fix/46-cross-job-duration` |
+| 46 | 46 | Cross job duration/progress is meaningless (labelled `wait`) | **yes**, later (was: can't - backend) - reproduced with the captured cross compare rewound to before a worker took it | — | M | PR [#47](https://github.com/r0ny123/mcritweb/pull/47) — `fix/46-cross-job-duration` |
 | 47 | 47 | Queue result cache destroyed by force rematch | can't (backend) | — | M | PR [#53](https://github.com/r0ny123/mcritweb/pull/53) — `fix/47-job-cache-belongs-to-mcrit` |
 | 57 | 48 | META: Jobs (tracker) | n/a (meta) | — | — | PR [#56](https://github.com/r0ny123/mcritweb/pull/56) — `fix/57-jobs-tracker-state` |
 | 59 | 49 | Compound index for search | can't (backend) | — | M | PR [#54](https://github.com/r0ny123/mcritweb/pull/54) — `fix/59-search-indexes-belong-to-mcrit` |
 | 64 | 50 | McritClient should return objects | can't (backend) | — | M | PR [#41](https://github.com/r0ny123/mcritweb/pull/41) — `fix/64-deserialize-the-function-listing` |
 | 70 | 51 | Dark mode (labelled `wait`) | n/a (feature) | — | L | PR [#59](https://github.com/r0ny123/mcritweb/pull/59) — `fix/70-tokenise-the-palette` |
 | 74 | 52 | FunctionVs: graph sync, combined view | n/a (feature) | — | L | PR [#49](https://github.com/r0ny123/mcritweb/pull/49) — `fix/74-synchronise-the-cfg-panes` |
-| 76 | 53 | Function search ~30s when nothing matches | can't (needs a large real DB) | — | ? | PR [#44](https://github.com/r0ny123/mcritweb/pull/44) — the mcritweb half ships under `fix/77-explore-page-backend-calls` as `DEFAULT_SEARCH_TYPES` (`explore.py:32`, comment names #76); the scan itself is `mcrit`'s |
-| 77 | 54 | Sample search is slow too | can't (needs a large real DB); no body | — | ? | PR [#44](https://github.com/r0ny123/mcritweb/pull/44) — `fix/77-explore-page-backend-calls` |
-| 7 | 55 | Verify the nonlib frequency score calculation | can't (scoring lives in the backend) | — | ? | PR [#46](https://github.com/r0ny123/mcritweb/pull/46) — `fix/7-round-the-score-columns` |
+| 76 | 53 | Function search ~30s when nothing matches | **partly** (was: can't - needs a large real DB) - the unasked scan is gone; the remaining cost is mcrit's unindexed regex | — | ? | PR [#44](https://github.com/r0ny123/mcritweb/pull/44) — the mcritweb half ships under `fix/77-explore-page-backend-calls` as `DEFAULT_SEARCH_TYPES` (`explore.py:32`, comment names #76); the scan itself is `mcrit`'s |
+| 77 | 54 | Sample search is slow too | **measured** (was: can't - needs a large real DB) - 2003 mongo ops and 52,000 docs per page view became 3 and 2,500 | — | ? | PR [#44](https://github.com/r0ny123/mcritweb/pull/44) — `fix/77-explore-page-backend-calls` |
+| 7 | 55 | Verify the nonlib frequency score calculation | **yes**, later (was: can't - scoring lives in the backend) - formula transcribed and reproduced against all 150 shipped cells to 1e-9 | — | ? | PR [#46](https://github.com/r0ny123/mcritweb/pull/46) — `fix/7-round-the-score-columns` |
 
 `n/a (feature)` in the *reproduced* column means the issue describes something absent
 rather than something broken, so "reproduce" reduces to confirming it is still absent —
