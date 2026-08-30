@@ -562,3 +562,100 @@ worse than no guard, because it is read as evidence.
   with `famid` never passed to that template.
 
 None of these have issue numbers. Each gets its own PR.
+
+---
+
+## 2026-08-30, ~05:00Z — three PRs landed, and a Codex finding that hit 23 of them
+
+### PRs opened
+
+| PR | issue | what |
+|---|---|---|
+| [#24](https://github.com/r0ny123/mcritweb/pull/24) | 75 | export a job's raw result as a JSON download |
+| [#25](https://github.com/r0ny123/mcritweb/pull/25) | 32 | show the MinHash matching setting a job was submitted with |
+| [#26](https://github.com/r0ny123/mcritweb/pull/26) | 99 | measure which result templates the suite actually renders |
+
+All three were implemented in isolated worktrees, then reviewed by me before landing.
+
+#26 is worth noting for what it *found*: the coverage measurement itself is the
+deliverable, but writing it surfaced two shipped bugs that no status-code assertion
+could ever see, because both pages return 200 while saying nothing —
+`result_corrupted.html` rendered an empty job id and a delete button pointing at
+`/data/jobs//delete`, and `result_compare_function.html` printed
+"Showing matches against family:" and then stopped. Both measured, both fixed.
+
+### A correction I made before pushing #25
+
+The implementation's docstring claimed "mcritweb never sends minhash_threshold".
+That is false — `views/api.py:195` reads it off the query string and forwards it
+through `McritClient`, which sends it as `minhash_score`. Rewrote the paragraph to say
+what is actually true: mcritweb's own *submit forms* only ever set
+`band_matches_required`, and the API proxy forwards whatever a caller supplies.
+
+Same rule as before, applied to prose this time: a comment that is wrong is not a
+smaller problem than code that is wrong. It is a *worse* one, because it is read as
+established fact by the next person.
+
+### Codex found a defect in 23 of my 24 open PRs at once
+
+Codex, reviewing #26, flagged `Makefile`: the `init` target still ran
+`pip install -r requirements.txt` alone, so a fresh checkout that follows the README
+lands without pytest and `make test` fails with "No module named pytest" — the exact
+failure the CI commit on that branch fixes *for the runner*, left unfixed for a human.
+
+Verified the chain rather than taking it on faith:
+
+```
+$ grep -ci pytest requirements.txt
+0
+$ python -c "import importlib.metadata as md; print([r for r in md.requires('mcrit') if 'pytest' in r])"
+['pytest; extra == "dev"', 'pytest-cov; extra == "dev"']
+```
+
+`requirements.txt` asks for plain `mcrit>=1.5.3`, so the `dev` extra is never
+requested and nothing brings pytest in transitively. The finding is correct.
+
+**The blast radius was the real story.** I had already fixed this once, on
+`fix/ci-install-pytest` (PR #9) — and then cherry-picked the *older*, unfixed commit
+`8268666` onto every other branch. So the defect was sitting in 23 open PRs, and
+Codex happened to flag it on the one it was reviewing.
+
+Fixing it only where it was flagged would have been the wrong call. Ported the
+corrected `Makefile` and matching `AGENTS.md` onto all 23 branches — one plain commit
+each, no force-push, no history rewritten — and verified before pushing that every
+branch had exactly two files in its top commit and nothing else.
+
+### That verification caught a second problem
+
+The pre-push sweep found `work/harness/cookies.txt` present in the *local* copies of
+four branches (52, 61, 78, 98) though absent from all the remotes. Those four local
+refs were one commit behind: they had never picked up the remote's delete commit, so
+my new Makefile commit had been built on a base that still carried the file. Pushing
+them would have silently reintroduced it into four PRs.
+
+Reset those four to their remotes and rebuilt the commit on the clean base.
+
+**The standing rule earns its keep again:** verify the tree you are about to push,
+not the tree you believe you are about to push. `git show --stat` before every push
+caught the first version of this; a full `git ls-tree` sweep across all branches
+caught this one. Neither would have been caught by looking at the diff I intended.
+
+### Fleet dispatched
+
+Six implementation agents running in isolated worktrees on issues **36, 40, 45, 55,
+58, 66**. Each briefed with the full process — reproduce first, failing test first,
+smallest viable change, hostile self-review to zero findings, full suite plus ruff —
+and told explicitly *not* to commit or push. I review every diff before it lands.
+
+Two got extra constraints worth recording:
+
+- **#45 (mark the search term in results)** is an XSS trap. Highlighting user input
+  inside output where the *haystack is also attacker-controlled* — sample filenames in
+  a malware-analysis UI are named by the adversary — is the classic way to introduce
+  it. Briefed to justify its escaping argument in full and to write tests that
+  actually attempt the attack, both through the query and through a sample name, and
+  to not ship if it cannot be made provably safe.
+- **#55 (rerun job)** can reconstruct the *wrong* request. Briefed that offering the
+  button for a job whose original request cannot be faithfully rebuilt is worse than
+  not offering it at all: it would silently run a different analysis than the user
+  believes they re-ran.
