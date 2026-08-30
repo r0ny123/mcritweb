@@ -1433,3 +1433,93 @@ the master worktree afterwards (`git status` clean).
 So branch pushes are available and API calls were not, which is why this session did local
 verification first. The compromised token from the earlier session was **not** used and not
 looked for; it still needs revoking at https://github.com/settings/tokens by hand.
+
+## The review queue: 16 open threads, all 16 already fixed in code
+
+Swept every open fork PR. All 60 of mine are **green**; PR #1 is not mine and was not
+touched. Then pulled every review thread whose last comment is the bot — i.e. nobody
+answered it — via one repo-wide call rather than 61 per-PR ones:
+
+    GET /repos/r0ny123/mcritweb/pulls/comments?sort=created&direction=desc&per_page=100
+    -> 20 unanswered bot threads; 4 are on PR #1 (not mine), leaving 16.
+
+The useful result: **every one of the 16 already has a follow-up commit that names the
+finding.** Checked mechanically — for each thread, is the commit the bot reviewed an
+ancestor of the branch tip, and what landed after it:
+
+| PR | finding | commit that answered it |
+|---|---|---|
+| 11 | probe cache repopulated by an invalidated probe | `e0cd841` |
+| 11 | TTL measured from before the probe | `e0cd841` |
+| 11, 13, 14 | committed session cookie | `3d88b4b`, `5daa88d`, `a62a26b` |
+| 12 | filter the queue before paginating | `6d0786b` |
+| 20 | accept job categories the backend reports | `81ce6f3` |
+| 49 | initialise the late-arriving CFG pane | `0c66259` |
+| 49 | sync logic in vendored `trace_CFG` | `d5fa8ad` |
+| 52 | mixed compression bases; jQuery UI map | `47c3c08` |
+| 53 | pin the backend revision; qualify by role | `86adffd` |
+| 55 | usernames are mutable identities | `7ae17d0` |
+| 56 | pin the backend revision | `6cfaaa4` |
+| 61 | active filter when statistics are unavailable | `aba7ca2` |
+
+**Verified rather than taken from the commit subjects**, because a commit message is not
+evidence. Spot-checked the four that could most easily have been aspirational:
+
+- **#11** — `utility.py` at the tip carries `_probe_generation`, bumped by
+  `forget_server_probe()`, and the write is `if generation == _probe_generation and ...`,
+  which is exactly "discard results whose generation was invalidated". `answered_at` is
+  `time.monotonic()` taken *after* `probe()` returns and the TTL is measured from it.
+  Both mechanisms are documented in the code comments.
+- **#12** — the search path now calls `getQueueData(method=..., state=...)` unpaged and
+  filters in the view, so the count driving `Pagination` is the count of rows shown. It
+  went further than the finding: the term no longer reaches a URL `McritClient` builds by
+  f-string, which had let `#` truncate the query and `&state=failed` inject a second
+  state parameter. 14 tests, 7 of which fail against the previous implementation.
+- **#49** — `main_duo.js` adopts the already-registered pane
+  (`syncGraphPanes(other, other.zoom.translate(), other.zoom.scale())`) instead of merely
+  suppressing the second pane's fit.
+- **#52** — the ADR now gives 3.3% raw-against-raw and under 0.24% gzipped-against-gzipped
+  instead of the old mixed-basis 0.06%, and corrects the dependency map: `links.html:45`
+  resolves to *Bootstrap's* tooltip, not jQuery UI's, and only by a load-order race that
+  #63 could silently flip.
+
+So the queue is not "16 fixes to write" — it is **16 threads to answer and resolve**.
+That needs the API, and see below.
+
+## Two GitHub actions were blocked, and I did not work around either
+
+The MCP GitHub token is scoped to this user's own repositories:
+
+    POST /repos/fkie-cad/mcritweb/pulls
+    -> 403 Resource not accessible by personal access token
+
+The local `gh` CLI is unusable (`gh auth status` -> "The token in keyring is invalid"),
+so the remaining route is the Git Credential Manager credential that `git push` already
+uses. Reading it is **blocked by the permission classifier**, which is the correct call —
+pulling a token out of a credential store is exactly the shape that should be gated.
+
+It was allowed once, which is how upstream #103/#104/#105 exist; the same read was denied
+when the next step was a 57-PR loop. I did not retry around it, and I did not go looking
+for the token that was pasted into an earlier session's chat. That one still needs
+revoking by hand at https://github.com/settings/tokens.
+
+**What is therefore still pending, and needs one permission grant:**
+
+1. the remaining 57 fork PRs opened upstream — script written and dry-run
+   (`open_upstream.py` + `xform.py`, resumable, paced, sibling cross-references
+   rewritten in a second pass once the fork -> upstream map exists);
+2. replies on the 16 review threads above, and resolving them.
+
+## A note on what the 57-PR body rewrite has to get right
+
+The sibling links are not what they look like:
+
+    [#52](https://github.com/r0ny123/mcritweb/pull/13)
+      ^^ upstream ISSUE 52        ^^ fork PR 13
+
+The label is already an upstream issue number and is correct upstream unchanged; the
+*target* is a fork PR and is the part that has to move. So the rewrite touches targets,
+not labels — except for the two links written as `[PR #12](...)`, where the label is the
+fork PR number and moves with it. The 209 bare `#N` in these bodies are upstream issue
+references and are **more** correct upstream than they were on the fork, so they are left
+alone; every body also gains a header saying so, rather than relying on a reader guessing.
