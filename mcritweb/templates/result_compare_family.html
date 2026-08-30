@@ -64,7 +64,7 @@ Results for Job: {{ job_info.job_id }}
 
 <h3>MCRIT Diagram</h3>
 <p>Showing: foreign family match frequency, library matches, best foreign family match scores.</p>
-{{ match_diagram(job_info.job_id + '-famid_%d' % famid + '.png', diagram_size) }}
+{{ match_diagram(diagram_filename(job_info.job_id, famid=famid), diagram_size) }}
 
 <h3 id="function-matches">Function Matches in Family: {{ matching_result.getFamilyNameByFamilyId(famid) }} ({{ famid }})</h3>
 <p>selection: {{ funp.max_value }}, showing: {{ 1 + funp.start_index }} - {{ funp.end_index }} (filtered: {{ matching_result.num_original_function_matches - funp.max_value}})</p>

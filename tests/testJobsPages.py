@@ -56,7 +56,7 @@ def test_the_jobs_page_asks_for_each_family_once(client, as_role, corpus_mcrit, 
     as_role("visitor")
     corpus_mcrit.calls.clear()
 
-    response = client.get("/data/jobs")
+    response = client.get("/data/jobs", follow_redirects=True)
 
     assert response.status_code == 200
     assert calls_to(corpus_mcrit, "getFamily") == [(1,)], calls_to(corpus_mcrit, "getFamily")
@@ -68,7 +68,7 @@ def test_the_jobs_page_still_resolves_every_distinct_family(client, as_role, cor
     as_role("visitor")
     corpus_mcrit.calls.clear()
 
-    response = client.get("/data/jobs")
+    response = client.get("/data/jobs", follow_redirects=True)
 
     assert response.status_code == 200
     assert sorted(calls_to(corpus_mcrit, "getFamily")) == [(1,), (2,), (3,)]

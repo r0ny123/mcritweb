@@ -144,9 +144,15 @@ def test_an_explore_page_says_the_backend_is_unreachable(client, as_role, fake_m
 
 # --- the index page is not a safe place to send a failure ------------------------
 
-#: every backend call index() makes for a signed-in, non-pending user. Each one is a
-#: way for the index page itself to be the thing that cannot reach the backend.
-INDEX_CALLS = ["getQueueData", "getSampleById", "getFamily", "search_samples"]
+#: every backend call index() makes for a signed-in, non-pending user that the corpus
+#: can actually drive it into. Each one is a way for the index page itself to be the
+#: thing that cannot reach the backend.
+#:
+#: `getFamily` is not among them: index() only calls it for a finished
+#: getMatchesForSample job that names a family, and the captured queue's one such job
+#: names none - so a failure injected there is never reached and the case would assert
+#: nothing. The handler covering it is the same one the four below exercise.
+INDEX_CALLS = ["getQueueData", "getSampleById", "search_samples"]
 
 
 @pytest.mark.parametrize(

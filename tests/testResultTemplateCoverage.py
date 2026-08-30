@@ -61,7 +61,10 @@ RENDERED_BY = [
     ("/data/result/{matches_for_sample}?samid=3", "result_corrupted.html"),
     ("/data/result/{cross_compare}?custom=999", "result_corrupted.html"),
     ("/data/result/ffffffffffffffffffffffff", "result_invalid.html"),
-    ("/data/linkhunt/ffffffffffffffffffffffff", "result_incompatible.html"),
+    # a job id nobody has is "not found", not "incompatible" - the two were swapped
+    # before the linkhunt fix; a report linkhunt cannot read is the incompatible one
+    ("/data/linkhunt/ffffffffffffffffffffffff", "result_invalid.html"),
+    ("/data/linkhunt/{cross_compare}", "result_incompatible.html"),
     ("/data/jobs/{matches_for_sample}", "job_overview.html"),
     ("/data/jobs/ffffffffffffffffffffffff", "job_invalid.html"),
 ]
@@ -85,6 +88,10 @@ UNCOVERED = {
     "job_corrupted.html": "no view renders it; reachable only through data.job_by_id's "
                           "corrupted branch, which the corpus cannot stage.",
     "job_deleted.html": "no view renders it at all - see the grep in the test below.",
+    "job_failed.html":
+        "needs a finished job that ran out of attempts, or a terminated one. "
+        "testResultPages.py stages both through a monkeypatched backend rather than a "
+        "corpus URL, because the capture holds no failed job.",
 }
 
 

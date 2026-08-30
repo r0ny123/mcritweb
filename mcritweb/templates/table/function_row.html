@@ -81,7 +81,7 @@
       {% elif column_type == "pic_hash" %}
         <td align="right" valign="middle" class="font-monospace">{{ format_pichash(function.pichash) }}</td>
       {% elif column_type == "has_minhash" %}
-        <td align="center" valign="middle">{% if function.minhash|length > 0 %}<i style="color:green;" class="fa-solid fa-square-check" title="MinHash present"></i>{% else %}<i style="color:darkred;" class="fa-solid fa-times-circle" title="MinHash missing"></i>{% endif %}</td>
+        <td align="center" valign="middle">{% if function.minhash|length > 0 %}<i style="color:var(--status-yes);" class="fa-solid fa-square-check" title="MinHash present"></i>{% else %}<i style="color:var(--status-no);" class="fa-solid fa-times-circle" title="MinHash missing"></i>{% endif %}</td>
       {% elif column_type == "offset" %}
         <td align="right" valign="middle" class="font-monospace">{{ format_offset(function.offset) }}</td>
       {% elif column_type == "function_name" %}

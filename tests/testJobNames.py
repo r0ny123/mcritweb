@@ -178,14 +178,17 @@ def test_the_job_page_and_the_result_page_agree(client, as_role, report):
 
 
 @pytest.mark.parametrize(
-    "report,expected",
-    [("matches_for_sample", b"Match 1vN"), ("matches_for_sample_vs", b"Match 1v1")],
+    "category,expected",
+    [("getMatchesForSample", b"Match 1vN"), ("getMatchesForSampleVs", b"Match 1v1")],
 )
-def test_the_job_list_calls_it_the_same_thing(client, as_role, report, expected):
+def test_the_job_list_calls_it_the_same_thing(client, as_role, category, expected):
     """The list is where these names came from, so this is really a check that the
-    extraction did not change its wording."""
+    extraction did not change its wording.
+
+    The tab is named in the URL because #36 made a bare /data/jobs redirect to one
+    category, and each of these names only appears on its own tab."""
     as_role("visitor")
-    response = client.get("/data/jobs")
+    response = client.get(f"/data/jobs?active={category}")
     assert response.status_code == 200
     assert expected in response.data
 
