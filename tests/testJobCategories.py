@@ -102,6 +102,48 @@ def test_every_category_the_menu_offers_is_accepted(client, as_role):
         assert b"is not a job type" not in response.data, category
 
 
+def test_a_category_the_backend_reports_is_accepted_even_if_this_app_has_not_heard_of_it(
+        client, as_role, fake_mcrit, monkeypatch):
+    """The backend is the authority on what a job type is.
+
+    A hardcoded allowlist here would reject a method a *newer backend* has grown, and
+    this front end would need a release to catch up - while the queue statistics it is
+    already reading say plainly that the method exists. So a category the backend
+    reports is accepted whether or not JOB_CATEGORIES has heard of it.
+    """
+    as_role("visitor")
+    monkeypatch.setattr(fake_mcrit, "getQueueStatistics",
+                        lambda *args, **kwargs: {"someFutureBackendMethod": {"finished": 3}})
+
+    response = client.get("/data/jobs?active=someFutureBackendMethod", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert b"is not a job type" not in response.data
+
+
+def test_a_typo_is_still_rejected_when_the_backend_has_not_heard_of_it_either(
+        client, as_role, fake_mcrit, monkeypatch):
+    """The other side: deferring to the backend must not accept everything."""
+    as_role("visitor")
+    monkeypatch.setattr(fake_mcrit, "getQueueStatistics",
+                        lambda *args, **kwargs: {"someFutureBackendMethod": {"finished": 3}})
+
+    response = client.get("/data/jobs?active=notARealCategory", follow_redirects=True)
+
+    assert b"is not a job type" in response.data
+
+
+def test_totals_is_not_mistaken_for_a_category(client, as_role):
+    """The view adds a "totals" key to the statistics dict for its own use. The guard
+    runs before that, so the key cannot become an accidental category."""
+    as_role("visitor")
+
+    response = client.get("/data/jobs?active=totals", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert b"is not a job type" in response.data
+
+
 def test_the_known_categories_cover_what_the_backend_can_produce(client):
     """Job.method_types["all"] omits the two maintenance methods the admin routes
     create, so it cannot be the whole list on its own - this pins that."""
