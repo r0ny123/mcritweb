@@ -109,6 +109,84 @@ CREATE TABLE server (
 );
 """
 
+# v1.4.8: the schema query_upload is migrated onto - the current release, everything
+# except query_upload itself. create_table_user_column_settings.sql has had exactly one
+# commit since it was introduced in v1.4.0, so this is that file verbatim.
+SCHEMA_V1_4_8 = SCHEMA_V1_3_6 + """
+CREATE TABLE user_column_settings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  family_table_family_id INTEGER DEFAULT 0,
+  family_table_family_name INTEGER DEFAULT 1,
+  family_table_num_samples INTEGER DEFAULT 2,
+  family_table_num_functions INTEGER DEFAULT 3,
+  family_table_is_library INTEGER DEFAULT 4,
+  samples_table_sample_id INTEGER DEFAULT 0,
+  samples_table_sha256 INTEGER DEFAULT 1,
+  samples_table_family INTEGER DEFAULT 2,
+  samples_table_version INTEGER DEFAULT 3,
+  samples_table_filename INTEGER DEFAULT 4,
+  samples_table_bitness INTEGER DEFAULT 5,
+  samples_table_num_functions INTEGER DEFAULT 6,
+  samples_table_is_library INTEGER DEFAULT 7,
+  functions_table_function_id INTEGER DEFAULT 0,
+  functions_table_family_id INTEGER DEFAULT 1,
+  functions_table_sample_id INTEGER DEFAULT 2,
+  functions_table_pic_hash INTEGER DEFAULT 3,
+  functions_table_has_minhash INTEGER DEFAULT 4,
+  functions_table_offset INTEGER DEFAULT 5,
+  functions_table_function_name INTEGER DEFAULT 6,
+  functions_table_num_instructions INTEGER DEFAULT 7,
+  functions_table_num_blocks INTEGER DEFAULT 8,
+  result_family_table_family_name INTEGER DEFAULT 0,
+  result_family_table_version INTEGER DEFAULT 1,
+  result_family_table_sample_id INTEGER DEFAULT 2,
+  result_family_table_sha256 INTEGER DEFAULT 3,
+  result_family_table_filename INTEGER DEFAULT 4,
+  result_family_table_num_functions INTEGER DEFAULT 5,
+  result_family_table_num_minhash INTEGER DEFAULT 6,
+  result_family_table_num_pichash INTEGER DEFAULT 7,
+  result_family_table_direct_score INTEGER DEFAULT 8,
+  result_family_table_direct_nonlib_score INTEGER DEFAULT 9,
+  result_family_table_frequency_score INTEGER DEFAULT 10,
+  result_family_table_frequency_nonlib_score INTEGER DEFAULT 11,
+  result_family_table_uniq_score INTEGER DEFAULT 12,
+  result_function_unfiltered_table_matched_function_id INTEGER DEFAULT 0,
+  result_function_unfiltered_table_offset INTEGER DEFAULT 1,
+  result_function_unfiltered_table_num_bytes INTEGER DEFAULT 2,
+  result_function_unfiltered_table_num_matched_families INTEGER DEFAULT 3,
+  result_function_unfiltered_table_num_matched_samples INTEGER DEFAULT 4,
+  result_function_unfiltered_table_num_matched_functions INTEGER DEFAULT 5,
+  result_function_unfiltered_table_best_score INTEGER DEFAULT 6,
+  result_function_unfiltered_table_num_minhash INTEGER DEFAULT 7,
+  result_function_unfiltered_table_num_pichash INTEGER DEFAULT 8,
+  result_function_unfiltered_table_is_library_match INTEGER DEFAULT 9,
+  result_function_unfiltered_table_is_unique_match INTEGER DEFAULT 10,
+  result_function_sample_filtered_table_function_id_a INTEGER DEFAULT 0,
+  result_function_sample_filtered_table_offset_a INTEGER DEFAULT 1,
+  result_function_sample_filtered_table_offset_b INTEGER DEFAULT 2,
+  result_function_sample_filtered_table_function_id_b INTEGER DEFAULT 3,
+  result_function_sample_filtered_table_num_bytes INTEGER DEFAULT 4,
+  result_function_sample_filtered_table_best_score INTEGER DEFAULT 5,
+  result_function_sample_filtered_table_is_minhash_match INTEGER DEFAULT 6,
+  result_function_sample_filtered_table_is_pichash_match INTEGER DEFAULT 7,
+  result_function_sample_filtered_table_is_library_match INTEGER DEFAULT 8,
+  result_function_sample_filtered_table_is_unique_match INTEGER DEFAULT 9,
+  result_function_function_filtered_table_function_id_a INTEGER DEFAULT 0,
+  result_function_function_filtered_table_offset_a INTEGER DEFAULT 1,
+  result_function_function_filtered_table_offset_b INTEGER DEFAULT 2,
+  result_function_function_filtered_table_function_id_b INTEGER DEFAULT 3,
+  result_function_function_filtered_table_family_name_b INTEGER DEFAULT 4,
+  result_function_function_filtered_table_sample_id_b INTEGER DEFAULT 5,
+  result_function_function_filtered_table_best_score INTEGER DEFAULT 6,
+  result_function_function_filtered_table_is_minhash_match INTEGER DEFAULT 7,
+  result_function_function_filtered_table_is_pichash_match INTEGER DEFAULT 8,
+  result_function_function_filtered_table_is_library_match INTEGER DEFAULT 9,
+  result_function_function_filtered_table_is_unique_match INTEGER DEFAULT 10,
+  FOREIGN KEY (user_id) REFERENCES user (id)
+);
+"""
+
 
 # --- helpers ---------------------------------------------------------------------
 
@@ -301,6 +379,29 @@ def test_a_v1_3_6_database_gains_the_tables_added_since(tmp_path):
     assert {"user_column_settings", "query_upload"} <= _tables(db_path)
     assert _query(db_path, "SELECT apitoken FROM user") == [("preexisting-token",)]
     assert _query(db_path, "SELECT server_token FROM server") == [("srvtoken",)]
+
+
+def test_a_v1_4_8_database_only_gains_query_upload(tmp_path):
+    """The schema query_upload is actually migrated onto, rather than two steps back.
+
+    Everything else is already in place here, so this is the only step that may run -
+    and create_table_user_column_settings.sql drops its table first, so a guard that
+    misfired would take that user's whole column setup with it.
+    """
+    db_path = _legacy_database(tmp_path, SCHEMA_V1_4_8)
+    _insert_legacy_user(db_path, "olduser", with_apitoken=True)
+    _insert_legacy_server(db_path, with_server_token=True)
+    connection = sqlite3.connect(str(db_path))
+    connection.execute("INSERT INTO user_column_settings (user_id, samples_table_sample_id) VALUES (?, ?)", (1, 6))
+    connection.commit()
+    connection.close()
+
+    assert "query_upload" not in _tables(db_path)
+    _run_migration(tmp_path, db_path)
+
+    assert "query_upload" in _tables(db_path)
+    assert _columns(db_path, "query_upload") == ["job_id", "filename"]
+    assert _query(db_path, "SELECT user_id, samples_table_sample_id FROM user_column_settings") == [(1, 6)]
 
 
 def test_the_current_schema_is_a_no_op(tmp_path):
