@@ -10,6 +10,8 @@ these tests pin the edges of it rather than only the happy path.
 """
 
 import logging
+import threading
+import time
 import unittest
 
 import pytest
@@ -109,8 +111,8 @@ def test_the_ttl_expires():
 
     # a TTL of 0 would take the no-cache path, so age the entry instead
     with utility._probe_cache_lock:
-        url, answered_at, answer = utility._probe_cache
-        utility._probe_cache = (url, answered_at - 61, answer)
+        cached = utility._probe_cache
+        utility._probe_cache = cached._replace(answered_at=cached.answered_at - 61)
     utility.probe_server(probe, 60, "http://backend")
 
     assert probe.calls == 2
@@ -165,3 +167,84 @@ def test_creating_an_app_forgets_any_earlier_answer(tmp_path):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- concurrency -------------------------------------------------------------
+#
+# The lock is deliberately not held across the probe, so two requests can be probing at
+# once and a third can be invalidating in between. These are the three orderings that
+# can produce a wrong stored answer, and each one was reachable before the generation
+# counter and the start-time comparison were added.
+
+def test_a_probe_in_flight_does_not_undo_an_invalidation():
+    """The one that matters operationally.
+
+    An admin corrects a bad token; change_server calls forget_server_probe. A probe
+    that went out against the *old* token then lands and, without the generation guard,
+    writes its stale `False` straight over the invalidation - so the admin keeps seeing
+    "could not authenticate" for up to the full TTL after fixing it. The probe runs on
+    36 routes, so one is nearly always in flight when the settings are saved.
+    """
+    utility.forget_server_probe()
+    started = threading.Event()
+    may_finish = threading.Event()
+
+    def slow_probe_against_the_old_token():
+        started.set()
+        may_finish.wait(5)
+        return False
+
+    answers = []
+    worker = threading.Thread(target=lambda: answers.append(
+        utility.probe_server(slow_probe_against_the_old_token, 60, "http://backend")))
+    worker.start()
+    started.wait(5)
+
+    utility.forget_server_probe()   # the admin saves the corrected token
+    may_finish.set()
+    worker.join(5)
+
+    assert answers == [False], "the in-flight probe should still return its own answer"
+    assert utility._probe_cache is None, "the stale answer was written over the invalidation"
+
+
+def test_an_older_answer_does_not_overwrite_a_newer_one():
+    """A probe that started before an outage returns True; one that started after it
+    returns False and finishes first. Completion order says the True is newer. It is
+    not - it observed an earlier state, and a false "up" is not cosmetic: the gate
+    passes and the view then talks to a dead backend.
+    """
+    utility.forget_server_probe()
+    may_finish = threading.Event()
+
+    def slow_probe_from_before_the_outage():
+        may_finish.wait(5)
+        return True
+
+    worker = threading.Thread(target=lambda: utility.probe_server(
+        slow_probe_from_before_the_outage, 60, "http://backend"))
+    worker.start()
+    time.sleep(0.05)
+
+    utility.probe_server(lambda: False, 60, "http://backend")   # started later, finishes first
+    may_finish.set()
+    worker.join(5)
+
+    assert utility._probe_cache.was_up is False, "the earlier probe's answer won"
+
+
+def test_the_ttl_is_measured_from_when_the_probe_came_back():
+    """Taking the timestamp before the call makes every entry probe_duration seconds old
+    at birth, so a slow backend - exactly the case a per-request round-trip hurts most -
+    gets little or no caching. With a 0.3s TTL and a 0.4s probe the cache never hits."""
+    utility.forget_server_probe()
+    probe = CountingProbe()
+
+    def slow_probe():
+        time.sleep(0.4)
+        return probe()
+
+    for _ in range(3):
+        utility.probe_server(slow_probe, 0.3, "http://backend")
+
+    assert probe.calls == 1, "the entry was already expired by the time it was written"

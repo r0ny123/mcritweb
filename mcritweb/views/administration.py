@@ -233,7 +233,10 @@ def change_server():
         server_info.server_token = new_token
         server_info.saveToDb()
         # an operator who has just corrected the URL or token should not have to wait
-        # out the reachability TTL to find out whether it worked - see issue #89
+        # out the reachability TTL to find out whether it worked - see issue #89. The
+        # cache is a module global, so this clears the worker that handled this request;
+        # with N gunicorn workers the other N-1 still answer from their own entry until
+        # it lapses, which the default 5s TTL bounds.
         forget_server_probe()
         flash('Server information successfully changed', category='success')
     else:
