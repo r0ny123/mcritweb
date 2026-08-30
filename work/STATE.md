@@ -10,8 +10,14 @@ checkable rather than asserted. 53 of the 54 resolve by branch name (`fix/<issue
 
 Regenerate the check with:
 
-    # every issue row must carry a pull/<n> link
-    grep -E '^\| [0-9]+ ' work/STATE.md | awk -F'|' '{print $2, $NF}' | grep -v 'pull/'
+    # every issue row must carry a pull/<n> link; prints nothing when all 54 do
+    grep -E '^\| [0-9]+ ' work/STATE.md | awk -F'|' '{print $2, $(NF-1)}' | grep -v 'pull/'
+
+`$(NF-1)`, not `$NF`: a markdown row ends with `|`, so awk's last field is the empty
+string after it and `$NF` matches every row whatever the status says. The first version
+of this command published here had that bug - it "found" all 54 rows failing and would
+have kept doing so no matter what the table contained. Before trusting a clean result,
+seed a row with `not started` and check the command reports it.
 
 An earlier version of this file left 29 of those cells reading "not started" long after
 the work shipped, which made the coverage claim unverifiable from the document that was
