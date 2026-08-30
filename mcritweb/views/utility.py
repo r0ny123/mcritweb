@@ -60,7 +60,11 @@ def default_server_probe():
 #: caching. `started_at` is when the probe went out, and it is what decides which of two
 #: concurrent answers to keep: the probe that *started* later observed the more recent
 #: state, even if it finished first.
-_ProbeAnswer = collections.namedtuple("_ProbeAnswer", "server_url started_at answered_at was_up")
+#:
+#: `error` holds a transport failure instead of an answer, and exactly one of the two
+#: is ever set. An unreachable backend is the expensive case - the probe sits out its
+#: 3.05s connect timeout - so it is the one that most needs not to be repeated.
+_ProbeAnswer = collections.namedtuple("_ProbeAnswer", "server_url started_at answered_at was_up error")
 _probe_cache = None
 _probe_cache_lock = threading.Lock()
 
@@ -82,11 +86,30 @@ def forget_server_probe():
         _probe_generation += 1
 
 
+def _remember(fresh, generation):
+    """Store `fresh` unless something newer already knows better."""
+    global _probe_cache
+    with _probe_cache_lock:
+        if generation == _probe_generation and (_probe_cache is None or _probe_cache.started_at <= fresh.started_at):
+            _probe_cache = fresh
+
+
 def probe_server(probe, ttl, server_url):
     """`probe()`, but at most once per `ttl` seconds per backend URL.
 
-    A raise is not cached: a connection error is the answer most likely to change on
-    its own, and the caller turns it into a different message than "up" or "down".
+    A transport failure is cached and replayed like any other answer. It is the case
+    the cache exists for: a backend that answers 401 costs one round-trip, while one
+    that blackholes the connection costs the full 3.05s connect timeout, on every
+    request to all 36 decorated routes. Leaving that uncached would have meant the
+    cache saved nothing in precisely the situation issue #89 opens with. The cost is
+    the same bounded staleness already accepted for a cached "down": for up to `ttl`
+    after the backend comes back, callers still see the failure.
+
+    Only `requests.RequestException` is cached. Anything else out of `probe()` is a
+    fault in this application rather than a report about the backend - a failed read
+    of the server settings, say - and repeating a wrong answer for `ttl` seconds is
+    not an improvement on raising it.
+
     Keyed by URL so pointing the instance at another backend re-probes immediately;
     every other settings change - a token correction, say - calls forget_server_probe().
 
@@ -96,21 +119,26 @@ def probe_server(probe, ttl, server_url):
     reconciled under the lock afterwards, against both the generation and the incumbent's
     start time, so neither a concurrent invalidation nor an older answer is lost.
     """
-    global _probe_cache
     if ttl <= 0:
         return probe()
     with _probe_cache_lock:
         cached = _probe_cache
         generation = _probe_generation
     if cached is not None and cached.server_url == server_url and time.monotonic() - cached.answered_at < ttl:
+        if cached.error is not None:
+            # cleared first because raising one stored object repeatedly appends this
+            # request's frames to its traceback each time, and the entry is replayed on
+            # every request for the length of the TTL.
+            raise cached.error.with_traceback(None)
         return cached.was_up
 
     started_at = time.monotonic()
-    answer = probe()
-    fresh = _ProbeAnswer(server_url, started_at, time.monotonic(), answer)
-    with _probe_cache_lock:
-        if generation == _probe_generation and (_probe_cache is None or _probe_cache.started_at <= fresh.started_at):
-            _probe_cache = fresh
+    try:
+        answer = probe()
+    except requests.RequestException as failure:
+        _remember(_ProbeAnswer(server_url, started_at, time.monotonic(), None, failure), generation)
+        raise
+    _remember(_ProbeAnswer(server_url, started_at, time.monotonic(), answer, None), generation)
     return answer
 
 
