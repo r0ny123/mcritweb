@@ -26,6 +26,15 @@ bp = Blueprint('analyze', __name__, url_prefix='/analyze')
 MAX_SELECTED_SAMPLES = 250
 
 
+#: An SMDA report carries its own `sha256` field, and this route used to use it as the
+#: name of the file it writes into `instance/temp/uploads/`. Nothing in `SmdaReport`
+#: validates that field - `fromDict` assigns `report_dict["sha256"]` straight through -
+#: so a report declaring `"sha256": "../../../PLANTED"` had a *visitor* choosing where
+#: on disk the upload landed, and what went in it. Anything that becomes a path segment
+#: has to be checked before it is joined, so this is the shape a hexdigest actually has.
+UPLOAD_SHA256 = re.compile(r"\A[a-fA-F0-9]{64}\Z")
+
+
 def get_unique_samples_from_search_result(search_result):
     samples = []
     sample_ids = set()
@@ -488,11 +497,19 @@ def query():
                 flash('That file could not be read as an SMDA report.', category='error')
                 return "", 400 # Bad Request
             upload_sha256 = smda_report.sha256
+            if not isinstance(upload_sha256, str) or not UPLOAD_SHA256.match(upload_sha256):
+                flash('This SMDA report does not carry a usable sha256, so it cannot be stored for query.', category='error')
+                return "", 400 # Bad Request
+            # SMDA writes a lowercase hexdigest and the rest of the application looks
+            # these files up lowercase; keep the two spellings from becoming two files
+            upload_sha256 = upload_sha256.lower()
         else:
             # check here if it is already part of corpus
             upload_sha256 = hashlib.sha256(binary_content).hexdigest()
 
-        with open(os.sep.join([current_app.instance_path, "temp", "uploads", upload_sha256]), "wb") as fout:
+        uploads = os.sep.join([current_app.instance_path, "temp", "uploads"])
+        os.makedirs(uploads, exist_ok=True)
+        with open(os.sep.join([uploads, upload_sha256]), "wb") as fout:
             fout.write(binary_content)
 
         minhash_band_range = parse_band_range(request)
