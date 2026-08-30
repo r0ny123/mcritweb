@@ -1229,3 +1229,55 @@ keys - which is what the fixture has.
 #42, #46, #48, #49 and #36 got their descriptions corrected in place. #39, #43 and #45 got
 comments instead, because the API returned those bodies truncated or with a mangled regex
 block, and overwriting text I could not read in full would have destroyed content.
+
+## PR #61 - review round 2 (Codex P1) and the red CI
+
+Codex P1: `?active=getMatchesForSample` survives the `statistics = {}` substitution, so
+`data.py:775` still 500s. Confirmed, and confirmed wider than reported - reproduced on
+plain `origin/master`, healthy backend, no failing call at all:
+
+    /data/jobs?active=getMatchesForSample  -> KeyError: 'getMatchesForSample'  data.py:767
+    /data/jobs?active=notAMethodAtAll      -> KeyError: 'notAMethodAtAll'      data.py:767
+    /data/jobs?active=                     -> KeyError
+
+`getQueueStatistics` only reports categories that currently hold jobs, so this is any
+quiet category, any stale bookmark, any value typed into the query string. Fixed with a
+tolerant lookup.
+
+Overlap I nearly shipped blind: `fix/jobs-500-on-unknown-category` already fixes this
+exact line - #61's own PR body names it. Both PRs have to stand alone, since either may
+land first, so the hunk was made byte-identical to that branch's rather than dropped:
+
+    $ git merge-tree $(git merge-base origin/master HEAD) \
+          origin/fix/jobs-500-on-unknown-category HEAD | grep -c "<<<<<<<\|>>>>>>>"
+    0
+    $ # merged in a scratch worktree, full suite:
+    263 passed, 1 warning in 67.59s
+
+Mutation check on the new tests:
+    revert to `statistics[active_category]`  -> 4 failed, 5 passed
+    `max_count = 0`                          -> 1 failed, 8 passed
+    drop the flash                           -> 4 failed, 5 passed
+
+The `max_count = 0` mutant SURVIVED the first version of that test - I had asserted
+`"p=2" in page`, which is in the page either way. Replaced with an assertion on the
+window the view actually asks for (`getQueueData(start=25)`), which a zeroed count
+cannot produce because Pagination clamps page 2 back to page 1.
+
+Red CI on #61: NOT this PR's. All four unit jobs died before any test body ran:
+
+    /opt/hostedtoolcache/Python/3.11.16/x64/bin/python: No module named pytest
+
+That is the master-branch breakage #9 fixes (mcrit moved pytest to its `dev` extra, so
+`pip install -r requirements.txt` stopped bringing it in). #9's own CI is green, so the
+fix is known-good; ported its workflow hunk into #61 so this PR's suite actually runs
+rather than waiting on #9 to merge. It no-ops once master carries it. This also explains
+the earlier confusion - local `pytest -q` was green at the same SHA CI was red on,
+because CI never got as far as running it.
+
+    $ .venv/bin/python -m pytest -q
+    248 passed, 1 warning in 58.81s
+    $ .venv/bin/python -m ruff check .
+    All checks passed!
+
+Pushed aba7ca2. Every other open PR is red for the same pytest reason.
