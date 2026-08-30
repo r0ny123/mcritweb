@@ -379,7 +379,7 @@ def recover_score_divisors(matching_result):
     bytes and the `nonlib_` ones against that total minus its library-matching
     functions, and puts neither on the wire - so the hover text used to divide by
     `binweight`, which is a third number, and state a percentage that was not the
-    quotient it had just shown (issue #7, docs/adr/0003-nonlib-frequency-score.md).
+    quotient it had just shown (issue #7, docs/adr/0009-nonlib-frequency-score.md).
 
     Both are exactly recoverable as `100 * bytes / percent` from any row that scored
     above zero, because the divisor is a property of the reference sample rather than
