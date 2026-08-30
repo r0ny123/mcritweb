@@ -168,5 +168,94 @@ def test_a_current_hash_is_left_alone(app, client, registered_user):
         assert UserInfo.fromDb(username=registered_user).password == before
 
 
+
+
+# --- the user table is not always uniform, or even well-formed ----------------
+
+def _user_with_hash(app, username, password_hash, role="visitor"):
+    with app.app_context():
+        user_info = UserInfo()
+        user_info.username = username
+        user_info.password = password_hash
+        user_info.role = role
+        user_info.apitoken = f"apitoken-{username}"
+        user_info.saveToDb()
+
+
+def test_the_dummy_matches_the_method_most_of_the_table_uses(app):
+    """One dummy cannot match two methods, so a mixed table has no exact answer. The
+    majority leaves the smallest set of accounts distinguishable; an arbitrary row leaves
+    whichever set that row is not in - and on an instance upgraded from werkzeug 2.2 the
+    oldest row is the legacy one, so `LIMIT 1` would have picked the method that every
+    account created since the upgrade does *not* use.
+    """
+    from mcritweb.views import authentication
+
+    legacy = "pbkdf2:sha256:260000"
+    _user_with_hash(app, "oldest", generate_password_hash(PASSWORD, method=legacy))
+    for index in range(3):
+        _user_with_hash(app, f"newer{index}", generate_password_hash(PASSWORD, method="scrypt:32768:8:1"))
+
+    with app.app_context():
+        authentication._ABSENT_USER_PASSWORD_HASH = None
+        authentication._ABSENT_USER_HASH_METHOD = None
+        authentication._spend_a_password_check("whatever")
+
+    assert authentication._ABSENT_USER_PASSWORD_HASH.split("$", 1)[0] == "scrypt:32768:8:1"
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        "md5$salt$hash",                          # a werkzeug hash from long ago
+        "sha1$salt$hash",
+        "nodollarsign",
+        "5f4dcc3b5aa765d61d8327deb882cf99",       # a bare md5, from an import
+        "$salt$hash",                             # empty method
+    ],
+)
+def test_a_hash_this_werkzeug_cannot_generate_does_not_500_the_login(app, client, stored):
+    """The method is read off a stored hash and handed to generate_password_hash, which
+    raises ValueError for anything it cannot *produce* - even where it could verify it.
+
+    Letting that escape would make /login 500 for absent usernames *only*, while an
+    existing username still logged in. That is both a denial of service on one branch
+    and a perfect existence oracle: strictly worse than the leak this whole change
+    exists to close.
+    """
+    _user_with_hash(app, "imported", stored)
+
+    response = client.post("/login", data={"username": "definitely-not-a-user",
+                                           "inputPassword": "whatever"})
+
+    assert response.status_code != 500
+    assert response.status_code == 200, "a failed login re-renders the form"
+
+
+def test_such_a_table_still_answers_the_same_way_for_both_cases(app, client):
+    """The point of the fallback: the two branches must still look alike."""
+    _user_with_hash(app, "imported", "md5$salt$hash")
+    _user_with_hash(app, "alice", generate_password_hash(PASSWORD))
+
+    absent = attempt(client, "definitely-not-a-user", "whatever")
+    wrong_password = attempt(client, "alice", "whatever")
+
+    assert "Incorrect username or password." in absent
+    assert "Incorrect username or password." in wrong_password
+
+
+def test_an_empty_user_table_has_no_method_to_match(app):
+    from mcritweb import db
+    from mcritweb.views import authentication
+
+    with app.app_context():
+        assert db.get_stored_password_hash_method() is None
+        authentication._ABSENT_USER_PASSWORD_HASH = None
+        authentication._ABSENT_USER_HASH_METHOD = None
+        authentication._spend_a_password_check("whatever")
+
+    assert authentication._ABSENT_USER_PASSWORD_HASH is not None
+
+
 if __name__ == "__main__":
     unittest.main()
