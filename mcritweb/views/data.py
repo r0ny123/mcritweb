@@ -632,6 +632,33 @@ def build_yara_rule(blocks_result, yara_params):
         return None, block_cover
     return ubr.renderRule(block_cover, yara_params["condition_required"], wrap_at=40), block_cover
 
+def get_sample_versions(client, family_entry, sample_ids):
+    """Map sample_id -> version for the samples a unique blocks report covers.
+
+    The report carries no version of its own - `statistics["by_sample_id"]` is block
+    counts and nothing else - so it has to be looked up. A family job needs no extra
+    request for it: `getFamily` already answers with the family's samples and the
+    caller is holding that entry. Whatever the family did not supply is fetched by
+    id, which for a job naming samples directly is one call per row of the table.
+
+    A lookup that comes back None leaves that row's version blank. It does not say
+    the sample is gone: `handle_response` in `McritClient` collapses a 404 and a 500
+    into the same None, so a blank cell means "no version to show" and nothing more.
+    Telling the two apart would take the raw response, which this seam does not
+    carry - and neither of them is worth failing a whole report over.
+    """
+    versions = {}
+    family_samples = getattr(family_entry, "samples", None) or {}
+    for sample_entry in family_samples.values():
+        versions[sample_entry.sample_id] = sample_entry.version
+    for sample_id in sample_ids:
+        if sample_id in versions:
+            continue
+        sample_entry = client.getSampleById(sample_id)
+        if sample_entry is not None:
+            versions[sample_id] = sample_entry.version
+    return versions
+
 def result_unique_blocks(job_info, blocks_result: dict):
     client = get_client()
     payload_params = json.loads(job_info.payload["params"])
@@ -650,6 +677,7 @@ def result_unique_blocks(job_info, blocks_result: dict):
         else:
             flash(f"No results for unique blocks in family with id {sample_id}", category="error")
     blocks_statistics = blocks_result["statistics"]
+    sample_versions = get_sample_versions(client, family_entry, [entry["sample_id"] for entry in blocks_statistics["by_sample_id"].values()])
     yara_params = parse_yara_rule_params(request)
     yara_rule, yara_cover = build_yara_rule(blocks_result, yara_params)
     # only what the caller actually changed, so the forms can carry the rule parameters
@@ -693,7 +721,7 @@ def result_unique_blocks(job_info, blocks_result: dict):
                 paginated_blocks.append(paginated_block)
             index += 1
     # TODO pass the new result objects as single arguments and then render them in page tabs on the template
-    return render_template("result_unique_blocks.html", job_info=job_info, family_entry=family_entry, sample_id=sample_id, sample_ids=sample_ids, yara_rule=yara_rule, yara_cover=yara_cover, yara_params=yara_params, yara_query=yara_query, statistics=blocks_statistics, results=paginated_blocks, blkp=block_pagination, active_tab=active_tab)
+    return render_template("result_unique_blocks.html", job_info=job_info, family_entry=family_entry, sample_id=sample_id, sample_ids=sample_ids, yara_rule=yara_rule, yara_cover=yara_cover, yara_params=yara_params, yara_query=yara_query, statistics=blocks_statistics, results=paginated_blocks, blkp=block_pagination, active_tab=active_tab, sample_versions=sample_versions)
 
 #: Shown when a stored result names something the backend can no longer resolve. The
 #: cross-compare path has said this about samples for a long time; issue #96 is the
