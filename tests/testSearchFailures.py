@@ -109,3 +109,77 @@ def test_the_combined_search_page_reports_a_failure_the_same_way(client, as_role
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- the second opinion has to be able to say "I do not know" ----------------
+#
+# `getSampleBySha256` in its ordinary mode returns None for "not in the collection" and
+# for every failure alike: handle_response maps 400/404/410 and 500/501 to None, and
+# falls through to None for any status it does not enumerate - 401, 403, 502, 503. The
+# first version of this feature read that None as absence, so a backend answering 500 on
+# every endpoint produced "No sample with SHA-256 X is in the collection" as an `info`
+# message, which is a false statement of fact *and* suppressed the failure notice for
+# samples. That is the error issue #79 is about, pointed the other way.
+
+class FailingLookup:
+    """A raw-mode backend that answers `status` to every SHA-256 lookup."""
+
+    def __init__(self, status):
+        self.status = status
+        self.raw = True
+
+    def getSampleBySha256(self, *args, **kwargs):
+        from fixtureData import RawResponse
+        return RawResponse(self.status)
+
+
+@pytest.mark.parametrize("status", [500, 502, 401, 403, 400])
+def test_a_lookup_that_failed_is_not_reported_as_absence(client, app, as_role, fake_mcrit, monkeypatch, status):
+    as_role("visitor")
+    _search_fails(monkeypatch, fake_mcrit)
+    failing = FailingLookup(status)
+    app.config["MCRIT_CLIENT_FACTORY"] = (
+        lambda **kwargs: failing if kwargs.get("raw_responses") else fake_mcrit
+    )
+
+    page = client.get(f"/explore/samples?query={ABSENT_SHA256}", follow_redirects=True).get_data(as_text=True)
+
+    assert "is in the collection" not in page, f"claimed absence from an HTTP {status}"
+    assert "the backend did not answer" in page, "and hid the failure while doing it"
+
+
+def test_only_a_404_is_read_as_absence(client, app, as_role, fake_mcrit, monkeypatch):
+    """The positive half of the test above: 404 really is the backend saying no."""
+    as_role("visitor")
+    _search_fails(monkeypatch, fake_mcrit)
+    app.config["MCRIT_CLIENT_FACTORY"] = (
+        lambda **kwargs: FailingLookup(404) if kwargs.get("raw_responses") else fake_mcrit
+    )
+
+    page = client.get(f"/explore/samples?query={ABSENT_SHA256}", follow_redirects=True).get_data(as_text=True)
+
+    assert f"No sample with SHA-256 {ABSENT_SHA256} is in the collection." in page
+
+
+def test_the_family_page_does_not_quote_its_own_query_syntax_back(client, as_role, fake_mcrit, monkeypatch):
+    """`family_by_id` composes "family_id:N <what the user typed>" before searching.
+    Reporting the failure with that string shows MCRIT's query language to someone who
+    never wrote it - and, if the typed half were a bare hash, would run the SHA-256
+    second opinion against a string that is not one."""
+    as_role("visitor")
+    _search_fails(monkeypatch, fake_mcrit)
+
+    page = client.get("/explore/families/1?query=zzz", follow_redirects=True).get_data(as_text=True)
+
+    assert "family_id:" not in page
+    assert "for &#39;zzz&#39;" in page
+
+
+def test_a_failed_search_with_no_search_term_still_reads_as_a_sentence(client, as_role, fake_mcrit, monkeypatch):
+    as_role("visitor")
+    _search_fails(monkeypatch, fake_mcrit)
+
+    page = client.get("/explore/families/1", follow_redirects=True).get_data(as_text=True)
+
+    assert "Could not search MCRIT&#39;s samples - the backend did not answer." in page
+    assert "for &#39;&#39;" not in page

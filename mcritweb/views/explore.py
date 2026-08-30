@@ -28,42 +28,71 @@ def flash_search_failed(query, collection):
     (issue #54). So this is an error about the backend, and wording it as "no results"
     would send the reader looking for the wrong thing. Issue #79.
     """
+    # the family page composes its own query ("family_id:3 <what the user typed>") and
+    # passes only the typed half, so no message quotes MCRIT's query syntax back at
+    # someone who never wrote it. That leaves the empty case, which needs no quoting.
+    subject = f" for '{query}'" if query else ""
     flash(
-        f"Could not search MCRIT's {collection} for '{query}' - the backend did not answer. "
+        f"Could not search MCRIT's {collection}{subject} - the backend did not answer. "
         "It may be unreachable, or unable to handle this search term; check the server "
         "settings and the backend's log.",
         category="error",
     )
 
 
+def sha256_second_opinion(sha256):
+    """Ask the backend directly about one hash. Returns a SampleEntry, "absent", or None.
+
+    `getSampleBySha256` in its ordinary mode cannot answer this question. Its return
+    passes through `handle_response`, which maps 400/404/410 and 500/501 to None alike
+    and falls through to None for every status it does not enumerate - 401, 403, 502,
+    503. So a plain None means "not in the collection, or the call failed, and I cannot
+    tell you which". Reporting that as absence would state as fact something we do not
+    know, and would replace a backend-failure notice with a reassuring one - the exact
+    error issue #79 is about, pointed the other way.
+
+    Raw mode returns the response instead, so the status can be read. Only 404 is
+    absence; anything else is a second failure and gets the generic message.
+    """
+    response = get_client(raw_responses=True).getSampleBySha256(sha256)
+    if response.status_code == 404:
+        return "absent"
+    if response.status_code in (200, 202):
+        payload = response.json()
+        if payload.get("status") == "successful" and payload.get("data") is not None:
+            return SampleEntry.fromDict(payload["data"])
+    return None
+
+
 def flash_sample_search_failed(client, query):
-    """As above, but a SHA-256 gets a real answer rather than an apology.
+    """As above, but a SHA-256 can get a real answer rather than an apology.
 
     That is what issue #79 asks for: someone pastes a hash to find out whether the
     sample is known, and "search failed" tells them nothing. `getSampleBySha256` is a
     different endpoint from the search, so it can still answer when the search could
-    not. One extra round-trip, only on a path that has already failed.
+    not. One extra round-trip, only on a path that has already failed - and only when
+    it can answer definitively, see sha256_second_opinion.
     """
     if SHA256_PATTERN.fullmatch(query or ""):
         try:
-            sample_entry = client.getSampleBySha256(query)
-            # read inside the guard: an unexpected shape here is the same kind of
-            # backend trouble as the call failing, and neither should be a 500
-            known_as = None if sample_entry is None else sample_entry.sample_id
+            answer = sha256_second_opinion(query)
         except Exception:
             # the lookup is a best-effort second opinion; if it fails too, the generic
             # message below is still true
             current_app.logger.exception("SHA-256 lookup failed after a failed sample search")
         else:
-            if known_as is None:
+            if answer == "absent":
                 flash(f"No sample with SHA-256 {query} is in the collection.", category="info")
-            else:
+                return
+            if answer is not None:
                 flash(
                     f"Could not search MCRIT's samples for '{query}' - the backend did not "
-                    f"answer. A sample with that SHA-256 does exist, as sample {known_as}.",
+                    f"answer. A sample with that SHA-256 does exist, as sample {answer.sample_id}.",
                     category="error",
                 )
-            return
+                return
+            # answer is None: the direct lookup failed too, so nothing is known about
+            # this hash. Fall through to the generic message rather than inventing one.
     flash_search_failed(query, "samples")
 
 
@@ -269,7 +298,9 @@ def family_by_id(family_id):
         results = client.search_samples(query, **pagination.getSearchParams(), limit=pagination.limit)
         pagination.read_cursor_from_result(results)
         if results is None:
-            flash_sample_search_failed(client, query)
+            # original_query, not query: the latter carries the family_id: prefix this
+            # view added, and quoting it back reads as though the user typed it
+            flash_sample_search_failed(client, original_query)
         else:
             for sample_dict in results['search_results'].values():
                 samples.append(SampleEntry.fromDict(sample_dict))
