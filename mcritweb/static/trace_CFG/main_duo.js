@@ -2218,7 +2218,19 @@ function highlightUERs(UERtype){
     } finally {
       isSyncingGraphPanes = false;
     }
-  
+
+    // mcritweb: issue #74 - the two panes are fetched independently, so one finishes
+    // rendering after the other. If the user moved the first pane while the second was
+    // still loading, the fit above leaves the second at its *own* fitted view and the
+    // checked "Synchronize Graphs" panes disagree until the next gesture. Adopt the
+    // pane that is already registered instead. When it is still at its own fit - the
+    // usual case - the mirror is relative to each pane's fit, so this resolves to
+    // exactly the fitted view just set, and nothing moves.
+    var other = graphPanes[graph_id === "a" ? "b" : "a"];
+    if(other){
+      syncGraphPanes(graph_id === "a" ? "b" : "a", other.zoom.translate(), other.zoom.scale());
+    }
+
   var nodes = svg.selectAll("g.node.enter");
   var brush = svg.append("g")
       .attr("class", "brush");
