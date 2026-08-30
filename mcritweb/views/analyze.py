@@ -85,16 +85,24 @@ def unique_blocks():
         selected_list = selected_list[:MAX_SELECTED_SAMPLES]
 
     pagination_selected = Pagination(request, len(selected_list), limit=10, query_param="ps", limit_param="psl")
+    # id -> entry, or None for one the backend would not resolve. Only the page being
+    # rendered is looked up: McritClient has no batched sample lookup, so resolving the
+    # whole selection here would cost one round trip per selected sample on every page
+    # view. start_unique_blocks checks the rest, once, on a deliberate submit.
     selected_dict = {x: client.getSampleById(x) for x in selected_list[pagination_selected.start_index:pagination_selected.start_index + pagination_selected.limit]}
-    invalid_ids = [sample_id for sample_id, sample in selected_dict.items() if sample is None]
-    for invalid_id in invalid_ids:
-        selected_dict.pop(invalid_id)
-        selected_list.remove(invalid_id)
-        flash(f"Sample with Id {invalid_id} does not exist and was ignored", category="warning")
-    if invalid_ids:
-        # the search term is carried across, so cleaning up a stale selection does not
-        # also throw away the search someone was in the middle of
-        return redirect(url_for("analyze.unique_blocks", samples=",".join([str(id) for id in selected_list]), query=request.args.get('query') or None))
+    unresolved_ids = [sample_id for sample_id, sample in selected_dict.items() if sample is None]
+    if unresolved_ids:
+        # kept in the selection, not dropped. `handle_response` answers None for a 500 as
+        # readily as for a 404, so this is not evidence that the sample is gone - and
+        # editing someone's sample set on it means the next submit quietly analyses a
+        # different set. The row renders unresolved, with the same remove button as the
+        # others, so it is the reader who decides.
+        #
+        # Dropping them also meant redirecting to a cleaned selection, and the page only
+        # ever checks the ten ids it is rendering: a selection of 250 stale ids unwound
+        # ten at a time, which is 25 redirect hops. Browsers stop following around 20, so
+        # the selection that most needed cleaning was the one that could not load at all.
+        flash(f"MCRIT did not confirm sample id {', '.join(str(sample_id) for sample_id in unresolved_ids)} - they may have been deleted, or the backend may be unavailable.", category="warning")
 
     query = request.args.get('query', "")
     samples = []
@@ -111,7 +119,7 @@ def unique_blocks():
         samples=samples,
         pagination=pagination,
         selected_ids=selected_list,
-        selected_samples=selected_dict.values(),
+        selected_samples=selected_dict,
         pagination_selected=pagination_selected,
         max_selected=MAX_SELECTED_SAMPLES,
         query=query,
@@ -148,8 +156,12 @@ def start_unique_blocks():
     # paid once on a deliberate submit rather than on every page view.
     unknown_ids = [sample_id for sample_id in sample_ids if not client.isSampleId(sample_id)]
     if unknown_ids:
-        flash(f"No sample with id {', '.join(str(sample_id) for sample_id in unknown_ids)} - nothing was submitted.", category='error')
-        return redirect(url_for('analyze.unique_blocks', samples=",".join(str(sample_id) for sample_id in sample_ids if sample_id not in unknown_ids) or None))
+        # the selection comes back whole. isSampleId is False for a 500 as well as for a
+        # 404, so removing these would rewrite the sample set on a backend hiccup and the
+        # retry would silently analyse a different one. Refusing to submit is the part
+        # that is certainly right; the selection page is where the set gets edited.
+        flash(f"MCRIT did not confirm sample id {', '.join(str(sample_id) for sample_id in unknown_ids)} - they may have been deleted, or the backend may be unavailable. Nothing was submitted.", category='error')
+        return redirect(url_for('analyze.unique_blocks', samples=",".join(str(sample_id) for sample_id in sample_ids)))
     job_id = client.requestUniqueBlocksForSamples(sample_ids)
     if job_id is None:
         # the client answers None for anything that was not a 200, and url_for cannot

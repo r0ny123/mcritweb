@@ -25,6 +25,7 @@ hash to two different descriptors and would run twice.
 import copy
 import json
 import logging
+import re
 import unittest
 
 import pytest
@@ -37,6 +38,24 @@ logging.disable(logging.CRITICAL)
 #: The job id the multi-sample variant below is served under. The captured corpus only
 #: holds a family job, and a family job is the one shape the result page already handled.
 MULTI_SAMPLE_JOB_ID = "6a74660af8b8d2c6f8366400"
+
+
+#: base.html renders flash categories as bootstrap alert classes.
+FLASH_ALERT_CLASS = {"error": "danger", "warning": "warning", "success": "success", "info": "info"}
+
+
+def flashed(response, category):
+    """The messages flashed under `category` on a rendered page, without the rest of it.
+
+    Searching `response.data` for the message instead is how an assertion about a flash
+    ends up satisfied by something else on the page. Two things do that here: the
+    selection page states its own sample cap in static prose, so the cap's number is on
+    a bare page unconditionally, and the page flashes a cap message of its own - so even
+    an alert-scoped assertion has to name the category it means.
+    """
+    alert_class = FLASH_ALERT_CLASS[category]
+    pattern = rf'<div class="alert alert-{alert_class} mt-3" role="alert">(.*?)</div>'
+    return re.findall(pattern, response.data.decode(), re.S)
 
 
 # --- the selection page ----------------------------------------------------------
@@ -75,12 +94,40 @@ class TestTheSelectionPage:
         response = client.get("/analyze/unique_blocks?samples=0,1,2")
         assert b"[0, 1, 2]" in response.data
 
-    def test_a_sample_that_no_longer_exists_is_dropped_from_the_selection(self, client, as_role):
+    def test_a_sample_that_cannot_be_resolved_is_reported_and_kept(self, client, as_role):
+        """Not dropped. `getSampleById` answers None for a 500 as readily as for a 404,
+        so an id the backend declined to resolve is not an id that is gone - and editing
+        someone's sample set on that evidence is how an analysis silently loses a sample.
+        The row is rendered unresolved instead, with the same remove button as the rest.
+        """
         as_role("visitor")
-        response = client.get("/analyze/unique_blocks?samples=0,9999", follow_redirects=True)
+        response = client.get("/analyze/unique_blocks?samples=0,9999")
+
+        assert response.status_code == 200, "redirected rather than showing the selection"
+        assert any("9999" in message for message in flashed(response, "warning")), flashed(response, "warning")
+        # the selection itself, as the page's own javascript reads it back
+        assert b"[0, 9999]" in response.data
+        # and a row for it, so the reader can see it and take it out with the same x as
+        # the rest. Asserting on the page as a whole would be satisfied by the flash.
+        body = response.data.decode()
+        selection_table = body[body.index("<tbody>"):body.index("</tbody>")]
+        row = selection_table[selection_table.index(">9999<"):]
+        assert "deleteSample" in row[:row.index("</tr>")]
+
+    def test_a_stale_selection_settles_in_one_request(self, client, as_role, fake_mcrit):
+        """It used to unwind ten at a time: the page checked only the ids in the
+        pagination slice it was rendering, dropped those, and redirected. A selection of
+        250 stale ids was 25 redirect hops, and browsers give up around 20 - so the
+        selection that most needed cleaning up was the one that could not load at all.
+        """
+        as_role("visitor")
+        stale = ",".join(str(i) for i in range(900000, 900250))
+        response = client.get(f"/analyze/unique_blocks?samples={stale}", follow_redirects=True)
 
         assert response.status_code == 200
-        assert b"9999" in response.data and b"does not exist" in response.data
+        assert response.history == (), f"{len(response.history)} redirect hops to render one selection"
+        looked_up = [call for call in fake_mcrit.calls if call[0] == "getSampleById"]
+        assert len(looked_up) <= 10, f"{len(looked_up)} lookups to render ten rows"
 
     def test_a_malformed_sample_list_is_reported_rather_than_raising(self, client, as_role):
         """A hand-typed or truncated URL. `parse_integer_list_query_param` refuses the
@@ -178,7 +225,11 @@ class TestSubmittingTheSelection:
         response = client.get(f"/analyze/start_unique_blocks?samples={oversized}", follow_redirects=True)
 
         assert response.status_code == 200
-        assert str(MAX_SELECTED_SAMPLES).encode() in response.data
+        # asserted on the error flash, not on the page: unique_blocks.html states the cap
+        # in static prose, so the number is on a bare selection page unconditionally -
+        # and the page it redirects to flashes a cap message of its own, as a warning
+        errors = flashed(response, "error")
+        assert any(str(MAX_SELECTED_SAMPLES) in message for message in errors), errors
         assert not [call for call in fake_mcrit.calls if call[0] == "requestUniqueBlocksForSamples"]
 
     def test_exactly_the_maximum_is_still_submitted(self, client, as_role, fake_mcrit):
@@ -297,9 +348,15 @@ class TestRuleParametersOnTheResultPage:
 
     def test_the_blocks_per_sample_is_bounded(self, client, as_role, result_url):
         """The one knob that costs time rather than only changing the answer.
+
         generateBlockCover selects one block per pass and rescans the rest, so this is
-        the k in an O(k*n) walk: on a 6124-block report the default 10 costs 0.08s, 1000
-        costs 24s. Left unbounded it is a long-running request any visitor can ask for."""
+        the k in an O(k*n) walk. The timings the cap was chosen from - 10 costs 0.08s,
+        100 costs 0.9s, 1000 costs 24s - were measured on a full 6124-block report, not
+        on the fixture here, which holds 250 blocks: k above 250 exhausts the candidates
+        and costs nothing more (10 -> 0.001s, 100 -> 0.018s, 1000 -> 0.059s, and 1000
+        selects the same 250 blocks as 250 does). So this asserts the clamp, which is
+        what the route owns, and not a runtime this report cannot exhibit.
+        """
         from mcritweb.views.data import YARA_REQUIRED_PER_SAMPLE_MAXIMUM
 
         capped = client.get(f"{result_url}?required_per_sample=100000&tab=yara")
@@ -330,6 +387,39 @@ class TestRuleParametersOnTheResultPage:
         rule = self.rule_of(response)
         assert "1 of them" in rule
         assert "-5 of them" not in rule and "0 of them" not in rule
+
+    @pytest.mark.parametrize(
+        "query",
+        ["max_ins=1", "min_ins=999999", "min_bytes=999999", "max_bytes=1", "min_bytes=0x99999999"],
+    )
+    def test_a_bound_that_selects_no_blocks_offers_no_rule_at_all(self, client, as_role, result_url, query):
+        """The other side of the condition clamp, and the side it cannot reach.
+
+        `YARA_CONDITION_MINIMUM` floors the number the caller asks for, but `renderRule`
+        emits `min(len(block_hashes), condition_required)` - so any bound that filters
+        every block drives the condition back to "0 of them" underneath the clamp. That
+        rule does not compile, and neither would "1 of them": an empty `strings:` section
+        is itself a YARA syntax error, so there is no number that rescues it. The page
+        says so and offers nothing to copy.
+        """
+        response = client.get(f"{result_url}?{query}&tab=yara")
+
+        body = response.data.decode()
+        assert response.status_code == 200
+        assert "selected no blocks" in body
+        assert "rule mcrit_" not in body, "offered a rule with an empty strings section"
+        assert "0 of them" not in body
+        assert 'id="yara_text"' not in body, "offered an empty rule for copying"
+
+    def test_a_bound_that_still_selects_blocks_keeps_its_rule(self, client, as_role, result_url):
+        """The other side of it - withholding the rule whenever a bound is set at all
+        would make the parameters useless."""
+        response = client.get(f"{result_url}?min_ins=30&tab=yara")
+
+        body = response.data.decode()
+        assert "rule mcrit_" in body
+        assert "selected no blocks" not in body
+        assert 'id="yara_text"' in body
 
     @pytest.mark.parametrize(
         "query",
@@ -416,17 +506,36 @@ class TestSamplesThatDoNotExist:
 
         response = client.get("/analyze/start_unique_blocks?samples=0,999999", follow_redirects=True)
 
-        assert b"No sample with id 999999" in response.data
+        assert b"did not confirm sample id 999999" in response.data
         assert self.queued(fake_mcrit) == [], "queued a job naming a sample that does not exist"
 
-    def test_the_ids_that_do_exist_are_kept_in_the_selection(self, client, as_role, fake_mcrit):
-        """Dropping the whole selection would punish the user for one stale row."""
+    def test_the_selection_comes_back_unchanged(self, client, as_role, fake_mcrit):
+        """Dropping the whole selection would punish the user for one stale row - and
+        dropping only the offending id is worse, because `isSampleId` answers False for
+        a 500 too. Rewriting the sample set on that evidence means the next submit
+        quietly analyses a different set than the one the user chose. The route refuses
+        and hands the selection back whole; the page is where it gets edited.
+        """
         as_role("visitor")
 
         response = client.get("/analyze/start_unique_blocks?samples=0,999999")
 
         assert response.status_code == 302
-        assert "samples=0" in response.headers["Location"]
+        assert "samples=0,999999" in response.headers["Location"], response.headers["Location"]
+
+    def test_the_existence_check_cannot_outgrow_the_cap(self, client, as_role, fake_mcrit):
+        """One GET already fans out to one backend round trip per selected sample -
+        `McritClient` has no batched sample lookup to do it in fewer. The cap is the only
+        thing bounding that, so it has to be applied before the loop, not after.
+        """
+        from mcritweb.views.analyze import MAX_SELECTED_SAMPLES
+
+        as_role("visitor")
+        oversized = ",".join(str(i) for i in range(4 * MAX_SELECTED_SAMPLES))
+        client.get(f"/analyze/start_unique_blocks?samples={oversized}")
+
+        checked = [call for call in fake_mcrit.calls if call[0] == "isSampleId"]
+        assert len(checked) <= MAX_SELECTED_SAMPLES, f"{len(checked)} backend calls for one GET"
 
     def test_every_id_is_checked_not_just_the_first(self, client, as_role, fake_mcrit):
         """The unknown id is last, so a check that stopped early would still submit.

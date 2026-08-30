@@ -296,6 +296,10 @@ YARA_RULE_DEFAULTS = {
 #: The rule is YARA source, offered for copying straight into a scanner: "0 of them"
 #: matches nothing and a negative count does not compile. The bounds above have no such
 #: floor - generateBlockCover reads 0 as "no bound".
+#:
+#: This only floors the number the caller asks for. `renderRule` emits
+#: `min(len(block_hashes), condition_required)`, so a bound that filters every block
+#: reaches "0 of them" from underneath the clamp - see `build_yara_rule`.
 YARA_CONDITION_MINIMUM = 1
 
 #: `required_per_sample` is the one knob that costs time rather than only changing the
@@ -322,11 +326,16 @@ def parse_yara_rule_params(request):
 
 
 def build_yara_rule(blocks_result, yara_params):
-    """The rule, plus the block cover it was built from.
+    """The rule, plus the block cover it was built from - or None for no rule.
 
     `generateYaraRule` throws the cover away, but the page reports what the rule covers,
     and those numbers move with the parameters - so they cannot be read off the
     statistics the backend stored under its own defaults.
+
+    A cover with no blocks in it has no rule to render. `renderRule` would still produce
+    one, but it is not YARA: an empty `strings:` section is a syntax error on its own,
+    and `min(len(block_hashes), condition_required)` writes "0 of them" underneath
+    YARA_CONDITION_MINIMUM. No condition rescues that, so nothing is offered to copy.
     """
     ubr = UniqueBlocksResult.fromDict(blocks_result)
     block_cover = ubr.generateBlockCover(
@@ -336,6 +345,8 @@ def build_yara_rule(blocks_result, yara_params):
         max_bytes=yara_params["max_bytes"],
         required_per_sample=yara_params["required_per_sample"],
     )
+    if not block_cover["block_hashes"]:
+        return None, block_cover
     return ubr.renderRule(block_cover, yara_params["condition_required"], wrap_at=40), block_cover
 
 def result_unique_blocks(job_info, blocks_result: dict):
