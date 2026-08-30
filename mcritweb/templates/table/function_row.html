@@ -14,6 +14,9 @@
 
 
 {% macro function_header(for_sample_view=False, sort_pagination=None, column_setup=None) %}
+  {# accept but discard additional kwargs - see _table_base in table.html, which
+     forwards the caller's kwargs to the header as well as to the row macro #}
+  {% if False %}{{ kwargs }}{% endif %}
   {% if column_setup is none %}
     {% set column_setup = ["function_id", "family_id", "sample_id", "pic_hash", "has_minhash", "offset", "function_name", "num_instructions", "num_blocks"] %}
   {% endif %}
