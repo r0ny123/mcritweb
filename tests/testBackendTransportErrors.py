@@ -239,6 +239,97 @@ def test_a_transport_failure_carries_no_credentials():
     assert "127.0.0.1" in rendered, "the repr must still say what could not be reached"
 
 
+# --- an admin sees the page too, and the probe answers the API the same way -------
+
+@pytest.mark.parametrize(
+    "fake_mcrit", [("getFamily", requests.exceptions.ConnectionError("refused"))],
+    indirect=True, ids=["ConnectionError"],
+)
+def test_an_admin_gets_the_page_and_not_a_build_error(client, as_role, fake_mcrit):
+    """The page links an admin to the server settings, and only an admin, because
+    that route is admin-gated. The first version of this named the blueprint
+    `administration` - it is registered as `admin` - so `url_for` raised BuildError
+    while rendering, and an admin got a 500 for the one condition the page exists to
+    report. Every other test here signs in as a visitor and none of them saw it."""
+    as_role("admin")
+
+    response = client.get("/explore/families/1")
+
+    assert response.status_code == 503
+    assert url_for_admin_server() in response.get_data(as_text=True)
+
+
+def url_for_admin_server():
+    return "/admin/server"
+
+
+@pytest.mark.parametrize(
+    "fake_mcrit", [("getFamily", requests.exceptions.ConnectionError("refused"))],
+    indirect=True, ids=["ConnectionError"],
+)
+def test_a_visitor_is_not_pointed_at_a_page_they_cannot_open(client, as_role, fake_mcrit):
+    as_role("visitor")
+
+    body = client.get("/explore/families/1").get_data(as_text=True)
+
+    assert url_for_admin_server() not in body
+
+
+@pytest.mark.parametrize(
+    "probe, expected",
+    [
+        (lambda: (_ for _ in ()).throw(requests.exceptions.ConnectionError("refused")), 502),
+        (lambda: (_ for _ in ()).throw(requests.exceptions.ReadTimeout("timed out")), 504),
+        (lambda: False, 502),
+    ],
+    ids=["probe raises ConnectionError", "probe raises ReadTimeout", "probe refuses our token"],
+)
+@pytest.mark.parametrize(
+    "fake_mcrit", [("nothingFailsHere", RuntimeError("unused"))], indirect=True, ids=[""],
+)
+def test_the_probe_answers_the_api_with_a_status_too(app, client, make_user, fake_mcrit, probe, expected):
+    """mcrit_server_required runs before the view, so when the backend is fully down
+    the probe fails first and the blueprint's own handler never gets a chance. It
+    used to redirect an API caller to an HTML page - the same wrong-shape answer this
+    change fixes for the call itself, one layer earlier.
+
+    Every other API test here has the probe stubbed to succeed, which is exactly why
+    none of them saw it."""
+    make_user(role="visitor")
+    app.config["MCRIT_SERVER_PROBE"] = probe
+
+    response = client.get("/api/status", headers={"apitoken": "apitoken-visitor"})
+
+    assert response.status_code == expected
+    assert response.headers.get("Location") is None
+
+
+@pytest.mark.parametrize(
+    "fake_mcrit", [("nothingFailsHere", RuntimeError("unused"))], indirect=True, ids=[""],
+)
+def test_a_page_still_gets_the_redirect_when_the_probe_fails(app, client, as_role, fake_mcrit):
+    """The API split must not change what a page does: mcrit_server_required's flash
+    and redirect to the index is right there, because it runs before the view and the
+    index has not been reached yet."""
+    as_role("visitor")
+    app.config["MCRIT_SERVER_PROBE"] = lambda: False
+
+    response = client.get("/explore/families")
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/")
+
+
+def test_the_api_blueprint_name_the_split_keys_on_is_the_real_one():
+    """backend_errors names the blueprint as a string rather than importing api.py,
+    which imports it. If the blueprint were ever renamed, every API caller would
+    quietly start getting HTML redirects again - so the two are pinned together."""
+    from mcritweb import backend_errors as errors
+    from mcritweb.views import api
+
+    assert api.bp.name == errors.API_BLUEPRINT_NAME
+
+
 # --- the handler must not become a catch-all --------------------------------------
 
 @pytest.mark.parametrize(

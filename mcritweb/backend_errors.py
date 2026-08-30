@@ -26,7 +26,17 @@ branch for it.
 """
 
 import requests
-from flask import current_app, render_template
+from flask import current_app, render_template, request
+
+#: name of the blueprint whose callers get a status code instead of a page. Kept here
+#: rather than imported from views/api.py, which imports this module - a test asserts
+#: the two still agree.
+API_BLUEPRINT_NAME = "api"
+
+
+def wants_a_status_code():
+    """True for a request that cannot read an HTML page - i.e. an API caller."""
+    return request.blueprint == API_BLUEPRINT_NAME
 
 
 def is_timeout(error):
