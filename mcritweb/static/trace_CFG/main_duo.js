@@ -1319,6 +1319,10 @@ function highlightUERs(UERtype){
       
       
                 showGraph("a", node_colors);
+                // mcritweb: issue #69 - the two panels load independently, so a
+                // highlight switched on while this one was still in flight has
+                // already painted the other and would never reach these nodes.
+                reapplyHighlight();
                 // loopify_dagre.addBackground();
       
                 fnManip.init();
@@ -1358,6 +1362,8 @@ function highlightUERs(UERtype){
     
     
               showGraph("b", node_colors);
+              // mcritweb: issue #69 - see the "a" loader.
+              reapplyHighlight();
               // loopify_dagre.addBackground();
     
               fnManip.init();
@@ -3530,6 +3536,15 @@ function highlightUERs(UERtype){
           .style("fill", panel.colors.hasOwnProperty(nodeId) ? panel.colors[nodeId] : "");
       }
     }
+  }
+
+  // Paints whichever highlight is currently on, without touching the buttons. A
+  // panel that finished loading after the user pressed one has just drawn its nodes
+  // in their ordinary diff colours, so the highlight has to be laid over it again -
+  // otherwise the button reads "Hide Cycles" while one panel shows none.
+  function reapplyHighlight(){
+    if(isCycleShown) { showCycles(); }
+    if(isLoopShown) { showLoops(); }
   }
 
   // The two highlights paint the same rects, so at most one of them is on.
