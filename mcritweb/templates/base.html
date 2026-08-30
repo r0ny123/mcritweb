@@ -15,10 +15,15 @@
   {# DataTables and jQuery UI used to be here: 623 KB of render-blocking JavaScript and
      41 KB of CSS, on every page, for two calls.
 
-     DataTables is gone entirely - its one initialiser selected an element the app never
-     renders, so it did nothing anywhere. jQuery UI loads from result_cross.html, the
-     only page that calls `.sortable()`; {% block style %} runs after this block, so
-     jQuery is in place before it. See issue #63. #}
+     DataTables is gone entirely - its one initialiser lived on the jobs page, against a
+     selector that page never renders, so it did nothing anywhere. jQuery UI loads from
+     result_cross.html, the only page that calls `.sortable()`; {% block style %} runs
+     after this block, so jQuery is in place before it. See issue #63.
+
+     That ordering is load-bearing and not only for jQuery UI: Bootstrap 5.0.2 defines
+     its jQuery plugins on DOMContentLoaded, so it wins `$.fn.tooltip` over jQuery UI as
+     long as jQuery UI is a plain `<script>`. Load a library from here *lazily* and that
+     flips. See ADR-0015. #}
   <script src="{{ url_for('static', filename='autocomplete.js') }}"></script>
   <script src="{{ url_for('static', filename='bootstrap-5.0.2-dist/js/bootstrap.bundle.min.js') }}"></script>
   <script src="{{ url_for('static', filename='post_action.js') }}"></script>
