@@ -69,7 +69,7 @@ every PR. It is not an upstream issue - see `work/LOG.md`, 22:05Z.
 | 45 | 28 | Mark the search term in results | n/a (feature, labelled `wait`) | — | M | not started |
 | 48 | 29 | Minify/prettify HTML | n/a (feature) | — | M | not started |
 | 63 | 30 | Optimize browser performance (render-blocking JS) | can't measure here | — | L | not started |
-| 62 | 31 | Preload navbar icons | n/a (feature) | — | S | not started |
+| 62 | 31 | Preload navbar icons | **yes** (measured with headless Chromium) | UX | S | PR opened — [#17](https://github.com/r0ny123/mcritweb/pull/17) |
 | 60 | 32 | Consider htmx for table reload + pagination | n/a (refactor) | — | L | not started |
 | 68 | 33 | Improve MatchingResults performance | can't measure here | — | L | not started |
 | 67 | 34 | Investigate export→import bugs | can't (needs a real backend) | — | L | not started |
