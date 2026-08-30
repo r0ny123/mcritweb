@@ -62,8 +62,18 @@ def _spend_a_password_check(password):
         secret = secrets.token_urlsafe(32)
         # an empty table has no method to match; the default is as good an answer as
         # any, and there is no account to be told apart from in the first place
-        _ABSENT_USER_PASSWORD_HASH = (generate_password_hash(secret, method=method) if method
-                                      else generate_password_hash(secret))
+        try:
+            _ABSENT_USER_PASSWORD_HASH = (generate_password_hash(secret, method=method) if method
+                                          else generate_password_hash(secret))
+        except ValueError:
+            # the stored hashes name something werkzeug can verify but not generate - a
+            # legacy md5$/sha1$ hash, or a column written by something other than this
+            # app. Falling back costs the timing match for those rows; raising would
+            # make /login 500 for absent usernames *only*, which is both a denial of
+            # service and a perfect existence oracle - strictly worse than the leak
+            # this whole change is closing.
+            current_app.logger.warning("Cannot generate a %r hash for the absent-user check; using the default", method)
+            _ABSENT_USER_PASSWORD_HASH = generate_password_hash(secret)
         _ABSENT_USER_HASH_METHOD = method
     check_password_hash(_ABSENT_USER_PASSWORD_HASH, password)
 
