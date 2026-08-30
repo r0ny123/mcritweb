@@ -58,8 +58,30 @@ def matching_statistics(matching_result):
     statistics = {
         "minhash": _aggregate(match for match in function_matches if match.match_is_minhash),
         "pichash": _aggregate(match for match in function_matches if match.match_is_pichash),
-        # any filter at all, not just famid/samid/funid: a score or library filter
-        # narrows the page just as much, and left the table equally wrong before.
+        # Whether this is a subset of the job, measured over the function matches -
+        # which is what the four recomputed fields are counted from, and also what the
+        # page's function table renders. So it is exactly the right question for them.
+        #
+        # It is not the same as "the user filtered something". `applyFilterValues`
+        # splits into family/sample filters and function filters, and only the second
+        # group touches `filtered_function_matches`. Measured on the captured 1-vs-N
+        # report (11 samples, 1913 function matches):
+        #
+        #   filter_direct_min_score=20         3/11 samples   1913/1913 functions
+        #   filter_direct_nonlib_min_score=20  8/11           1913/1913
+        #   filter_frequency_min_score=20      3/11           1913/1913
+        #   filter_unique_only                 7/11           1913/1913
+        #   filter_exclude_own_family          9/11           1913/1913
+        #   filter_family_name=win.citadel     2/11           1913/1913
+        #   filter_exclude_library             6/11           1812/1913
+        #   filter_exclude_pic                11/11            576/1913
+        #   filter_func_unique                11/11            557/1913
+        #
+        # The six that narrow only the sample list leave every function match in place,
+        # so the statistics and the function table below them stay in step - both show
+        # the whole job's function matches. They do disagree with the *sample* table,
+        # which is a real gap, but not one this table can close by relabelling: the
+        # numbers would still be the ones it is showing.
         "is_filtered": len(function_matches) != len(matching_result.function_matches),
     }
     for method in ("minhash", "pichash"):
