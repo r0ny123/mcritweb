@@ -269,13 +269,83 @@ class CorpusMcritClient:
         self._record("getFunctionsByIds", function_ids, *args, **kwargs)
         return {int(fid): self._functions[int(fid)] for fid in function_ids if int(fid) in self._functions}
 
-    def getFunctionById(self, function_id, *args, **kwargs):
-        self._record("getFunctionById", function_id, *args, **kwargs)
-        return self._functions.get(int(function_id))
+    def getFunctionById(self, function_id, with_xcfg=False, *args, **kwargs):
+        """The entry, with its control flow graph only if it was asked for.
+
+        The backend keeps the disassembly in its own collection and injects it only
+        under `with_xcfg` (`MongoDbStorage.getFunctionById`), so an entry fetched
+        without the flag arrives with `xcfg` None - "not requested", as distinct from
+        the `{}` of "disassembly dropped". A fake that always handed the graph back
+        would let a caller that forgot the flag pass here and render nothing in
+        production, so the flag is honoured.
+
+        The stripped entry is a shallow copy: `xcfg` is rebound on the copy, never
+        mutated through it, so the shared corpus entry keeps its graph.
+        """
+        self._record("getFunctionById", function_id, *args, with_xcfg=with_xcfg, **kwargs)
+        entry = self._functions.get(int(function_id))
+        if entry is None or with_xcfg:
+            return entry
+        stripped = copy.copy(entry)
+        stripped.xcfg = None
+        return stripped
 
     def isFunctionId(self, function_id, *args, **kwargs):
         self._record("isFunctionId", function_id, *args, **kwargs)
         return int(function_id) in self._functions
+
+    def getMatchesForPicHash(self, pichash, summary=False, *args, **kwargs):
+        """Every function sharing a PicHash, as the backend reports them.
+
+        mcrit answers a set of (family_id, sample_id, function_id) triples, or - for
+        `summary` - how many distinct ids of each kind that set holds
+        (`QueryResource.on_get_query_pichash_summary`). The counts here are over the
+        captured corpus only, so they are smaller than a live instance would give;
+        what they preserve is the shape and the invariant that
+        families <= samples <= functions.
+        """
+        self._record("getMatchesForPicHash", pichash, summary=summary)
+        matches = [
+            (entry.family_id, entry.sample_id, entry.function_id)
+            for entry in self._functions.values()
+            if entry.pichash == pichash
+        ]
+        if not summary:
+            return matches
+        return {
+            "families": len({match[0] for match in matches}),
+            "samples": len({match[1] for match in matches}),
+            "functions": len({match[2] for match in matches}),
+        }
+
+    def getMatchesForPicBlockHash(self, picblockhash, summary=False, *args, **kwargs):
+        """Every basic block sharing a PicBlockHash, as the backend reports them.
+
+        A quadruple per matching block - (family_id, sample_id, function_id, offset) -
+        so one function contributes several rows when a block repeats inside it. The
+        summary counts distinct ids per kind plus the number of matching blocks
+        (`QueryResource.on_get_query_picblockhash_summary`). This is what the CFG
+        viewer's block tooltip asks for, through `/explore/getPicBlockMatches`, and
+        the summary branch is the one that route - and so the test suite - drives.
+        The full list is here because the real client answers it for `summary=False`;
+        mcritweb only reaches it through the `/api/` pass-through, which hands the
+        result to `handle_raw_response` and so needs a wire response, not a fake's.
+        """
+        self._record("getMatchesForPicBlockHash", picblockhash, summary=summary)
+        matches = [
+            (entry.family_id, entry.sample_id, entry.function_id, block["offset"])
+            for entry in self._functions.values()
+            for block in entry.picblockhashes
+            if block["hash"] == picblockhash
+        ]
+        if not summary:
+            return matches
+        return {
+            "families": len({match[0] for match in matches}),
+            "samples": len({match[1] for match in matches}),
+            "functions": len({match[2] for match in matches}),
+            "offsets": len(matches),
+        }
 
     # --- jobs and results --------------------------------------------------------
 
