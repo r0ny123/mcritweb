@@ -122,7 +122,8 @@ def test_diagram_route_does_not_need_the_result_cache(client, as_role, app):
 
 # --- the picture is the one the page used to render -------------------------------
 
-DEFAULT_FILTER_VALUES = {
+#: The user's stored UserFilters, as `data.result` hands them to setFilterValues.
+NO_USER_FILTERS = {
     "filter_direct_min_score": None,
     "filter_direct_nonlib_min_score": None,
     "filter_frequency_min_score": None,
@@ -141,6 +142,14 @@ DEFAULT_FILTER_VALUES = {
     "filter_func_unique": None,
 }
 
+#: ...and a user who has set one that bites. All-None filters narrow nothing, so on
+#: their own they cannot tell a renderer that reads the filtered lists from one that
+#: does not: both sides of the assertion below would hold the same matches either
+#: way. This one leaves the page's copy holding fewer function matches than the
+#: route's fresh copy - which test_the_narrowing_user_filter_still_narrows checks,
+#: because a regenerated fixture could quietly take that away again.
+NARROWING_USER_FILTERS = dict(NO_USER_FILTERS, filter_function_min_score=90)
+
 
 def render_to_bytes(matching_result, **filters):
     renderer = MatchReportRenderer()
@@ -150,28 +159,48 @@ def render_to_bytes(matching_result, **filters):
     return buffer.getvalue()
 
 
+def test_the_narrowing_user_filter_still_narrows(app, corpus_mcrit):
+    """NARROWING_USER_FILTERS is only worth parametrising over while it bites, and
+    what makes it bite is a threshold against the captured report. Regenerating the
+    fixtures could put every match on one side of it and turn half the parametrisation
+    below back into tautologies, with nothing failing to say so."""
+    report = corpus_mcrit.getResultForJob(job_id_of("matches_for_sample"))
+    with app.test_request_context("/"):
+        result = MatchingResult.fromDict(report)
+        result.setFilterValues(dict(NARROWING_USER_FILTERS))
+        result.getUniqueFamilyMatchInfoForSample(None)
+        result.applyFilterValues()
+
+        assert 0 < len(result.filtered_function_matches) < len(result.function_matches)
+
+
+@pytest.mark.parametrize("user_filters", [NO_USER_FILTERS, NARROWING_USER_FILTERS], ids=["no user filters", "a user filter that bites"])
 @pytest.mark.parametrize(
     "filters, narrow",
     [
+        # the unfiltered and function-filtered branches rendered before calling
+        # filterToFunctionId, so the user's stored filters are all that had been
+        # applied to the page's copy by then - which is why those two rows narrow
+        # nothing here, and why the user_filters axis above is what gives them teeth
         ({}, lambda result: None),
         ({"filtered_family_id": 1}, lambda result: result.filterToFamilyId(1)),
         ({"filtered_sample_id": 1}, lambda result: result.filterToSampleId(1)),
         ({"filtered_function_id": 0}, lambda result: None),
     ],
 )
-def test_the_diagram_does_not_depend_on_the_filtering_the_page_applies(app, corpus_mcrit, filters, narrow):
+def test_the_diagram_does_not_depend_on_the_filtering_the_page_applies(app, corpus_mcrit, filters, narrow, user_filters):
     """Why the route may re-read the report instead of being handed the page's copy.
 
-    The page narrows a MatchingResult - user filter defaults, then filterToFamilyId
-    or filterToSampleId - before it used to render. The renderer reads only the
-    unfiltered `function_matches`, `library_matches` and `reference_sample_entry`,
-    so both produce the same image. If a future mcrit makes the renderer look at
-    the filtered lists, this is where that shows up.
+    The page narrows a MatchingResult - the user's stored filters, then
+    filterToFamilyId or filterToSampleId - before it used to render. The renderer
+    reads only the unfiltered `function_matches`, `library_matches` and
+    `reference_sample_entry`, so both produce the same image. If a future mcrit makes
+    the renderer look at the filtered lists, this is where that shows up.
     """
     report = corpus_mcrit.getResultForJob(job_id_of("matches_for_sample"))
     with app.test_request_context("/"):
         as_the_page_had_it = MatchingResult.fromDict(report)
-        as_the_page_had_it.setFilterValues(dict(DEFAULT_FILTER_VALUES))
+        as_the_page_had_it.setFilterValues(dict(user_filters))
         as_the_page_had_it.getUniqueFamilyMatchInfoForSample(None)
         as_the_page_had_it.applyFilterValues()
         narrow(as_the_page_had_it)
@@ -214,6 +243,24 @@ def test_a_filter_the_page_would_have_rejected_draws_nothing(client, as_role, ap
     assert cached_diagrams(app) == []
 
 
+@pytest.mark.parametrize("suffix", ["-famid_0001", "-samid_01", "-funid_-0"])
+def test_a_filter_id_the_app_spells_differently_renders_nothing(client, as_role, app, suffix):
+    """int() folds "0001", "01" and "-0" onto the names create_match_diagram writes -
+    "-famid_1", "-samid_1", "-funid_0" - so the file rendered is never the file that
+    was asked for, and the on-disk short-circuit in `diagram_file` tests the name that
+    was asked for. Each of these was therefore a URL that fetched the report and
+    rebuilt a whole MatchingResult on every single hit, 404ed, and could never be
+    answered from disk, and the filter-id grammar spelled about eighteen of them per
+    id, behind nothing but @visitor_required. On master the route did no work at all
+    for any of them.
+    """
+    as_role("visitor")
+    response = client.get(f"/data/diagrams/{job_id_of('matches_for_sample')}{suffix}.png")
+
+    assert response.status_code == 404
+    assert cached_diagrams(app) == [], "rendered a diagram under a name it then 404ed for"
+
+
 @pytest.mark.parametrize("report", ["cross_compare", "unique_blocks"])
 def test_a_job_that_is_not_a_match_report_does_not_render_a_diagram(client, as_role, app, report):
     """`/data/diagrams/<job_id>.png` takes any job id, and only some jobs carry a
@@ -235,15 +282,51 @@ def test_a_query_report_has_no_function_filtered_diagram(client, as_role, app):
     assert cached_diagrams(app) == []
 
 
-def test_a_broken_render_leaves_no_partial_file(client, as_role, app, monkeypatch):
-    """The diagram is written to a temporary file and renamed, so a render that dies
-    half way through cannot leave something that later looks like a cached diagram."""
+def test_a_render_that_never_starts_is_a_404_not_a_500(client, as_role, app, monkeypatch):
+    """A render that raises before writing anything. Nothing to clean up, so this is
+    only about the page: the route swallows it and the browser gets a missing image,
+    where the inline render used to take the whole result page down with it."""
     as_role("visitor")
 
     def explode(*args, **kwargs):
         raise RuntimeError("render failed")
 
     monkeypatch.setattr(MatchReportRenderer, "renderStackedDiagram", explode)
+    response = client.get(f"/data/diagrams/{job_id_of('matches_for_sample')}.png")
+
+    assert response.status_code == 404
+    assert cached_diagrams(app) == []
+
+
+class HalfWrittenImage:
+    """Stands in for the PIL image create_match_diagram renders, and dies with some
+    bytes already written - a full disk, or the worker being killed mid-encode.
+
+    PIL's Image.save takes either an open file or a path, and so does this one: that
+    is what lets the test be pointed at an implementation that writes in place and
+    still tell the difference, rather than passing on both.
+    """
+
+    def save(self, target, format=None):
+        if hasattr(target, "write"):
+            target.write(PNG_MAGIC)
+            target.flush()
+        else:
+            with open(target, "wb") as fout:
+                fout.write(PNG_MAGIC)
+        raise OSError("no space left on device")
+
+
+def test_a_render_that_dies_half_way_through_leaves_no_partial_file(client, as_role, app, monkeypatch):
+    """The diagram is written to a temporary file and renamed, so a render that dies
+    part way through cannot leave something that later looks like a cached diagram.
+
+    That matters more here than for the report cache: the file would be served by
+    this very route, as a truncated PNG, and browser-cached - and nothing invalidates
+    a cached diagram, so it would stay wrong until someone emptied the directory.
+    """
+    as_role("visitor")
+    monkeypatch.setattr(MatchReportRenderer, "renderStackedDiagram", lambda self, **kwargs: HalfWrittenImage())
     response = client.get(f"/data/diagrams/{job_id_of('matches_for_sample')}.png")
 
     assert response.status_code == 404
@@ -270,6 +353,26 @@ def test_diagram_filenames_are_parsed_back_into_their_parts(filename, expected):
     match = DIAGRAM_FILENAME_RE.match(filename)
     assert match is not None
     assert (match.group("job_id"), match.group("filter_kind"), match.group("filter_id")) == expected
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "6a74660af8b8d2c6f83664f1-famid_0001.png",
+        "6a74660af8b8d2c6f83664f1-samid_01.png",
+        "6a74660af8b8d2c6f83664f1-funid_-0.png",
+        "6a74660af8b8d2c6f83664f1-funid_-01.png",
+    ],
+)
+def test_a_filter_id_that_is_not_how_the_app_spells_it_is_not_read_as_a_filter(filename):
+    """These are not names this route ever writes, and reading them as filters is what
+    made them uncacheable - see the route-level test above. Off the filter grammar
+    they are just an odd job id, which costs a backend miss and no report parse,
+    exactly like every other name nobody has a job for."""
+    match = DIAGRAM_FILENAME_RE.match(filename)
+
+    assert match is not None, "the job id accepts these characters, so the name still parses"
+    assert match.group("filter_kind") is None, match.groupdict()
 
 
 @pytest.mark.parametrize(

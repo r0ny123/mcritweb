@@ -1,7 +1,7 @@
 import hashlib
 import os
 import re
-import tempfile
+import uuid
 from datetime import datetime
 
 from flask import Blueprint, Response, current_app, flash, json, redirect, render_template, request, send_from_directory, session, url_for
@@ -60,9 +60,15 @@ def is_cacheable_job_id(job_id):
 #: the id swallow it - a uuid4 job id contains dashes, so a greedy id would read
 #: "<uuid>-famid_7.png" as one long unfiltered id. Query reports number their
 #: functions negatively, hence the optional sign.
+#: The filter id is exactly how str(int) spells it, because the whole point of
+#: recognising the name is to render the file that was asked for: "0001" and "-0"
+#: would be rendered as "-famid_1" and "-funid_0", leaving the requested name still
+#: missing and the report re-parsed on every hit for as long as anyone asked. Off
+#: this grammar they are simply part of a job id nobody has, which is a backend miss
+#: and no report parse - the same as any other name the app never wrote.
 DIAGRAM_FILENAME_RE = re.compile(
     r"^(?P<job_id>[0-9A-Za-z_-]{1,64}?)"
-    r"(?:-(?P<filter_kind>famid|samid|funid)_(?P<filter_id>-?\d{1,18}))?"
+    r"(?:-(?P<filter_kind>famid|samid|funid)_(?P<filter_id>0|-?[1-9][0-9]{0,17}))?"
     r"\.png$"
 )
 
@@ -99,7 +105,7 @@ def load_cached_result(app, job_id):
         except (OSError, ValueError):
             # a cache file we cannot read is not a reason to fail the page - fall
             # through to the next one, and ultimately to fetching from the backend
-            current_app.logger.exception("Ignoring unreadable cached result %s", path)
+            app.logger.exception("Ignoring unreadable cached result %s", path)
     return {}
 
 
@@ -110,10 +116,34 @@ def cache_result(app, job_info, matching_result):
         timestamped_filename = datetime.utcnow().strftime(f"%Y%m%d-%H%M%S-{job_info.job_id}.json")
         # the filename is only second-resolution, so two requests for the same job can
         # pick the same one - write elsewhere and rename, or a reader gets half a file
-        write_atomically(cache_path, timestamped_filename, lambda fout: json.dump(matching_result, fout, indent=1), "w")
+        write_atomically(app, cache_path, timestamped_filename, lambda fout: json.dump(matching_result, fout, indent=1), "w")
 
 
-def write_atomically(directory, filename, write, mode="wb"):
+#: The permissions a cached file is asked for with, before the process umask is
+#: applied to them. The same 0666 a plain `open(path, "w")` asks for, so a cached
+#: report or diagram keeps the mode the in-place writes left it with - 0644 under a
+#: default umask, and whatever the operator chose otherwise. `tempfile.mkstemp`
+#: cannot do this job: it hard-codes 0600 because it is built for files that are
+#: secrets, and neither of these is one - both are derived from a report the app
+#: serves. The umask cannot be read back either, only temporarily set to zero, which
+#: is process-wide and would hand a concurrent request a world-writable file.
+CACHE_FILE_MODE = 0o666
+
+
+def incomplete_cache_path(app):
+    """Where a cache file lives until it is complete.
+
+    A sibling of the two cache directories rather than a subdirectory of either,
+    because `diagram_file` serves every name under cache/diagrams: a temporary file
+    there is fetchable under its own name for the whole render window, and after a
+    SIGKILL forever - the partial file this is all here to prevent, in a new shape.
+    Being under the same instance/cache is also what keeps os.replace a rename
+    rather than a copy, so the two must stay on one filesystem.
+    """
+    return os.sep.join([app.instance_path, "cache", "incomplete"])
+
+
+def write_atomically(app, directory, filename, write, mode="wb"):
     """Hand `write` a handle on a temporary file, then rename it into place.
 
     Both caches are written while other requests are reading them, and a diagram in
@@ -121,9 +151,14 @@ def write_atomically(directory, filename, write, mode="wb"):
     file - which would then be served, and browser-cached, as a truncated image.
     os.replace is atomic, so a reader sees either no file or a complete one.
     """
-    handle, temp_path = tempfile.mkstemp(dir=directory, prefix=".incomplete-", suffix=".part")
+    temp_directory = incomplete_cache_path(app)
+    os.makedirs(temp_directory, exist_ok=True)
+    temp_path = os.sep.join([temp_directory, uuid.uuid4().hex + ".part"])
     try:
-        with os.fdopen(handle, mode) as fout:
+        # opened through `open` rather than tempfile, so that the permissions come out
+        # the way the in-place writes left them; the opener adds O_EXCL, so a name
+        # that somehow already exists is an error rather than a silent clobber
+        with open(temp_path, mode, opener=lambda path, flags: os.open(path, flags | os.O_EXCL, CACHE_FILE_MODE)) as fout:
             write(fout)
         os.replace(temp_path, os.sep.join([directory, filename]))
     finally:
@@ -147,7 +182,7 @@ def create_match_diagram(app, job_id, matching_result, filtered_family_id=None, 
         renderer = MatchReportRenderer()
         renderer.processReport(matching_result)
         image = renderer.renderStackedDiagram(filtered_family_id=filtered_family_id, filtered_sample_id=filtered_sample_id, filtered_function_id=filtered_function_id)
-        write_atomically(cache_path, output_filename, lambda fout: image.save(fout, format="PNG"))
+        write_atomically(app, cache_path, output_filename, lambda fout: image.save(fout, format="PNG"))
         print("stored new MCRIT diagram:", output_path)
 
 
