@@ -2197,3 +2197,81 @@ style; the behaviour assertion beside it had already proved the fix worked, so o
 assertion was wrong.
 
 The MongoDB and mcrit services started for #67 are stopped; nothing is left running.
+
+## Real-scale validation against mcrit.malpedia.io
+
+The user granted read-only access to a live MCRITweb instance (contributor role). Used
+strictly read-only: no submission, no job, no deletion, no modification, and a fixed
+handful of requests rather than a sweep - it is the maintainers' production box.
+
+**Scale:** 8,691 samples, 2,175 families, **11,669,208 functions**, mongodb storage.
+
+This matters because most of this campaign's performance numbers were measured on a
+ten-sample captured corpus or on a synthetic model.
+
+### #77's two removals, priced at production scale
+
+    GET /api/families                 2.64 s     274,403 B
+    GET /api/jobs?start=0&limit=25    1.22 s      26,315 B  (25 jobs, ~1,052 B each)
+
+The first is the call `explore.samples` made **on every sample-list and sample-search page
+view**, to fill a datalist in a modal that is usually never opened. 2.64 seconds, every
+time. The PR modelled it as 2,003 mongo operations against a hypothetical 2,000-family
+instance; the real one has 2,175, so the model was very nearly exact.
+
+The second is the shape of the other removal. Before #77, `explore.samples` called
+`getQueueData()` with no arguments, and `McritClient` omits `limit` from the query string
+when it is not `> 0` - so that was the *entire* queue, deserialised into a `Job` each, per
+page view, to annotate 25 rows.
+
+**I did not issue the unbounded call.** Its size is not knowable up front on someone
+else's production instance, and that unknown size is exactly the cost being described.
+Pricing it was not worth the load.
+
+### What could not be measured, and why
+
+The ~30 s function search behind **#76** stays the reporter's number, not mine.
+`api_router` does not forward search at all - `/api/query/search/functions` correctly
+answers **501** - so measuring it needs a logged-in session rather than an API token. Two
+timed attempts confirmed the 501 and cost the instance nothing.
+
+Nothing was captured into `tests/fixtures/`. Regenerating fixtures from Malpedia would put
+their data into a public fork, which is a decision for the user and the maintainers rather
+than a side effect of a verification run.
+
+### A comment I wrote and could not post
+
+The above was written up for PR #146, whose description carries only the modelled figures.
+Posting it was blocked by the permission layer; the text is kept at
+`scratchpad/c146.md` and should go up when a human can approve it. Not worked around.
+
+## The fork PRs link to upstream issues
+
+Worth knowing at merge time, found while checking that the six ADR PRs explain their own
+non-closure. `r0ny123/mcritweb` has **zero** issues, yet ten of its PRs report a closing
+reference - and those references resolve to **`fkie-cad/mcritweb`** issues, because GitHub
+resolves a bare `#N` in a fork against the parent.
+
+    fork PR #8  -> fkie-cad/mcritweb#78
+    fork PR #17 -> fkie-cad/mcritweb#62
+    fork PR #24 -> fkie-cad/mcritweb#75      (+7 more)
+
+Merging into the fork should not close an upstream issue - a closing keyword acts within
+its own repository - but ten fork PRs now advertise a link their merge cannot honour. Left
+alone deliberately: stripping the keywords would desynchronise the fork bodies from the
+upstream ones, which are the copies that matter, on a guess about GitHub's behaviour. It
+is recorded rather than acted on.
+
+## Five ADR PRs did not say why they close nothing
+
+#153, #154, #155, #156 and #157 each state "No code change" but never said that they
+therefore leave their issue open. #158 already did. A reader could reasonably have expected
+them to close and wondered why they do not, so each now carries a short section saying it
+ships an ADR, changes no behaviour, and leaves the issue open with a written answer
+attached.
+
+**My first attempt at that note was refused by my own guard**, which is the part worth
+recording: the note quoted the earlier accident verbatim - the phrase in which a PR stated
+it was not closing #57 - and that quotation is itself a closing keyword next to an issue
+number. Writing about the trap would have sprung it, on five PRs at once. The check that
+caught it was mechanical, not a re-read.
