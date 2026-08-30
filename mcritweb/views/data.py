@@ -19,7 +19,7 @@ from mcritweb.views.authentication import contributor_required, visitor_required
 from mcritweb.views.client import get_client
 from mcritweb.views.cross_compare import get_sample_to_job_id, score_to_color
 from mcritweb.views.functiondiff import get_matches_node_colors
-from mcritweb.views.MatchReportRenderer import MatchReportRenderer
+from mcritweb.views.MatchReportRenderer import MatchReportRenderer, count_diagram_blocks, stacked_diagram_size
 from mcritweb.views.pagination import Pagination
 from mcritweb.views.params import (
     parse_checkbox_query_param,
@@ -172,6 +172,39 @@ def write_atomically(app, directory, filename, write, mode="wb"):
         # os.replace consumed it on the success path; this is the failure path
         if os.path.isfile(temp_path):
             os.remove(temp_path)
+
+
+def match_diagram_size(result_json):
+    """The pixel size the diagram of `result_json` renders to, or None if unknown.
+
+    The diagram is no longer drawn during the page request - the browser fetches it
+    from data.diagram_file afterwards - so the page has to reserve the box it will
+    land in, or the tables below it jump down when it arrives. That box is decided
+    entirely by how many instruction blocks the reference sample's matchable
+    functions add up to, and the report already carries the instruction count of
+    every one of them: mcrit's `_summarizeMatches` writes an entry per function of
+    the reference sample, matched or not. So the size is known without asking the
+    backend anything.
+
+    MatchReportRenderer reads those instruction counts from
+    `getFunctionsBySampleId(reference sample)` instead, which is the same list - it
+    is what the matcher summarised the report from (mcrit MatcherSample/MatcherVs).
+    The two can only disagree if the sample was deleted after the job ran, and then
+    the reservation is merely the wrong size: the browser takes the image's own
+    dimensions once it has loaded.
+
+    None for a query report, whose reference sample is not stored: the renderer then
+    has no function entries at all and draws an empty diagram, and pinning a size to
+    that is not worth the guess.
+    """
+    function_summaries = result_json.get("matches", {}).get("functions") if isinstance(result_json, dict) else None
+    if not function_summaries:
+        return None
+    # same test MatchingResult.fromDict decides is_query by - a query's functions are
+    # numbered negatively, and its reference sample is not one the backend stores
+    if any(function_summary["fid"] < 0 for function_summary in function_summaries):
+        return None
+    return stacked_diagram_size(count_diagram_blocks([function_summary["num_instructions"] for function_summary in function_summaries]))
 
 
 def create_match_diagram(app, job_id, matching_result, filtered_family_id=None, filtered_sample_id=None, filtered_function_id=None):
@@ -414,21 +447,24 @@ def result(job_id):
         # re-format result report for visualization and choose respective template
         if job_info is None:
             return render_template("result_invalid.html", job_id=job_id)
+        # the diagram's size, while the raw report is still in hand - MatchingResult
+        # drops the per-function instruction counts it is worked out from
+        diagram_size = match_diagram_size(result_json)
         if job_info.parameters.startswith("getMatchesForSampleVs"):
             matching_result = MatchingResult.fromDict(result_json)
-            return result_matches_for_sample_or_query(job_info, matching_result)
+            return result_matches_for_sample_or_query(job_info, matching_result, diagram_size)
         elif job_info.parameters.startswith("getMatchesForSample"):
             matching_result = MatchingResult.fromDict(result_json)
-            return result_matches_for_sample_or_query(job_info, matching_result)
+            return result_matches_for_sample_or_query(job_info, matching_result, diagram_size)
         elif job_info.parameters.startswith("getMatchesForSmdaReport"):
             matching_result = MatchingResult.fromDict(result_json)
-            return result_matches_for_sample_or_query(job_info, matching_result)
+            return result_matches_for_sample_or_query(job_info, matching_result, diagram_size)
         elif job_info.parameters.startswith("getMatchesForMappedBinary"):
             matching_result = MatchingResult.fromDict(result_json)
-            return result_matches_for_sample_or_query(job_info, matching_result)
+            return result_matches_for_sample_or_query(job_info, matching_result, diagram_size)
         elif job_info.parameters.startswith("getMatchesForUnmappedBinary"):
             matching_result = MatchingResult.fromDict(result_json)
-            return result_matches_for_sample_or_query(job_info, matching_result)
+            return result_matches_for_sample_or_query(job_info, matching_result, diagram_size)
         elif job_info.parameters.startswith("combineMatchesToCross"):
             return result_matches_for_cross(job_info, result_json)
         # NOTE: 'updateMinHashes' is the start of 'updateMinHashesForSample'.
@@ -564,7 +600,7 @@ def assign_matched_offsets(client, function_matches):
     return is_complete
 
 
-def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult):
+def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult, diagram_size=None):
     score_color_provider = ScoreColorProvider()
     filtered_family_id = parse_integer_query_param(request, "famid")
     filtered_sample_id = parse_integer_query_param(request, "samid")
@@ -674,7 +710,7 @@ def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult
         matching_result.filterToFamilyId(filtered_family_id)
         sample_pagination = Pagination(request, matching_result.num_sample_matches, limit=10, query_param="samp", limit_param="sampl")
         function_pagination = Pagination(request, count_aggregated_function_matches(matching_result), limit=100, query_param="funp", limit_param="funl")
-        return render_template("result_compare_family.html", famid=filtered_family_id, job_info=job_info, samp=sample_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_all) 
+        return render_template("result_compare_family.html", diagram_size=diagram_size, famid=filtered_family_id, job_info=job_info, samp=sample_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_all) 
     # filtered for sample
     elif filtered_sample_id is not None and client.isSampleId(filtered_sample_id):
         matching_result.filterToSampleId(filtered_sample_id)
@@ -685,7 +721,7 @@ def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult
             return render_template("result_corrupted.html", reason=MISSING_ENTRIES_REASON, job_info=job_info)
         sample_pagination = Pagination(request, 1, limit=10, query_param="samp", limit_param="sampl")
         function_pagination = Pagination(request, count_aggregated_function_matches(matching_result), limit=100, query_param="funp", limit_param="funl")
-        return render_template("result_compare_sample.html", samid=filtered_sample_id, job_info=job_info, samp=sample_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_sample) 
+        return render_template("result_compare_sample.html", diagram_size=diagram_size, samid=filtered_sample_id, job_info=job_info, samp=sample_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_sample) 
     # filter for function - treat family/sample part as if there was no filter
     elif filtered_function_id is not None and filtered_function_id in matching_result.function_id_to_family_ids_matched:
         matching_result.filterToFunctionId(filtered_function_id)
@@ -696,7 +732,7 @@ def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult
         # set up pagination
         family_pagination = Pagination(request, matching_result.num_family_matches, limit=10, query_param="famp", limit_param="fampl")
         function_pagination = Pagination(request, matching_result.num_function_matches, limit=100, query_param="funp", limit_param="funl")
-        return render_template("result_compare_function.html", funid=filtered_function_id, job_info=job_info, famp=family_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_function) 
+        return render_template("result_compare_function.html", diagram_size=diagram_size, funid=filtered_function_id, job_info=job_info, famp=family_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_function) 
     # 1 vs 1 result
     elif job_info.parameters.startswith("getMatchesForSampleVs("):
         # get offsets for matched functions
@@ -710,7 +746,7 @@ def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult
         family_pagination = Pagination(request, matching_result.num_family_matches, limit=10, query_param="famp", limit_param="fampl")
         library_pagination = Pagination(request, matching_result.num_library_matches, limit=10, query_param="libp", limit_param="libl")
         function_pagination = Pagination(request, count_aggregated_function_matches(matching_result), limit=100, query_param="funp", limit_param="funl")
-        return render_template("result_compare_all.html", job_info=job_info, famp=family_pagination, libp=library_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_all)
+        return render_template("result_compare_all.html", diagram_size=diagram_size, job_info=job_info, famp=family_pagination, libp=library_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_all)
 
 
 def result_matches_for_cross(job_info, result_json):
