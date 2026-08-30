@@ -107,6 +107,26 @@ def flash_sample_search_failed(client, query):
 
 
 
+def exact_match_marks(results, id_field):
+    """Which records the backend answered as an exact hit on an identifier, keyed by id
+    and valued with what it matched on.
+
+    `id_match` and `sha_match` arrive beside `search_results`, and once they are folded
+    into the same table a row that is there because the query *was* its id reads as an
+    ordinary text hit. The row macros mark the ones named here. See issue #56.
+    """
+    marks = {}
+    if not results:
+        return marks
+    # sha first, so the id wins if one record somehow came back as both - which is also
+    # the order the samples view folds them in
+    for key, matched_on in (("sha_match", "SHA-256"), ("id_match", "ID")):
+        match = results.get(key)
+        if match is not None:
+            marks[match[id_field]] = matched_on
+    return marks
+
+
 ##############################################################
 ### Unfiltered Collections: Families, Samples, Function
 ##############################################################
@@ -168,18 +188,32 @@ def families():
     query = request.args.get('query', "")
     client = get_client()
     families = []
+    exact_matches = {}
     pagination = CursorPagination(request, default_sort="family_id", limit=25)
     results = client.search_families(query, **pagination.getSearchParams(), limit=pagination.limit)
     pagination.read_cursor_from_result(results)
     if results is None:
         flash_search_failed(query, "families")
     else:
+        # the exact-id hit arrives beside the text results, not among them, and this
+        # page used to read only the latter - so searching a family page for an id
+        # rendered "No families available" for a family that exists, while the search
+        # page found it. See issue #56.
+        by_id = {}
+        id_match = results.get('id_match')
+        if id_match is not None:
+            entry = FamilyEntry.fromDict(id_match)
+            by_id[entry.family_id] = entry
         for family_dict in results['search_results'].values():
-            families.append(FamilyEntry.fromDict(family_dict))
+            entry = FamilyEntry.fromDict(family_dict)
+            # the id match can also come back as a text hit; keep its position, not a copy
+            by_id.setdefault(entry.family_id, entry)
+        families = list(by_id.values())
+        exact_matches = exact_match_marks(results, 'family_id')
     all_families = client.getFamilies()
     family_names = [family_entry.family_name for family_entry in all_families.values()]
     user_column_setup = get_user_column_setup("family_table")
-    return render_template("families.html", families=families, family_names=family_names, pagination=pagination, query=query, user_column_setup=user_column_setup)
+    return render_template("families.html", families=families, family_names=family_names, pagination=pagination, query=query, user_column_setup=user_column_setup, exact_matches=exact_matches)
 
 @bp.route('/modifySample', methods=['POST'])
 @contributor_required
@@ -248,14 +282,25 @@ def samples():
     query = request.args.get('query', "")
     client = get_client()
     samples = []
+    exact_matches = {}
     pagination = CursorPagination(request, default_sort="sample_id", limit=25)
     results = client.search_samples(query, **pagination.getSearchParams(), limit=pagination.limit)
     pagination.read_cursor_from_result(results)
     if results is None:
         flash_sample_search_failed(client, query)
     else:
+        # as in families above: the exact id, and for samples the exact sha256, arrive
+        # beside the text results rather than among them. See issue #56.
+        by_id = {}
+        for exact in (results.get('sha_match'), results.get('id_match')):
+            if exact is not None:
+                entry = SampleEntry.fromDict(exact)
+                by_id[entry.sample_id] = entry
         for sample_dict in results['search_results'].values():
-            samples.append(SampleEntry.fromDict(sample_dict))
+            entry = SampleEntry.fromDict(sample_dict)
+            by_id.setdefault(entry.sample_id, entry)
+        samples = list(by_id.values())
+        exact_matches = exact_match_marks(results, 'sample_id')
 
     jobs = client.getQueueData()
     job_collection = JobCollection(jobs)
@@ -264,7 +309,7 @@ def samples():
     all_families = client.getFamilies()
     family_names = [family_entry.family_name for family_entry in all_families.values()]
     user_column_setup = get_user_column_setup("samples_table")
-    return render_template("samples.html", samples=samples, family_names=family_names, job_collection=job_collection, pagination=pagination, query=query, user_column_setup=user_column_setup)
+    return render_template("samples.html", samples=samples, family_names=family_names, job_collection=job_collection, pagination=pagination, query=query, user_column_setup=user_column_setup, exact_matches=exact_matches)
 
 
 @bp.route('/functions')
@@ -277,17 +322,27 @@ def functions():
     query = request.args.get('query', "")
     client = get_client()
     functions = []
+    exact_matches = {}
     pagination = CursorPagination(request, default_sort="function_id", limit=25)
     results = client.search_functions(query, **pagination.getSearchParams(), limit=pagination.limit)
     pagination.read_cursor_from_result(results)
     if results is None:
         flash_search_failed(query, "functions")
     else:
+        # as in families and samples above. Kept as raw dicts, which is this page's
+        # existing convention - function_row.html reads them by name either way, and
+        # switching the whole page to FunctionEntry is a separate change. See issue #56.
+        by_id = {}
+        id_match = results.get('id_match')
+        if id_match is not None:
+            by_id[id_match['function_id']] = id_match
         for function_dict in results['search_results'].values():
             #functions.append(FunctionEntry.fromDict(function_dict))
-            functions.append(function_dict)
+            by_id.setdefault(function_dict['function_id'], function_dict)
+        functions = list(by_id.values())
+        exact_matches = exact_match_marks(results, 'function_id')
     user_column_setup = get_user_column_setup("functions_table")
-    return render_template("functions.html", functions=functions, pagination=pagination, query=query, user_column_setup=user_column_setup)
+    return render_template("functions.html", functions=functions, pagination=pagination, query=query, user_column_setup=user_column_setup, exact_matches=exact_matches)
 
 ##############################################################
 ### Single Entries: Families, Samples, Function
@@ -460,6 +515,7 @@ def search():
 
     #TODO: show id/sha matches in extra place
     families = {}
+    family_exact_matches = {}
     family_pagination = None
     if 'family' in types:
         family_pagination = CursorPagination(request, query_param_prefix="family", default_sort="family_id", limit=25)
@@ -476,12 +532,14 @@ def search():
             for family_entry in results['search_results'].values():
                 family = FamilyEntry.fromDict(family_entry)
                 families[family.family_id] = family
+            family_exact_matches = exact_match_marks(results, 'family_id')
     # deduplicate: the id match is also a name match whenever a family is named after
     # its own id, and the two arrive in separate fields - see issue #78. Keyed by id
     # rather than filtered afterwards so the id match keeps its place at the top.
     families = list(families.values())
 
     samples = {}
+    sample_exact_matches = {}
     sample_pagination = None
     if 'sample' in types:
         sample_pagination = CursorPagination(request, query_param_prefix="sample", default_sort="sample_id", limit=25)
@@ -504,10 +562,12 @@ def search():
             for sample_dict in results['search_results'].values():
                 sample_entry = SampleEntry.fromDict(sample_dict)
                 samples[sample_entry.sample_id] = sample_entry
+            sample_exact_matches = exact_match_marks(results, 'sample_id')
     # deduplicate in case we have cases such as filename == sha256
     samples = list(samples.values())
 
     functions = {}
+    function_exact_matches = {}
     function_pagination = None
     if 'function' in types:
         function_pagination = CursorPagination(request, query_param_prefix="function", default_sort="function_id", limit=25)
@@ -524,6 +584,7 @@ def search():
             for function_dict in results['search_results'].values():
                 function_entry = FunctionEntry.fromDict(function_dict)
                 functions[function_entry.function_id] = function_entry
+            function_exact_matches = exact_match_marks(results, 'function_id')
     # deduplicate, as for families and samples above - a name like sub_401000 contains
     # digits, so a numeric term can match a function by id and by name at once
     functions = list(functions.values())
@@ -549,5 +610,8 @@ def search():
         answered_types=[t for t in types if t in SEARCHABLE_TYPES and t not in search_failed],
         family_column_setup=family_column_setup,
         sample_column_setup=sample_column_setup,
-        function_column_setup=function_column_setup
+        function_column_setup=function_column_setup,
+        family_exact_matches=family_exact_matches,
+        sample_exact_matches=sample_exact_matches,
+        function_exact_matches=function_exact_matches
     )
