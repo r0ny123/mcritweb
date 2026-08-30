@@ -144,7 +144,7 @@ def test_a_state_filter_reports_the_state(client, as_role, app, empty_mcrit):
     app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: empty_mcrit
     as_role("visitor")
 
-    page = client.get("/data/jobs?state=failed").get_data(as_text=True)
+    page = client.get("/data/jobs?state=failed", follow_redirects=True).get_data(as_text=True)
 
     assert "No jobs are in state &#34;failed&#34;." in page
 

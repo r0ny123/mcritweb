@@ -209,15 +209,14 @@ def test_deleting_a_whole_queue_state_still_works_without_a_job_of_its_own(clien
     "fake_mcrit", [("getFamilies", None), ("getQueueData", None)],
     indirect=True, ids=["getFamilies", "getQueueData"],
 )
-def test_the_listing_pages_are_left_to_the_branch_that_rewrites_them(client, as_role, fake_mcrit):
-    """Not a fix, a marker. `/explore/samples` still breaks on both of these, and the
-    audit says so: issue #77 replaces every one of those calls in the same functions,
-    so patching them here would be a merge conflict rather than a fix. When #77 lands,
-    this test is what says whether it closed them."""
+def test_the_listing_pages_survive_a_backend_that_answers_none(client, as_role, fake_mcrit):
+    """This was a marker: `/explore/samples` used to raise on both of these calls, and
+    the audit left them to issue #77 rather than patch the same functions twice. #77
+    has landed - it dropped the getFamilies call from this page entirely and gave the
+    queue read a fallback - so the marker becomes the assertion it was waiting for."""
     as_role("visitor")
 
-    with pytest.raises((AttributeError, TypeError)):
-        client.get("/explore/samples")
+    assert client.get("/explore/samples").status_code == 200
 
 
 # --- the API is a different shape and does not need this -------------------------

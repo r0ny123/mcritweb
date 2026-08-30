@@ -244,7 +244,9 @@ def test_one_category_failing_does_not_silence_the_answer_for_the_others(client,
     as_role("visitor")
     monkeypatch.setattr(fake_mcrit, "search_families", lambda *args, **kwargs: None)
 
-    page = client.get("/explore/search?query=zzzznomatchzzzz").get_data(as_text=True)
+    # the three categories are named, because #77 narrowed what a search with no
+    # `type=` covers and this test is about the ones that answered, not the default
+    page = client.get("/explore/search?query=zzzznomatchzzzz&type=family,sample,function").get_data(as_text=True)
 
     assert "the backend did not answer" in page, "the failure still has to be reported"
     assert "Nothing matched" in page, "and so does the answer for the categories that worked"

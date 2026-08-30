@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from urllib.parse import urlencode
 
-from flask import Blueprint, Response, current_app, flash, json, redirect, render_template, request, send_from_directory, session, url_for
+from flask import Blueprint, Response, current_app, flash, g, json, redirect, render_template, request, send_from_directory, session, url_for
 from mcrit.libs.utility import decode_two_complement
 from mcrit.queue.LocalQueue import Job
 from mcrit.queue.QueueRemoteCalls import to_binary as canonicalise_queue_json
@@ -84,6 +84,10 @@ def is_cacheable_job_id(job_id):
 DIAGRAM_FILENAME_RE = re.compile(
     r"^(?P<job_id>[0-9A-Za-z_-]{1,64}?)"
     r"(?:-(?P<filter_kind>famid|samid|funid)_(?P<filter_id>0|-?[1-9][0-9]{0,17}))?"
+    # the palette the diagram was drawn on, spelled the way diagram_filename spells
+    # it. Without it here a dark name reads as a job id nobody has, and the page's
+    # own <img> would never be rendered at all (#70 on top of #68).
+    r"(?:-(?P<theme>dark))?"
     r"\.png$"
 )
 
@@ -236,19 +240,40 @@ def match_diagram_size(result_json):
     return stacked_diagram_size(count_diagram_blocks([function_summary["num_instructions"] for function_summary in function_summaries]))
 
 
-def create_match_diagram(app, job_id, matching_result, filtered_family_id=None, filtered_sample_id=None, filtered_function_id=None):
-    cache_path = os.sep.join([app.instance_path, "cache", "diagrams"])
+@bp.app_template_global()
+def diagram_filename(job_id, famid=None, samid=None, funid=None, theme=None):
+    """The cached diagram for this job, filter and theme.
+
+    The templates used to build this name themselves, in four places; a diagram is
+    drawn on the ground of the theme that asked for it (#70), so the name now carries
+    that too and there is one place that knows how it is spelled. Diagrams are cached
+    and never invalidated, so a theme that did not reach the name would serve whoever
+    loaded the page first their palette, permanently.
+
+    `theme` defaults to the current reader's, which is what a template wants. The
+    renderer behind data.diagram_file passes the one it read out of the name it was
+    asked for instead, because the file it writes has to hold the palette its name
+    claims however the caller's own profile is set (#68 moved that render out of the
+    page request, so the two are no longer necessarily the same reader).
+    """
     filter_suffix = ""
-    if filtered_family_id is not None:
-        filter_suffix = f"-famid_{filtered_family_id}"
-    elif filtered_sample_id is not None:
-        filter_suffix = f"-samid_{filtered_sample_id}"
-    elif filtered_function_id is not None:
-        filter_suffix = f"-funid_{filtered_function_id}"
-    output_filename = job_id + filter_suffix + ".png"
+    if famid is not None:
+        filter_suffix = f"-famid_{famid}"
+    elif samid is not None:
+        filter_suffix = f"-samid_{samid}"
+    elif funid is not None:
+        filter_suffix = f"-funid_{funid}"
+    theme_suffix = "-dark" if (g.theme if theme is None else theme) == "dark" else ""
+    return job_id + filter_suffix + theme_suffix + ".png"
+
+
+def create_match_diagram(app, job_id, matching_result, filtered_family_id=None, filtered_sample_id=None, filtered_function_id=None, theme=None):
+    cache_path = os.sep.join([app.instance_path, "cache", "diagrams"])
+    theme = g.theme if theme is None else theme
+    output_filename = diagram_filename(job_id, famid=filtered_family_id, samid=filtered_sample_id, funid=filtered_function_id, theme=theme)
     output_path = cache_path + os.sep + output_filename
     if not os.path.isfile(output_path):
-        renderer = MatchReportRenderer()
+        renderer = MatchReportRenderer(theme)
         renderer.processReport(matching_result)
         image = renderer.renderStackedDiagram(filtered_family_id=filtered_family_id, filtered_sample_id=filtered_sample_id, filtered_function_id=filtered_function_id)
         write_atomically(app, cache_path, output_filename, lambda fout: image.save(fout, format="PNG"))
@@ -273,6 +298,7 @@ def render_missing_match_diagram(app, filename_match):
     job_id = filename_match.group("job_id")
     filter_kind = filename_match.group("filter_kind")
     filter_id = int(filename_match.group("filter_id")) if filter_kind else None
+    theme = filename_match.group("theme") or "light"
     client = get_client()
     # the result page only ever linked to a diagram for a filter it had checked -
     # keep that, so a hand-written URL cannot fill the cache with diagrams of
@@ -299,6 +325,7 @@ def render_missing_match_diagram(app, filename_match):
         filtered_family_id=filter_id if filter_kind == "famid" else None,
         filtered_sample_id=filter_id if filter_kind == "samid" else None,
         filtered_function_id=filter_id if filter_kind == "funid" else None,
+        theme=theme,
     )
 
 # https://stackoverflow.com/a/39842765
@@ -902,7 +929,7 @@ def name_query_sample(job_info, matching_result: MatchingResult):
 
 def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult, diagram_size=None):
     name_query_sample(job_info, matching_result)
-    score_color_provider = ScoreColorProvider()
+    score_color_provider = ScoreColorProvider(g.theme)
     score_divisors = recover_score_divisors(matching_result)
     filtered_family_id = parse_integer_query_param(request, "famid")
     filtered_sample_id = parse_integer_query_param(request, "samid")
@@ -1204,7 +1231,7 @@ def linkhunt(job_id):
 def linkhunt_for_sample_or_query(job_info, matching_result: MatchingResult):
     name_query_sample(job_info, matching_result)
     client = get_client()
-    score_color_provider = ScoreColorProvider()
+    score_color_provider = ScoreColorProvider(g.theme)
     # generic filtering of function results
     filter_action = parse_str_query_param(request, "filter_button_action")
     filter_min_score = parse_integer_query_param(request, "filter_min_score")
@@ -1374,9 +1401,6 @@ def total_duration(job_info):
         return None
     duration = finished_at - created_at
     return duration if duration.total_seconds() >= 0 else None
-
-
-@bp.route('/jobs',methods=('GET', 'POST'))
 
 
 def job_parameters_or_blank(job):

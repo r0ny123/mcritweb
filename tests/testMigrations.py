@@ -109,8 +109,10 @@ CREATE TABLE server (
 );
 """
 
-# v1.4.8: the schema query_upload is migrated onto - the current release, everything
-# except query_upload itself. create_table_user_column_settings.sql has had exactly one
+# v1.4.8: the current release, and the schema both of the migration steps added since
+# start from - query_upload (#40) and the theme column on `user` (#70). Defined once:
+# the two branches transcribed the same file and a second copy would only be a place
+# for them to drift apart. create_table_user_column_settings.sql has had exactly one
 # commit since it was introduced in v1.4.0, so this is that file verbatim.
 SCHEMA_V1_4_8 = SCHEMA_V1_3_6 + """
 CREATE TABLE user_column_settings (
@@ -186,6 +188,8 @@ CREATE TABLE user_column_settings (
   FOREIGN KEY (user_id) REFERENCES user (id)
 );
 """
+
+
 
 
 # --- helpers ---------------------------------------------------------------------
@@ -442,6 +446,38 @@ def test_a_v1_4_8_database_only_gains_query_upload(tmp_path):
     assert "query_upload" in _tables(db_path)
     assert _columns(db_path, "query_upload") == ["job_id", "filename"]
     assert _query(db_path, "SELECT user_id, samples_table_sample_id FROM user_column_settings") == [(1, 6)]
+
+
+def test_a_v1_4_8_database_only_gains_the_theme_column(tmp_path):
+    """The theme is a per-user preference, so it lands on `user` (#70). An account
+    that predates it has no theme to keep and is not backfilled - `UserInfo` reads a
+    NULL back as the default, which testTheme.py pins."""
+    db_path = _legacy_database(tmp_path, SCHEMA_V1_4_8)
+    _insert_legacy_user(db_path, "olduser", with_apitoken=True)
+    _insert_legacy_server(db_path, with_server_token=True)
+
+    assert "theme" not in _columns(db_path, "user")
+    _run_migration(tmp_path, db_path)
+
+    assert "theme" in _columns(db_path, "user")
+    assert _query(db_path, "SELECT username, apitoken, theme FROM user") == [("olduser", "preexisting-token", None)]
+    assert _query(db_path, "SELECT server_token FROM server") == [("srvtoken",)]
+
+
+def test_a_stored_theme_survives_a_second_run(tmp_path):
+    """migrate() runs on every start; a preference that reset on restart would be
+    indistinguishable from one that never saved."""
+    db_path = _legacy_database(tmp_path, SCHEMA_V1_4_8)
+    _insert_legacy_user(db_path, "olduser", with_apitoken=True)
+
+    _run_migration(tmp_path, db_path)
+    connection = sqlite3.connect(str(db_path))
+    connection.execute("UPDATE user SET theme = 'dark'")
+    connection.commit()
+    connection.close()
+    _run_migration(tmp_path, db_path)
+
+    assert _query(db_path, "SELECT theme FROM user") == [("dark",)]
 
 
 def test_the_current_schema_is_a_no_op(tmp_path):

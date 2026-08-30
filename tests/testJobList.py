@@ -122,7 +122,10 @@ def test_an_invented_category_falls_back_instead_of_failing(client, as_role):
     response = client.get("/data/jobs?active=no-such-category", follow_redirects=True)
 
     assert response.status_code == 200
-    assert b"no-such-category" not in response.data
+    # the name is flashed back since #20 ("... is not a job type."), autoescaped. What
+    # must not happen is the page carrying it as a category it then indexes with.
+    assert b"active=no-such-category" not in response.data
+    assert b'name="active" value="no-such-category"' not in response.data
     assert category_shown(response) in INITIAL_STATISTICS
 
 
