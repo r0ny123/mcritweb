@@ -124,6 +124,31 @@ def test_a_failed_queue_read_costs_the_annotations_not_the_page(client, as_role,
     assert "job queue failed" in response.get_data(as_text=True)
 
 
+def test_half_a_queue_read_is_no_queue_read(client, as_role, fake_mcrit):
+    """The listing asks for two methods. If only one answers, keeping it renders
+    badges that count some of a sample's matching jobs and not others, and the
+    "Last 1:N Job" link comes from only one of the two - so the half-answer is not a
+    smaller true result, it is a wrong one, shown with nothing to say it is wrong.
+
+    Reported by Codex on the PR for issue #77.
+    """
+    as_role("visitor")
+    real_get_queue_data = fake_mcrit.getQueueData
+
+    def one_method_fails(*args, **kwargs):
+        if kwargs.get("method") == "getMatchesForSampleVs":
+            return None
+        return real_get_queue_data(*args, **kwargs)
+
+    fake_mcrit.getQueueData = one_method_fails
+
+    response = client.get("/explore/samples")
+
+    assert response.status_code == 200
+    assert badges(response) == {}, "kept the half of the queue that answered"
+    assert "job queue failed" in response.get_data(as_text=True)
+
+
 # --- the single sample page narrows by sample id ----------------------------------
 
 def test_the_single_sample_page_forwards_its_sample_id_as_a_filter(client, as_role, fake_mcrit):
