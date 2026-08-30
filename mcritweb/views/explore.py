@@ -42,19 +42,22 @@ def sample_row_job_collection(client, samples):
 
     A failed queue read used to take the whole page down (`JobCollection(None)`), so
     say what was lost and render the rows without their annotations instead.
+
+    All or nothing across the two requests. Keeping the half that answered would
+    render badges that count some of a sample's matching jobs and not others, and the
+    "Last 1:N Job" link comes from only one of the two methods - so a partial result
+    is not a smaller true answer, it is a wrong one, shown with no indication that it
+    is wrong. An empty collection at least matches what the message says.
     """
     if not samples:
         return JobCollection([])
     jobs = []
-    queue_read_failed = False
     for method in SAMPLE_ROW_JOB_METHODS:
         jobs_for_method = client.getQueueData(method=method)
         if jobs_for_method is None:
-            queue_read_failed = True
-            continue
+            flash("Ups, reading MCRIT's job queue failed - rows are shown without their job annotations.", category="error")
+            return JobCollection([])
         jobs.extend(jobs_for_method)
-    if queue_read_failed:
-        flash("Ups, reading MCRIT's job queue failed - rows are shown without their job annotations.", category="error")
     job_collection = JobCollection(jobs)
     job_collection.filterToSampleIds([sample.sample_id for sample in samples])
     return job_collection
