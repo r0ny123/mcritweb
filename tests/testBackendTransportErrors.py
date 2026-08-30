@@ -47,6 +47,41 @@ class FailingBackend:
             return fail
         return getattr(self._inner, name)
 
+    def raw_variant(self):
+        """The raw-response client, still failing the same way.
+
+        Named explicitly rather than left to __getattr__ above. A conftest that hands
+        out `fake_mcrit.raw_variant()` when a view asks for raw responses - which every
+        /api/ route does - would otherwise fall through to the *inner* client and get a
+        healthy one back, and the /api/ tests below would quietly stop exercising a
+        failing backend while still passing.
+
+        The fake on this branch has no raw_variant, so this wraps whatever is there
+        rather than assuming one exists. The lookup is on the *class*: the corpus fake
+        answers every unknown attribute with a stub that raises when called, so
+        getattr(inner, "raw_variant", None) never returns None and cannot be used to
+        tell "has one" from "does not".
+        """
+        if hasattr(type(self._inner), "raw_variant"):
+            inner = self._inner.raw_variant()
+        else:
+            inner = self._inner
+        return FailingBackend(inner, self._method, self._exception)
+
+
+def test_the_raw_variant_of_a_failing_backend_still_fails(corpus_mcrit):
+    """Pins the above, because nothing on this branch exercises it yet.
+
+    conftest here hands the app `fake_mcrit` directly, so the /api/ tests do reach the
+    injected failure. The moment a conftest asks for `raw_variant()` instead, this is
+    the only thing standing between those tests and a backend that never fails.
+    """
+    boom = requests.exceptions.ConnectionError("connection refused")
+    backend = FailingBackend(corpus_mcrit, "getStatus", boom)
+
+    with pytest.raises(requests.exceptions.ConnectionError):
+        backend.raw_variant().getStatus()
+
 
 TRANSPORT_FAILURES = [
     (requests.exceptions.ConnectionError("connection refused"), UNREACHABLE),
