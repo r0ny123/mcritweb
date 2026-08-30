@@ -1,6 +1,7 @@
+import re
 import time
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 from mcrit.queue.JobCollection import JobCollection
 from mcrit.storage.FamilyEntry import FamilyEntry
 from mcrit.storage.FunctionEntry import FunctionEntry
@@ -13,6 +14,58 @@ from mcritweb.views.cursor_pagination import CursorPagination
 from mcritweb.views.utility import get_user_column_setup, mcrit_server_required
 
 bp = Blueprint('explore', __name__, url_prefix='/explore')
+
+#: A search term that is exactly a SHA-256. Its own case, because a person pasting one
+#: is asking "is this sample in the collection?" and deserves that answer. See #79.
+SHA256_PATTERN = re.compile(r"[a-fA-F0-9]{64}")
+
+
+def flash_search_failed(query, collection):
+    """Report a search the backend did not answer.
+
+    `search_*` returns None only when the call itself failed - a search that matched
+    nothing is a well-formed result with no rows, and the pages say so themselves
+    (issue #54). So this is an error about the backend, and wording it as "no results"
+    would send the reader looking for the wrong thing. Issue #79.
+    """
+    flash(
+        f"Could not search MCRIT's {collection} for '{query}' - the backend did not answer. "
+        "It may be unreachable, or unable to handle this search term; check the server "
+        "settings and the backend's log.",
+        category="error",
+    )
+
+
+def flash_sample_search_failed(client, query):
+    """As above, but a SHA-256 gets a real answer rather than an apology.
+
+    That is what issue #79 asks for: someone pastes a hash to find out whether the
+    sample is known, and "search failed" tells them nothing. `getSampleBySha256` is a
+    different endpoint from the search, so it can still answer when the search could
+    not. One extra round-trip, only on a path that has already failed.
+    """
+    if SHA256_PATTERN.fullmatch(query or ""):
+        try:
+            sample_entry = client.getSampleBySha256(query)
+            # read inside the guard: an unexpected shape here is the same kind of
+            # backend trouble as the call failing, and neither should be a 500
+            known_as = None if sample_entry is None else sample_entry.sample_id
+        except Exception:
+            # the lookup is a best-effort second opinion; if it fails too, the generic
+            # message below is still true
+            current_app.logger.exception("SHA-256 lookup failed after a failed sample search")
+        else:
+            if known_as is None:
+                flash(f"No sample with SHA-256 {query} is in the collection.", category="info")
+            else:
+                flash(
+                    f"Could not search MCRIT's samples for '{query}' - the backend did not "
+                    f"answer. A sample with that SHA-256 does exist, as sample {known_as}.",
+                    category="error",
+                )
+            return
+    flash_search_failed(query, "samples")
+
 
 
 ##############################################################
@@ -80,7 +133,7 @@ def families():
     results = client.search_families(query, **pagination.getSearchParams(), limit=pagination.limit)
     pagination.read_cursor_from_result(results)
     if results is None:
-        flash(f"Ups, search for {query} in MCRIT's families failed!", category="error")
+        flash_search_failed(query, "families")
     else:
         for family_dict in results['search_results'].values():
             families.append(FamilyEntry.fromDict(family_dict))
@@ -160,7 +213,7 @@ def samples():
     results = client.search_samples(query, **pagination.getSearchParams(), limit=pagination.limit)
     pagination.read_cursor_from_result(results)
     if results is None:
-        flash(f"Ups, search for {query} in MCRIT's samples failed!", category="error")
+        flash_sample_search_failed(client, query)
     else:
         for sample_dict in results['search_results'].values():
             samples.append(SampleEntry.fromDict(sample_dict))
@@ -189,7 +242,7 @@ def functions():
     results = client.search_functions(query, **pagination.getSearchParams(), limit=pagination.limit)
     pagination.read_cursor_from_result(results)
     if results is None:
-        flash(f"Ups, search for {query} in MCRIT's functions failed!", category="error")
+        flash_search_failed(query, "functions")
     else:
         for function_dict in results['search_results'].values():
             #functions.append(FunctionEntry.fromDict(function_dict))
@@ -216,7 +269,7 @@ def family_by_id(family_id):
         results = client.search_samples(query, **pagination.getSearchParams(), limit=pagination.limit)
         pagination.read_cursor_from_result(results)
         if results is None:
-            flash(f"Ups, search for {query} in MCRIT's samples failed!", category="error")
+            flash_sample_search_failed(client, query)
         else:
             for sample_dict in results['search_results'].values():
                 samples.append(SampleEntry.fromDict(sample_dict))
@@ -249,7 +302,7 @@ def sample_by_id(sample_id):
         results = client.search_functions(query, **pagination.getSearchParams(), limit=pagination.limit)
         pagination.read_cursor_from_result(results)
         if results is None:
-            flash(f"Ups, search for {query} in MCRIT's functions failed!", category="error")
+            flash_search_failed(query, "functions")
         else:
             jobs = client.getQueueData(filter=sample_id)
             job_collection = JobCollection(jobs)
@@ -365,7 +418,7 @@ def search():
         results = client.search_families(query, **family_pagination.getSearchParams(), limit=family_pagination.limit)
         family_pagination.read_cursor_from_result(results)
         if results is None:
-            flash(f"Ups, search for {query} in MCRIT's families failed!", category="error")
+            flash_search_failed(query, "families")
         else:
             id_match = results['id_match']
             if id_match is not None:
@@ -382,7 +435,7 @@ def search():
         results = client.search_samples(query, **sample_pagination.getSearchParams(), limit=sample_pagination.limit)
         sample_pagination.read_cursor_from_result(results)
         if results is None:
-            flash(f"Ups, search for {query} in MCRIT's samples failed!", category="error")
+            flash_sample_search_failed(client, query)
         else:
             sha_match = results['sha_match']
             if sha_match is not None:
@@ -407,7 +460,7 @@ def search():
         results = client.search_functions(query, **function_pagination.getSearchParams(), limit=function_pagination.limit)
         function_pagination.read_cursor_from_result(results)
         if results is None:
-            flash(f"Ups, search for {query} in MCRIT's functions failed!", category="error")
+            flash_search_failed(query, "functions")
         else:
             id_match = results['id_match']
             if id_match is not None:
