@@ -8,6 +8,7 @@ from mcrit.storage.FunctionEntry import FunctionEntry
 from mcrit.storage.SampleEntry import SampleEntry
 
 import mcritweb.views.cfg_explorer_detector as cfg_explorer_detector
+from mcritweb.backend_errors import require_result
 from mcritweb.views.authentication import contributor_required, visitor_required
 from mcritweb.views.client import get_client
 from mcritweb.views.cursor_pagination import CursorPagination
@@ -55,7 +56,7 @@ def modifyFamily():
         is_family_delete = True if request.form.get("family_delete", None) is not None else False
         # delete family
         if is_family_delete:
-            job_id = client.deleteFamily(family_id, keep_samples=is_family_keeping_samples)
+            job_id = require_result(client.deleteFamily(family_id, keep_samples=is_family_keeping_samples), "a job for the family deletion")
             flash("Job to delete family was scheduled.", category="info")
             return redirect(url_for('data.job_by_id', job_id=job_id, refresh=5))
         # check if sample_entry should be modified
@@ -66,7 +67,7 @@ def modifyFamily():
         if new_is_library is None or new_is_library == family_entry.is_library:
             new_is_library = None
         if any([item is not None for item in [new_family_name, new_is_library]]):
-            job_id = client.modifyFamily(family_id, family_name=new_family_name, is_library=new_is_library)
+            job_id = require_result(client.modifyFamily(family_id, family_name=new_family_name, is_library=new_is_library), "a job for the family change")
             time.sleep(0.3)
         flash("Job to modify family was scheduled.", category="info")
     return redirect(url_for('explore.families'))
@@ -130,7 +131,7 @@ def modifySample():
         is_sample_delete = True if request.form.get("sample_delete", None) is not None else False
         # delete sample
         if is_sample_delete:
-            job_id = client.deleteSample(sample_id)
+            job_id = require_result(client.deleteSample(sample_id), "a job for the sample deletion")
             flash("Job to delete sample was scheduled.", category="info")
             return redirect(url_for('data.job_by_id', job_id=job_id, refresh=5))
         # check if sample_entry should be modified
@@ -286,7 +287,7 @@ def function_by_id(function_id):
     client = get_client()
     function_entry = client.getFunctionById(function_id)
     if function_entry:
-        sample_entry = client.getSampleById(function_entry.sample_id)
+        sample_entry = require_result(client.getSampleById(function_entry.sample_id), "the sample this function belongs to")
         pichash_match_summary = client.getMatchesForPicHash(function_entry.pichash, summary=True)
         return render_template("single_function.html", entry=function_entry, sample_entry=sample_entry, pichash_match_summary=pichash_match_summary)
     else:
@@ -344,7 +345,7 @@ def getPicBlockMatches(picblockhash):
 @mcrit_server_required
 def statistics():
     client = get_client()
-    stats = client.getStatus()
+    stats = require_result(client.getStatus(), "its status report")
     return render_template("statistics.html", stats=stats)
 
 
