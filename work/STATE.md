@@ -280,6 +280,55 @@ not a gap:
   finished jobs, which is enough to render pages and nowhere near enough to measure a
   30-second search or to run an export→import cycle.
 
+> **Both of those groupings were re-checked on 2026-08-30 and six of the nine calls
+> were wrong.** See the revision below. The originals are left above unedited, because
+> the point of this file is to be honest about what I concluded and when.
+
+### Revision, 2026-08-30 — the "can't do this here" set, re-measured
+
+A dedicated research pass measured every issue in the two groups above against the
+offline corpus. Correcting the record:
+
+| # | old call | corrected call | the measurement that settles it |
+|---|---|---|---|
+| #38 | needs backend | **tractable here, S–M** | 4 of 5 statistics fields recompute *exactly* from `MatchingResult.function_matches`, already on the page. The win.dridex view states 756 functions / 151 KB when the honest answer for that filter is 4 / 249 bytes. Only `num_self_matches` is unavailable (the backend drops self-matches). |
+| #68 | can't measure here | **tractable here, M** | `create_match_diagram` is synchronous before `render_template`: **275 ms of a 303 ms first view (91%)**. The `<img>` seam to move it behind already exists. Separately the report aggregation runs twice per request, first result discarded — 3 one-line edits, 13–26% off every warm render. |
+| #69 | needs click-through | **tractable here, M** | Click-through done in headless Chromium. Four client-side defects: `showCycles()` throws (`g` is `null`; the duo loader uses `g_a`/`g_b`), `Show Loops` never wired, `loopsObj` is one global written by two racing XHRs, `nodesAll` is one offset-keyed dict so the panels collide. The server half is correct — 200/200 functions cross-checked against networkx dominators. |
+| #80 | can't | **partly tractable, S** | The reported ~120-char clipboard truncation does **not** reproduce (5613 chars copy intact). Two other real defects do: the copy reads `.html()` not `.val()` so user edits are discarded, and `&`/`<`/`>` copy as entities. Sample-version column costs one backend call. |
+| #77 | needs a large real DB | **tractable here, S** | Found with a call counter on a 17-job corpus: `explore.py:168` calls `getQueueData()` with no args, and `limit=0` omits the limit — every sample-list/search view downloads the **whole queue**. At 8500 jobs: 8 MB transferred and parsed, ~166 ms of mcritweb CPU, to annotate 25 rows. |
+| #76 | mcrit | **core is mcrit; a real half is here** | The scan is genuinely the backend's. But `explore.search` runs all three searches sequentially by default, so a 30 s function scan is charged to a user who only wanted a family hit. |
+| #64 | mcrit | **mcrit, plus one line here** | `explore.py:195` has `FunctionEntry.fromDict` commented out while `explore.search` deserialises properly. Latent today (Jinja falls back to item lookup and the keys match), breaks on any future rename. |
+| #47 | mcrit | **confirmed mcrit** | `mongoqueue.py:489` picks the newest *non-terminated* job with attempts left, so a still-running force-rematch shadows an older finished one. One query. |
+| #59 | mcrit | **confirmed mcrit** | `_createIndices` creates only single-field indexes. Worth adding to the issue: mcritweb's sortable function headers offer exactly the three fields with no index at all (`offset`, `num_instructions`, `num_blocks`). |
+
+Ranked work queue coming out of that pass: **#69**, **#68(a)**, **#77**, **#38**,
+**#68(b)**, **#80**, **#76**, **#64**. #47 and #59 get a comment naming the exact
+function and nothing else.
+
+### Revision, 2026-08-30 — the twelve `wait`-labelled issues
+
+- **#44** — the code already does the **opposite** of what the issue asks: `'dump' in
+  filename` matches `dedumped`, so a de-dumped file pre-fills as "Dumped" with an empty
+  base address, and submitting it **500s** in both submit paths (`ValueError: invalid
+  literal for int() with base 16: ''`). ~4 lines. Highest value-per-line outstanding.
+- **#48** — close. A minifier saves 1.1 KB gzipped against a 1.9 MB page load; HTML is
+  1.9–10.6% of page weight. The payload problem is 1.14 MB of vendored JS per page.
+- **#42** — sub-question (a) is **already implemented** (`result_cross.html:191`).
+- **#46** — a cross-compare that took 8.06 s reports `0:00:00`; the parent job does not
+  start until its children finish. `finished_at - created_at` is two lines.
+- **#50** — 85 of 88 lines byte-identical between two of five hand-rolled result
+  tables; 204 `column_type` branches over 935 lines. Extract into a **new**
+  `table/match_row.html` — that choice is what keeps it off the contended surface.
+- **#7** — arithmetic is the backend's, but mcritweb truncates for display
+  (`"%3d"|format` on a float), so 1.04 and 0.86 render as `1` and `0`. In scope.
+- **#57/#51** — the jobs search box is commented out while the POST handler survives
+  and 400s. And wiring `filter=` would ship a broken feature: the backend filters
+  *after* paging, so you get "page 3 of 40, showing 2 results".
+- **#60 (htmx)**, **#70 (dark mode)**, **#37**, **#67**, **#74** — proposals recorded in
+  `work/LOG.md`; #70 in particular is much larger than the issue implies (Bootstrap
+  5.0.2 has no `data-bs-theme`; `ScoreColorProvider` blends toward 255 so the heat-map
+  inverts in meaning on a dark ground; the cached diagram PNGs are baked on white).
+
 ---
 
 ## Cross-cutting defect, closed on every open PR (2026-08-30)

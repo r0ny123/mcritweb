@@ -768,3 +768,161 @@ triaged as "can't reproduce / belongs in mcrit" (**#38, #68, #80, #69, #47, #64,
 of them are probably wrong. Several "backend" issues plausibly have a client-side half
 (a filter over data already on the page, an N+1 fetch), and an N+1 is measurable
 offline with `RecordingMcritClient` even without a large database.
+
+---
+
+## Session 6 — the last agent fleet lands, and nine "can't do this" triage calls fall over
+
+### PRs #35 and #36 opened (issues #34 and #35)
+
+Both agents finished. I reviewed each diff as a hostile reviewer before landing.
+
+**Issue #34 → PR #35** (`fix/34-function-page-api-usage`). Accordion layout, an API
+Usage section folded out of `xcfg["apirefs"]`, and a MinHash present/missing row.
+The agent also found a real markup bug in `table/function_row.html:76`: the `>` closing
+the `<i>` tag existed only on the *else* branch, so every function that **has** a
+MinHash emitted an unterminated tag. Shingles were correctly declined — the raw
+shingles are never persisted, `minhash_shingle_composition` is gated behind
+`MINHASH_TRACK_SHINGLES` (default off), all 609 captured functions have it empty, and
+its shape differs between strategies. Nothing real to render, so nothing rendered.
+
+I verified two claims that mattered rather than taking them:
+- `getFunctionById(function_id, with_xcfg=True)` — real signature, checked in
+  `McritClient.py:338`.
+- `apirefs` values are strings, not lists: 429 values across the fixtures, all `str`,
+  e.g. `'ws2_32.dll!getpeername'`. So the `Counter(str(api) ...)` fold is right.
+- The new fake's `getMatchesForPicHash` / `getMatchesForPicBlockHash` summary shapes
+  match `QueryResource.on_get_query_pichash_summary` and
+  `on_get_query_picblockhash_summary` exactly, including the `offsets` key the block
+  variant adds. Fidelity is the thing Codex caught me on before (#34/`getStatus`), so
+  I checked it against the installed mcrit rather than the report.
+
+**Issue #35 → PR #36** (`fix/35-analyze-a-single-function`). The Analyze button on a
+function row built its href from `function.sample_id`, so every function of a sample
+got the same link — to the sample picker. There is no per-function 1-vs-N in the
+backend, so the only meaning available is the parent sample's job read through the
+`?funid=` filter `data.result` already implements.
+
+The half worth recording: on master the job page's auto-forward **drops** `funid`
+(`/data/jobs/<id>?forward=1&funid=2` → `/data/result/<id>`), so the route alone would
+have degraded back into the reported bug one redirect later, for exactly the users
+whose job was not already finished. I mutation-checked that: removing the forward
+fails `test_analyzing_a_function_lands_on_the_function_filtered_result` and
+`test_the_job_page_carries_the_function_filter_into_the_result`.
+
+**A mistake of mine, recorded because it nearly cost the #34 work.** While
+mutation-checking `explore.py` I reverted the mutation with `git checkout
+mcritweb/views/explore.py` on a branch with no commit yet — which threw away the
+agent's actual change, not just my mutation. I rebuilt it from the diff I had already
+printed and confirmed byte-for-byte via `git diff --stat` (30 lines changed, 142
+insertions — identical to before). Use `cp` backups for mutation checks, never `git
+checkout`, on an uncommitted tree.
+
+Also: the CI cherry-pick (`8268666`) carries `work/harness/cookies.txt` with it. On
+the earlier branches I fixed that with a follow-up "drop the artefact" commit, so it
+still sits in their history. On these two I cherry-picked with `-n`, removed the file
+before committing, and squashed both CI commits into one — so `work/harness/` never
+enters the history at all. Verified with `git ls-tree -r HEAD | grep -c cookies.txt`
+→ 0 on both.
+
+### Codex finding on PR #10: uppercase SHA-256 — real, fixed
+
+`SHA256_PATTERN = re.compile(r"[a-fA-F0-9]{64}")` accepts uppercase and
+`flash_sample_search_failed` forwarded the term unchanged. Samples store their hash as
+a lowercase SMDA hexdigest and the backend's lookup is an exact match —
+`MongoDbStorage.getSampleBySha256` is `find_one({"sha256": sha256})` — so a hash
+pasted from a report came back 404 and was reported as *"No sample with SHA-256 … is
+in the collection"* for a sample that is right there. A confident wrong answer, which
+is precisely the failure mode issue #79 exists to remove.
+
+Fixed by folding the value passed to `sha256_second_opinion` while keeping the typed
+casing in the flashed message. Three tests, all mutation-checked:
+- forwarding unchanged → 2 fail
+- lowercasing `query` itself (the tempting wrong fix, which would also fold the
+  display) → the third fails
+
+`3f9b206` on `fix/79-say-what-a-failed-search-means`. Suite 256 pass, ruff clean.
+
+The other half of that Codex review (failed lookup vs absent) was already fixed by the
+raw-mode / 404-only change in `adc0e55`.
+
+### Nine issues were triaged wrong, and an agent proved it
+
+The research pass over the "can't reproduce / belongs in mcrit" set came back with
+measurements, and **six of the nine calls were wrong**. Recording the corrections here
+because they are now the work queue:
+
+- **#38 (filtered matching statistics)** — triaged "needs backend". Four of the five
+  statistics fields recompute *exactly* from `MatchingResult.function_matches`, which
+  is already on the page. Verified against three real reports. Today the win.dridex
+  page states 756 functions / 151 KB matched when the honest answer for that filter is
+  4 / 249 bytes. Only `num_self_matches` is genuinely unavailable (the backend drops
+  self-matches from the report).
+- **#68 (result page performance)** — triaged "can't measure here". Measured end to
+  end: `create_match_diagram` runs synchronously before `render_template` and is
+  **275 ms of a 303 ms first view — 91%**. The `<img>` seam to move it behind already
+  exists. Separately the report aggregation is computed twice per request and the
+  first result thrown away (three one-line edits, 13–26% off every warm render).
+- **#69 (FunctionVs loop visualisation)** — triaged "needs click-through". The
+  click-through runs offline in headless Chromium. Four defects: "Show Cycles" throws
+  (`g` is `null`; the duo loader uses `g_a`/`g_b`), "Show Loops" is never wired
+  (`loopCollapser.init()` commented out), `loopsObj` is one global written by two
+  racing XHRs, and `nodesAll` is one dict keyed by block offset so the two graphs
+  collide. The *server* half is correct — 200/200 functions cross-checked against an
+  independent networkx dominator computation.
+- **#80 (block isolation table)** — triaged "can't". Mostly checkable. The reported
+  "~120 character" clipboard truncation does **not** reproduce (a 5613-character rule
+  copies intact), but two other real defects do: the copy reads `.html()` not `.val()`
+  so user edits are silently discarded, and `&`/`<`/`>` copy as entities.
+- **#77 (sample search slow)** — triaged "needs a large real DB". Found with a call
+  counter on a 17-job corpus: `explore.py:168` calls `getQueueData()` with no
+  arguments, and `limit=0` omits the limit entirely — so every sample-list and
+  sample-search page view downloads the **whole job queue**. At 8500 jobs that is 8 MB
+  transferred and parsed plus ~166 ms of pure mcritweb CPU, to annotate 25 rows.
+  `getFamilies()` on the next line downloads every family for a datalist.
+- **#76 (function search 30 s)** — core is genuinely mcrit's (unanchored
+  case-insensitive regex over the largest collection, which must exhaust it when there
+  are no hits). But `explore.search` runs all three searches sequentially by default,
+  so the 30 s is charged to everyone who only wanted a family hit.
+
+Correctly triaged: **#47** (`mongoqueue` picks the newest non-terminated job, so a
+running force-rematch shadows a finished one — one query in mcrit), **#59** (no
+compound indexes; worth noting mcritweb's sortable headers offer exactly the three
+unindexed function fields), and the core of **#76**. **#64** is mcrit's for the client
+change, but `explore.py:195` has the `FunctionEntry.fromDict` call commented out while
+`explore.search` deserialises properly — latent inconsistency, one line.
+
+### And twelve `wait`-labelled issues got proposals
+
+Headlines, all measured:
+
+- **#48 (minify HTML)** — close it. A minifier saves **1.1 KB gzipped on a 1.9 MB page
+  load**. HTML is 1.9–10.6% of page weight; the other 1.14 MB is vendored JS (jquery-ui
+  alone is 529 KB, used for one `sortable()` and an autocomplete). That is the real
+  issue, and it is a different one.
+- **#44 (`dedumped`)** — the code already does the **opposite** of what the issue
+  proposes: `'dump' in filename` matches `dedumped`, so a de-dumped file is
+  pre-filled as "Dumped" with an empty base address, and submitting that form **500s**
+  (`ValueError: invalid literal for int() with base 16: ''`, in both submit paths).
+  Highest value-per-line on the list.
+- **#42** — sub-question (a), "do we need a reset-to-clustered button", is **already
+  implemented** at `result_cross.html:191`.
+- **#57 / #51** — the jobs search box is commented out in `jobs.html:139-148` while the
+  POST handler survives and 400s without a `Search` field. And the obvious fix would
+  ship a broken feature: `QueueRemoteCalls.getQueueData` applies its filter **after**
+  paging, so wiring it gives "page 3 of 40, showing 2 results".
+- **#46** — a cross-compare that took 8.06 s reports `0:00:00`, because `duration` is
+  the parent's `finished_at - started_at` and the parent does not start until its
+  children finish. `finished_at - created_at` is two lines and needs no extra calls.
+- **#50** — 85 of 88 lines are byte-identical between two of the five hand-rolled
+  result tables; 204 `column_type` branches across 935 lines. Extractable into a *new*
+  `table/match_row.html`, which is what keeps it off the contended surface.
+- **#7** — the arithmetic is the backend's, but mcritweb **truncates** the score for
+  display (`"%3d"|format` on a float), so 1.04 and 0.86 render as `1` and `0`. That is
+  a plausible cause of the reported "seemed too far from the expected value" and it is
+  in scope.
+- **#70 (dark mode)** — stays `wait`, but the issue understates it: Bootstrap 5.0.2 has
+  zero `data-bs-theme` support (that is 5.3), 78 template lines carry literal colours,
+  and `ScoreColorProvider` blends *toward 255* so the whole heat-map inverts in meaning
+  on a dark ground. The cached match-diagram PNGs are baked on white and never
+  invalidated.
