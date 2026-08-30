@@ -17,7 +17,7 @@ def create_app(test_config=None, instance_path=None):
     from .secret_key import INSECURE_DEFAULT, load_or_create_secret_key
     from .views import administration, analyze, api, authentication, data, explore
     from .views.client import get_client
-    from .views.utility import ensure_local_data_paths, get_mcritweb_version_from_setup
+    from .views.utility import ensure_local_data_paths, forget_server_probe, get_mcritweb_version_from_setup
 
     # create and configure the app
     # instance_path is overridable so tests get their own cache/temp/uploads tree
@@ -47,6 +47,12 @@ def create_app(test_config=None, instance_path=None):
         # uncapped beyond MAX_CONTENT_LENGTH. Issue #19: this was hardcoded at 1 MiB for
         # visitors, which is the right default but the wrong place for it.
         QUERY_UPLOAD_LIMITS={'visitor': 1 * 2**20},
+        # Seconds to reuse the backend reachability answer for. `mcrit_server_required`
+        # is on 36 routes and probed on every request to each of them, so a page load
+        # could pay for several round-trips to say the same thing (issue #89). Short
+        # enough that a backend going down is noticed almost at once; 0 disables the
+        # cache and probes every time, which is what versions before this one did.
+        MCRIT_SERVER_PROBE_TTL=5,
     )
 
     if test_config is None:
@@ -78,6 +84,11 @@ def create_app(test_config=None, instance_path=None):
 
     # ensure the instance and cache folders exists
     ensure_local_data_paths(app)
+
+    # the reachability cache is a module global, so it outlives an application object.
+    # A new app has no prior knowledge of the backend, and saying so here is also what
+    # keeps one test's cached answer from leaking into the next. See issue #89.
+    forget_server_probe()
 
     # after the config has loaded, so an explicit key in instance/config.py wins
     if app.config['SECRET_KEY'] == INSECURE_DEFAULT:
