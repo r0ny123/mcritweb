@@ -9,7 +9,7 @@ back. Before #67 that raised straight out of the view: a 500 from
 /explore/fetchDotGraph, a 500 for the whole comparison page, and a CFG panel that
 stayed blank without ever saying why.
 
-This treats the symptom. The cause is in mcrit; docs/adr/0003 records the round trip
+This treats the symptom. The cause is in mcrit; docs/adr/0011 records the round trip
 that was measured to find it, and that issue stays open.
 
 No new fixture is needed: tests/fixtures/regenerate.py already keeps the reference
@@ -77,7 +77,7 @@ def test_dot_graph_for_entry_without_xcfg_explains_itself(client, as_role, fake_
 def test_message_does_not_blame_export_import():
     """The stand-in graph told the user the CFG "is not part of exported data", which a
     measured round trip disproved: getExportData -> addImportData reproduces the xcfg
-    field for field, over MemoryStorage, MongoDB and the HTTP export (docs/adr/0003).
+    field for field, over MemoryStorage, MongoDB and the HTTP export (docs/adr/0011).
     Naming the wrong cause in the UI sends people to look in the wrong place."""
     assert "export" not in NO_XCFG_DOT_GRAPH.lower()
     assert "import" not in NO_XCFG_DOT_GRAPH.lower()

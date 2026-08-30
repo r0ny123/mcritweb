@@ -171,7 +171,7 @@ def get_matches_node_colors(function_id_a, function_id_b):
     other_function_entry = client.getFunctionById(function_id_b, with_xcfg=True)
     # Same as explore.fetchDotGraph: an entry the backend holds without its control flow
     # graph makes toSmdaFunction() raise, which used to 500 the whole comparison page
-    # (#67; docs/adr/0003 says where such entries come from).
+    # (#67; docs/adr/0011 says where such entries come from).
     # With one side missing its blocks there is nothing to correlate, so hand back the
     # empty coloring and let the page render uncolored.
     if not (function_entry and function_entry.xcfg and other_function_entry and other_function_entry.xcfg):
