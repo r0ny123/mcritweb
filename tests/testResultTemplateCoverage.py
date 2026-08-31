@@ -61,7 +61,11 @@ RENDERED_BY = [
     ("/data/result/{matches_for_sample}?samid=3", "result_corrupted.html"),
     ("/data/result/{cross_compare}?custom=999", "result_corrupted.html"),
     ("/data/result/ffffffffffffffffffffffff", "result_invalid.html"),
-    ("/data/linkhunt/ffffffffffffffffffffffff", "result_incompatible.html"),
+    # an id nobody knows is not "the wrong kind of job": the linkhunt chain answers
+    # result_invalid for it now, and result_incompatible for a job it does know and
+    # cannot hunt through - a cross compare carries no MatchingResult.
+    ("/data/linkhunt/ffffffffffffffffffffffff", "result_invalid.html"),
+    ("/data/linkhunt/{cross_compare}", "result_incompatible.html"),
     ("/data/jobs/{matches_for_sample}", "job_overview.html"),
     ("/data/jobs/ffffffffffffffffffffffff", "job_invalid.html"),
 ]
@@ -85,6 +89,9 @@ UNCOVERED = {
     "job_corrupted.html": "no view renders it; reachable only through data.job_by_id's "
                           "corrupted branch, which the corpus cannot stage.",
     "job_deleted.html": "no view renders it at all - see the grep in the test below.",
+    "job_failed.html":
+        "needs a failed or terminated job. The corpus holds only finished ones, so "
+        "testResultPages.py stages it from a monkeypatched job record rather than a URL.",
 }
 
 
@@ -156,8 +163,13 @@ def test_job_deleted_really_is_unreachable():
 
 def test_a_cross_compare_with_a_bad_custom_order_names_the_job(client, as_role):
     """result_corrupted.html was handed the result dict instead of the Job, so it
-    rendered an empty job id and a "Delete job data" link with nothing in it."""
-    as_role("visitor")
+    rendered an empty job id and a "Delete job data" link with nothing in it.
+
+    As a contributor, because the button is gated on the role that may actually delete
+    a job - data.result is visitor_required and delete_job_by_id is
+    contributor_required, so showing a visitor the button only buys them a 403.
+    """
+    as_role("contributor")
     job_id = job_id_of("cross_compare")
 
     page = client.get(f"/data/result/{job_id}?custom=999").get_data(as_text=True)
