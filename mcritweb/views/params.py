@@ -27,10 +27,17 @@ BAND_RANGE_ARG_TO_VALUE = {
 # and table/submit_or_query_dropzone.html
 BAND_RANGE_LABELS = ["Off", "Fast", "Standard", "Complete"]
 
-# band_matches_required -> that label. Note that "Off" (0) and "Complete" (1) end up
-# behaving identically in mcrit (MongoDbStorage._getCandidatesForMinHashesNumpy keeps
-# every candidate for band_matches_required <= 1), but they are distinct selections
-# and this reports what was selected.
+# band_matches_required -> that label.
+#
+# An earlier version of this comment claimed "Off" (0) and "Complete" (1) end up behaving
+# identically in mcrit, citing the `band_matches_required <= 1` branch in
+# MongoDbStorage._getCandidatesForMinHashesNumpy. That was wrong, and had never been
+# true: MatcherInterface._getMatchesRoutineInner wraps the entire minhash stage in
+# `if self._band_matches_required > 0:` (since mcrit v1.1.7, 2023), so the `<= 1` branch
+# is only reached when the stage runs at all. At 0 mcrit does pichash-only matching; at 1
+# it does full minhash matching and keeps every candidate. They are different modes, not
+# two names for one - and collapsing the two slider positions on the strength of the old
+# comment would have silently removed the pichash-only one.
 BAND_VALUE_TO_LABEL = {value: BAND_RANGE_LABELS[arg] for arg, value in BAND_RANGE_ARG_TO_VALUE.items()}
 
 

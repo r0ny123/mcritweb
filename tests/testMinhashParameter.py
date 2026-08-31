@@ -8,6 +8,7 @@ submit form showed. Nothing else about the matching configuration is recoverable
 silence for the jobs where it is not. Issue #32.
 """
 
+import inspect
 import json
 import logging
 import pathlib
@@ -16,6 +17,7 @@ import unittest
 
 import pytest
 from fixtureData import job_id_of, load
+from mcrit.matchers.MatcherInterface import MatcherInterface
 from mcrit.queue.LocalQueue import Job
 
 from mcritweb.views.params import (
@@ -56,6 +58,30 @@ def test_the_slider_positions_stay_distinguishable():
     that would say so."""
     assert len(set(BAND_RANGE_ARG_TO_VALUE.values())) == len(BAND_RANGE_ARG_TO_VALUE)
     assert sorted(BAND_RANGE_ARG_TO_VALUE) == list(range(len(BAND_RANGE_LABELS)))
+
+
+def test_band_off_is_a_different_mode_from_band_complete():
+    """Pins the premise a code comment in params.py rests on, in the code that owns it.
+
+    That comment used to say "Off" (0) and "Complete" (1) behave identically in mcrit,
+    citing the `band_matches_required <= 1` branch in
+    `MongoDbStorage._getCandidatesForMinHashesNumpy`. It was wrong and had never been
+    true: `MatcherInterface._getMatchesRoutineInner` wraps the whole minhash stage in
+    `if self._band_matches_required > 0`, so that branch is only reached when the stage
+    runs at all. At 0 mcrit does pichash-only matching; at 1 it does full minhash
+    matching keeping every candidate.
+
+    The distinction is invisible from this repository - nothing here can observe which
+    matching mcrit performed - so the only durable check is that the guard still exists
+    upstream. If mcrit ever drops it, the two positions really would collapse, and this
+    test is what should say so rather than a reader rediscovering it.
+    """
+    source = inspect.getsource(MatcherInterface._getMatchesRoutineInner)
+
+    assert "self._band_matches_required > 0" in source, (
+        "mcrit no longer skips the minhash stage at band_matches_required == 0. "
+        "If that is deliberate, 'Off' and 'Complete' may now be the same mode and the "
+        "comment in mcritweb/views/params.py needs revisiting.")
 
 
 @pytest.mark.parametrize("template", SUBMIT_TEMPLATES, ids=lambda path: path.name)
