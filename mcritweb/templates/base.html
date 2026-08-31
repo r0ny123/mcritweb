@@ -1,6 +1,9 @@
 {% from 'table/submit_or_query_dropzone.html' import submit_or_query_dropzone, submit_or_query_dropzone_js with context%}
 {% from 'table/links.html' import clipboard_btn, clipboard_js %}
 <!doctype html>
+{# the theme is a stored profile setting, so it is decided here rather than by a
+   script after load - nothing flashes in the wrong palette. See issue #70. #}
+<html data-theme="{{ g.theme }}">
 <head>
   <title>{% block title %}{% endblock %} - MCRIT Web</title>
   {# how scripts reach the CSRF token - forms carry it as a hidden input instead #}
@@ -26,6 +29,10 @@
   <link rel="icon" type="image/png" href=" {{ url_for('static',filename='d20_mcrit_cabaret_small.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='navbar.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='hint.css') }}">
+  {# last, so its rules outrank every vendored stylesheet above - including the ones
+     a page loads for itself from {% block style %}, which runs after this block
+     (issue #63). Inert unless data-theme is "dark". #}
+  <link rel="stylesheet" href="{{ url_for('static', filename='theme-dark.css') }}">
   <script src="{{ url_for('static', filename='jquery.js') }}"></script>
   {# DataTables and jQuery UI used to be here: 623 KB of render-blocking JavaScript and
      41 KB of CSS, on every page, for two calls.

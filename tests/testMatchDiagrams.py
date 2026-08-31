@@ -520,5 +520,48 @@ def test_a_query_report_reserves_nothing(client, as_role):
     assert "width=" not in diagram_img(response)
 
 
+# --- the theme is in the name, and the name is what this route renders from ---------
+#
+# Issue #70 put the theme in the diagram filename, because diagrams are cached and
+# never invalidated; issue #68 made the route render a missing diagram from the name
+# it was asked for. Neither branch could see the other: a job id may contain dashes,
+# so "<job>-dark.png" reads as one long unknown job id off a grammar that does not
+# know about "-dark", and every dark diagram is a broken image until something else
+# happens to write it.
+
+@pytest.mark.parametrize("suffix", ["", "-famid_1", "-samid_1"])
+def test_a_dark_diagram_is_recognised_rather_than_read_as_a_job_id(suffix):
+    filename = f"6a7464faf8b8d2c6f836649a{suffix}-dark.png"
+    match = DIAGRAM_FILENAME_RE.match(filename)
+
+    assert match is not None, f"{filename} is not a name this route can render"
+    assert match.group("job_id") == "6a7464faf8b8d2c6f836649a", match.group("job_id")
+    assert match.group("theme") == "dark"
+
+
+def test_a_light_name_carries_no_theme():
+    match = DIAGRAM_FILENAME_RE.match("6a7464faf8b8d2c6f836649a.png")
+
+    assert match is not None
+    assert match.group("theme") is None
+
+
+def test_the_dark_diagram_is_rendered_on_demand_and_is_not_the_light_one(client, as_role, app):
+    """End to end, and both halves matter: the dark name has to render at all, and it
+    has to render dark - `create_match_diagram` takes the theme from the name here,
+    not from the reader, so following somebody's link does not overwrite their file
+    with a light diagram under a dark name."""
+    as_role("visitor")
+    job_id = job_id_of("matches_for_sample")
+
+    dark = client.get(f"/data/diagrams/{job_id}-dark.png")
+    light = client.get(f"/data/diagrams/{job_id}.png")
+
+    assert dark.status_code == 200, "the dark diagram was never rendered"
+    assert light.status_code == 200
+    assert f"{job_id}-dark.png" in cached_diagrams(app)
+    assert Image.open(io.BytesIO(dark.data)).getpixel((0, 0)) !=         Image.open(io.BytesIO(light.data)).getpixel((0, 0)),         "the dark diagram is drawn on the light ground"
+
+
 if __name__ == "__main__":
     unittest.main()
