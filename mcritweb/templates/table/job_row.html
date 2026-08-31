@@ -13,13 +13,14 @@
 
 {% macro job_description(job, families_by_id, samples_by_id) %}
 
-{# Every branch below reads the job's payload, so this has to come first: for a job
-   whose payload cannot be parsed there is nothing to describe, and reaching for it
-   would take down the whole listing rather than this one row. The rest of the row -
-   number, timestamps, progress, the job id it links to - does not touch the payload
-   and still renders. #}
-{% if not job_payload_is_readable(job) %}
-  <span class="text-muted" title="This job's stored request cannot be parsed.">{{ job.method or "Job" }} | payload unreadable</span>
+{# Every branch below rebuilds something from the job's payload - the sample ids, the
+   family, the hash, the argument list - so this has to come first: for a job whose
+   payload cannot supply them there is nothing to describe, and reaching for it would
+   take down the whole listing rather than this one row. The method is a plain
+   dictionary read and is safe to name. The rest of the row - number, timestamps,
+   progress, the job id it links to - does not touch the payload and still renders. #}
+{% if not job_is_describable(job) %}
+  <span class="text-muted" title="This job's stored request cannot be read back, so there is nothing to show about it.">{{ job.method or "Job" }} | details unavailable</span>
 
 {% elif job.method == "getMatchesForSample" %}
   {% set sample_entry = samples_by_id.get(job.sample_id) %}
