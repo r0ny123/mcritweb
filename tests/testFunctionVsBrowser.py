@@ -481,3 +481,129 @@ def test_an_api_name_carrying_markup_is_shown_as_text(page_with_a_dangerous_api_
     assert state["children"] == 0, "the api name built elements: " + repr(state["html"])
     assert page.evaluate("() => window.__xssFired") is None, "the planted markup ran"
     assert thrown == []
+
+
+def visible_count(page, panel, selector):
+    return page.evaluate(
+        """([panel, selector]) => Array.from(
+               document.querySelectorAll('#graphContainer_' + panel + ' ' + selector)
+           ).filter(element => getComputedStyle(element).display !== 'none').length""",
+        [panel, selector],
+    )
+
+
+def test_escape_html_neutralises_markup_in_the_span_the_taint_highlighters_build(
+        comparison_page):
+    """The three remaining innerHTML sinks in this file cannot become `.text()` calls -
+    the markup is the highlight. Their untrusted half goes through `escapeHtml` instead,
+    and this builds the exact string they build to show that nothing survives it.
+
+    `tests/testScriptEscaping.py` is the lint that keeps every one of the three routed
+    through the helper; this is the check that the helper does what the lint assumes."""
+    result = comparison_page.evaluate(
+        """payload => {
+            const line = "<span style = 'background-color: red ; color: white; '>"
+                + escapeHtml(payload) + "</span>";
+            const host = document.createElement('div');
+            host.innerHTML = line;
+            return {
+                elements: host.querySelectorAll('*').length,
+                images: host.querySelectorAll('img').length,
+                text: host.textContent,
+            };
+        }""",
+        API_NAME_WITH_MARKUP,
+    )
+    assert result["images"] == 0, "the payload built an element"
+    assert result["elements"] == 1, "only the span the highlighter authored may be built"
+    assert result["text"] == API_NAME_WITH_MARKUP, "the line did not survive as text"
+
+
+@pytest.mark.parametrize("panel,other", [("a", "b"), ("b", "a")])
+def test_backspace_hides_the_hovered_block_and_its_edges_in_that_panel_only(
+        comparison_page, thrown, panel, other):
+    """CFGExplorer's declutter key. Here it read the global `g` for the block's edges -
+    null on this page - but only *after* hiding the block, so it left the block gone,
+    its edges dangling and no way to bring it back, and then threw. It also selected
+    `g.edgePath.enter` unscoped, so it would have hidden edges in the other panel too."""
+    comparison_page.locator("#xcfg_container").scroll_into_view_if_needed()
+    blocks_before = visible_count(comparison_page, panel, "g.node.enter")
+    edges_before = visible_count(comparison_page, panel, "g.edgePath.enter")
+    other_blocks_before = visible_count(comparison_page, other, "g.node.enter")
+    other_edges_before = visible_count(comparison_page, other, "g.edgePath.enter")
+
+    hover_a_block(comparison_page, panel)
+    comparison_page.keyboard.press("Backspace")
+    comparison_page.wait_for_timeout(200)
+
+    assert thrown == []
+    assert visible_count(comparison_page, panel, "g.node.enter") == blocks_before - 1, (
+        "the hovered block was not taken out of its panel"
+    )
+    assert visible_count(comparison_page, panel, "g.edgePath.enter") < edges_before, (
+        "the block went but its edges are still drawn, pointing at nothing"
+    )
+    assert visible_count(comparison_page, other, "g.node.enter") == other_blocks_before
+    assert visible_count(comparison_page, other, "g.edgePath.enter") == other_edges_before
+
+
+def tooltip_metrics(page, panel):
+    return page.evaluate(
+        """panel => {
+            const tooltip = document.getElementById('tooltip_' + panel);
+            const paragraph = tooltip.querySelector('p');
+            const container = document.getElementById(
+                panel === 'a' ? 'xcfg_left' : 'xcfg_right');
+            const style = getComputedStyle(paragraph);
+            const box = tooltip.getBoundingClientRect();
+            const frame = container.getBoundingClientRect();
+            return {
+                margin: [style.marginTop, style.marginRight,
+                         style.marginBottom, style.marginLeft],
+                font_size: parseFloat(style.fontSize),
+                tooltip_font_size: parseFloat(getComputedStyle(tooltip).fontSize),
+                overflow_right: box.right - frame.right,
+                overflow_left: frame.left - box.left,
+            };
+        }""",
+        panel,
+    )
+
+
+def test_the_tooltip_matches_the_styling_the_single_graph_page_gets(comparison_page):
+    """`cfg_style.css` is vendored and styles `#tooltip p` by id, so it reaches neither
+    of this page's two. The properties are set from the script instead, and they have to
+    be the same ones: without `margin: 0` the paragraph keeps Bootstrap reboot's
+    `margin-bottom: 1rem` and leaves 16px of blank space inside a 3px-padded box."""
+    comparison_page.check("#enableTooltip")
+    hover_a_block(comparison_page, "a")
+
+    metrics = tooltip_metrics(comparison_page, "a")
+    assert metrics["margin"] == ["0px", "0px", "0px", "0px"], (
+        "the tooltip paragraph keeps the stylesheet's default margin"
+    )
+    assert metrics["font_size"] == pytest.approx(metrics["tooltip_font_size"] * 1.25, abs=0.2), (
+        "the tooltip text is not the 1.25em the single-graph page renders it at"
+    )
+
+
+@pytest.mark.parametrize("panel", ["a", "b"])
+def test_the_tooltip_stays_inside_its_panel(comparison_page, panel):
+    """The width came from the block's bounding box in unscaled SVG units, with nothing
+    clamping it to the panel, so a wide block produced a tooltip wider than the half of
+    the window it lives in and the text ran off the edge and was clipped."""
+    comparison_page.check("#enableTooltip")
+    comparison_page.locator("#xcfg_container").scroll_into_view_if_needed()
+
+    count = blocks_of(comparison_page, panel).count()
+    for index in range(min(count, 6)):
+        hover_a_block(comparison_page, panel, index)
+        metrics = tooltip_metrics(comparison_page, panel)
+        assert metrics["overflow_right"] <= 1, (
+            f"block {index} of panel {panel} overflows its panel to the right by "
+            f"{metrics['overflow_right']:.1f}px"
+        )
+        assert metrics["overflow_left"] <= 1, (
+            f"block {index} of panel {panel} overflows its panel to the left by "
+            f"{metrics['overflow_left']:.1f}px"
+        )
