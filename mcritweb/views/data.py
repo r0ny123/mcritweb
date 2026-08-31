@@ -11,6 +11,7 @@ from mcrit.storage.SampleEntry import SampleEntry
 from mcrit.storage.UniqueBlocksResult import UniqueBlocksResult
 from smda.common.SmdaReport import SmdaReport
 
+from mcritweb.backend_errors import require_result
 from mcritweb.db import UserColumnSettings, UserFilters, utc_now
 from mcritweb.views.analyze import query as analyze_query
 from mcritweb.views.authentication import contributor_required, visitor_required
@@ -175,7 +176,7 @@ def export_view():
 def specific_export(type, item_id):
     client = get_client()
     if type == 'family':
-        samples = client.getSamplesByFamilyId(item_id)
+        samples = require_result(client.getSamplesByFamilyId(item_id), f"the samples of family {item_id}")
         sample_ids = [x.sample_id for x in samples.values()]
         export_file = json.dumps(client.getExportData(sample_ids))
         return Response(
@@ -209,7 +210,7 @@ def specific_export(type, item_id):
 def match_functions(function_id_a, function_id_b):
     client = get_client()
     if client.isFunctionId(function_id_a) and client.isFunctionId(function_id_b):
-        match_info = client.getMatchFunctionVs(function_id_a, function_id_b)
+        match_info = require_result(client.getMatchFunctionVs(function_id_a, function_id_b), "a comparison of these two functions")
         print(match_info)
         function_entry = FunctionEntry.fromDict(match_info["function_entry_a"])
         pichash_matches_a = client.getMatchesForPicHash(function_entry.pichash, summary=True)
@@ -812,7 +813,7 @@ def linkhunt_for_sample_or_query(job_info, matching_result: MatchingResult):
     matching_result.setFilterValues(filter_values)
     link_hunt_result = matching_result.getLinkHuntResults(filter_min_score, filter_lib_min_score, filter_min_size, filter_min_offset, filter_max_offset, filter_unpenalized_family_count, filter_exclude_families, filter_exclude_samples, filter_strongest_per_family)
 
-    function_entries = client.getFunctionsBySampleId(matching_result.reference_sample_entry.sample_id)
+    function_entries = require_result(client.getFunctionsBySampleId(matching_result.reference_sample_entry.sample_id), "the functions of the reference sample")
     # TODO: probably need to paginate them as well
     link_clusters = matching_result.clusterLinkHuntResult(function_entries, link_hunt_result)
     link_clusters = sorted([cluster for cluster in link_clusters if len(cluster["links"]) > 1], key=lambda x: x["score"], reverse=True)
@@ -1208,11 +1209,11 @@ def submit():
             else:
                 with open(os.sep.join([current_app.instance_path, "temp", "uploads", upload_sha256]), "wb") as fout:
                     fout.write(binary_content)
-                job_id = client.addBinarySample(binary_content, filename=f.filename, family=family, version=version, is_dump=is_dump, base_addr=base_address, bitness=bitness)
+                job_id = require_result(client.addBinarySample(binary_content, filename=f.filename, family=family, version=version, is_dump=is_dump, base_addr=base_address, bitness=bitness), "a job for the submitted sample")
                 return url_for('data.job_by_id', job_id=job_id, refresh=3, forward=1), 202 # Accepted
         else:
             flash('Sample was already in database', category='warning')
             return url_for('explore.sample_by_id', sample_id=sample_entry.sample_id), 202 # Accepted
-    all_families = client.getFamilies()
+    all_families = require_result(client.getFamilies(), "the list of families")
     family_names = [family_entry.family_name for family_entry in all_families.values()]
     return render_template('submit.html', families=family_names, show_submit_fields=True)

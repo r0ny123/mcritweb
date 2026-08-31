@@ -54,7 +54,7 @@ def create_app(test_config=None, instance_path=None):
     from flask_dropzone import Dropzone
     from mcrit.storage.SampleEntry import SampleEntry
 
-    from . import db, manual
+    from . import backend_errors, db, manual
     from .csrf import CsrfProtect
     from .jobnames import job_method_name
     from .secret_key import INSECURE_DEFAULT, load_or_create_secret_key
@@ -213,6 +213,11 @@ def create_app(test_config=None, instance_path=None):
     app.register_blueprint(administration.bp)
     app.register_blueprint(data.bp)
     app.register_blueprint(api.bp)
+    # a backend call that never completes raises out of the view; say so rather than
+    # answering with a stack trace. The API's own handler lives on its blueprint in
+    # views/api.py, since a blueprint takes handlers only before it is registered.
+    # See issue #43.
+    backend_errors.register(app)
     app.config['MCRITWEB_VERSION'] = get_mcritweb_version_from_setup()
     app.config['DROPZONE_DEFAULT_MESSAGE'] = "Drop file or click here to import"
     app.config['DROPZONE_REDIRECT_VIEW'] = 'data.import_complete'
