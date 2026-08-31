@@ -24,7 +24,7 @@ Functions
     </div>
 </div>
 
-{{ function_table(functions, sort_pagination=pagination, column_setup=user_column_setup,
+{{ function_table(functions, sort_pagination=pagination, column_setup=user_column_setup, highlight_terms=query|search_terms,
    exact_matches=exact_matches,
    empty_message=("No functions match \"" ~ query ~ "\".") if query else None) }}
 {% if functions %}
