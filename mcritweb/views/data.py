@@ -98,15 +98,36 @@ IMPORT_REJECTED = "rejected"
 NOT_MCRIT_DATA = "This doesn't seem to be valid MCRIT data in JSON format"
 
 
-def _import_refusal_reason(import_data):
-    """Why this instance would not take a file that *is* a JSON object.
+def _quote_from_upload(value, limit=64):
+    """One value out of the upload, cut to a length that can be quoted back safely.
 
-    `MinHashIndex.addImportData` refuses on three conditions and reports none of them: it
-    bare-`return`s, the server answers `data: null`, and `McritClient.addImportData` hands
-    back `None`. Two of the three are about the receiving instance's configuration, whose
-    hashes the backend does not publish (`GET /config` is HTTP_NOT_IMPLEMENTED), so they
-    cannot be told apart from here - but the version floor is checked against a field the
-    upload itself carries, so that one can be named exactly.
+    The reason ends up in the session, which Flask signs into a single cookie; Werkzeug's
+    ceiling is 4093 bytes and a browser drops an oversized cookie without saying so, which
+    would take the login, the pending flash and the CSRF token with it. `config.shingler` is
+    whatever the uploaded file says it is, so it is bounded here rather than trusted. Not an
+    escaping concern - the flash is autoescaped and Dropzone writes the body as textContent.
+    """
+    text = str(value)
+    return text if len(text) <= limit else text[:limit] + "[...]"
+
+
+def _import_refusal_reason(import_data):
+    """What can honestly be said about a JSON object the backend returned no report for.
+
+    Only one of the answers here is a fact, and it is a fact about the file rather than about
+    the backend: `MinHashIndex.addImportData` refuses anything whose `config.version` is not
+    above "0.0.0", which is checked against a field the upload itself carries, so it holds
+    whatever the backend was doing at the time.
+
+    Everything else is a guess, and has to read like one. `handle_response` collapses 500,
+    501, 400, 404, 410 *and* every status it does not branch on - falcon's AuthMiddleware
+    answers a bad or missing apitoken with a 401 - into the same `None` the config refusals
+    produce, and the index also raises its way to a 500 on any JSON object that is not an
+    export, since it reads `content`, `family_mapping` and `sample_entries` unguarded. The
+    two config hashes are the likeliest cause by far and the backend does not publish its own
+    to compare against (`GET /config` is HTTP_NOT_IMPLEMENTED), so they are named as likely,
+    with the values the file carries, and the reader is sent to the backend log - which is
+    where the actual reason was written, by whichever of these it was.
     """
     config = import_data.get("config")
     if not isinstance(config, dict):
@@ -115,15 +136,19 @@ def _import_refusal_reason(import_data):
     if not isinstance(version, str):
         return None
     if version <= "0.0.0":
-        return ("This MCRIT instance refused the import: the export declares config.version "
-                f"'{version}', and only exports above 0.0.0 can be imported. The file is not "
-                "malformed - re-export it from an instance running a current MCRIT.")
-    return ("This MCRIT instance refused the import: the file is valid MCRIT data, but it was "
-            "created by an instance with a different shingler or minhash configuration "
-            f"(the export carries config.shingler '{config.get('shingler')}' and config.minhash "
-            f"'{config.get('minhash')}'). Minhashes are only comparable when both settings match "
-            "exactly, so the two instances have to be configured alike - or the samples have to "
-            "be submitted to this instance instead of imported.")
+        return ("This export cannot be imported: it declares config.version "
+                f"'{_quote_from_upload(version)}', and MCRIT only imports exports above 0.0.0. "
+                "The file is not malformed - re-export it from an instance running a current "
+                "MCRIT.")
+    return ("This MCRIT instance did not import the file, and the backend did not report why "
+            "in a form this application can read - its log has the reason. The likeliest cause "
+            "is that the export was created by an instance whose shingler or minhash "
+            "configuration differs from this one's: minhashes are only comparable when both "
+            f"match exactly, and this file carries config.shingler "
+            f"'{_quote_from_upload(config.get('shingler'))}' and config.minhash "
+            f"'{_quote_from_upload(config.get('minhash'))}'. A backend-side failure looks the "
+            "same from here, though - a rejected API token, or an error while importing - so "
+            "check the log before re-exporting anything.")
 
 
 def _refuse_import(reason):
@@ -157,9 +182,9 @@ def import_view():
         client = get_client()
         import_report = client.addImportData(import_data)
         if not import_report:
-            # a JSON object the backend would not take: either it was never an export (the
-            # index reads config/family_mapping/sample_entries unguarded, so a stray .json
-            # is a 500 there and a None here), or the two instances are incompatible
+            # no report: a config refusal, a stray .json the index raised on, a 401, or any
+            # other backend failure - `handle_response` returns None for all of them, so the
+            # reason has to be hedged accordingly (see _import_refusal_reason)
             reason = _import_refusal_reason(import_data)
             return _refuse_import(reason if reason is not None else NOT_MCRIT_DATA)
         session["last_import"] = import_report
