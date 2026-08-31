@@ -2,6 +2,8 @@ from typing import Dict, Optional
 
 from flask import Request, session, url_for
 
+from mcritweb.views.pagination import request_args_for_link_building
+
 # Sort fields each listing type offers, i.e. exactly the columns the header macros in
 # templates/table/ render a sort link for. All of them are also accepted by the
 # backend (MinHashIndex.get*SearchResults raises ValueError on anything else).
@@ -59,7 +61,6 @@ def _remember_sort(memory_key, sort_by, is_ascending):
     if known != memory:
         session[SORT_MEMORY_SESSION_KEY] = known
 
-
 class CursorPagination:
     def __init__(self, request: Request, limit=10, query_param_prefix="", default_sort=None, sort_memory=None) -> None:
         self.default_limit = 10
@@ -88,7 +89,11 @@ class CursorPagination:
 
         # used for link generation. 
         self.endpoint = request.endpoint
-        self.original_args = dict(**request.view_args, **request.args)
+        # see request_args_for_link_building(): a query parameter named after one of
+        # url_for()'s own arguments must not reach it, or the page 500s (`endpoint`,
+        # `_method`) or quietly builds its links against the Host header (`_external`,
+        # `_scheme`). get_link() and get_sort_link() both splat this dict.
+        self.original_args = request_args_for_link_building(request)
 
     @property
     def cursor_param(self):

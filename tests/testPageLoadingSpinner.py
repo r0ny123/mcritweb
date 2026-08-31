@@ -58,7 +58,9 @@ def test_the_spinner_script_exists():
 def test_a_page_that_paginates_also_loads_the_spinner(client, as_role, path):
     as_role("admin")
 
-    response = client.get(path)
+    # /data/jobs answers 302 to the URL that names its tab (issue #36), so the page
+    # under test is one redirect away
+    response = client.get(path, follow_redirects=True)
 
     assert response.status_code == 200
     assert b'class="pagination' in response.data, (
