@@ -1,5 +1,5 @@
 {% from 'table/pagination_widget.html' import sortable_header_col %}
-{% from 'table/links.html' import format_pichash, format_offset, format_family_name, format_family_id, format_sample_id, format_function_id %}
+{% from 'table/links.html' import format_pichash, format_offset, format_family_name, format_family_id, format_sample_id, format_function_id, exact_match_header_col, exact_match_col %}
 
 {% macro family_row_std_js() %}
 <script>
@@ -50,9 +50,10 @@
 {% endmacro %}
 
 
-{% macro family_header(sort_pagination=None, column_setup=None) %}
+{% macro family_header(sort_pagination=None, column_setup=None, exact_matches=None) %}
   {# accept but discard additional kwargs #}
   {% if False %}{{ kwargs }}{% endif %}
+  {% if exact_matches %}{{ exact_match_header_col() }}{% endif %}
   {% if column_setup is none %}
     {% set column_setup = ["family_id", "family_name", "num_samples", "num_functions", "is_library"] %}
   {% endif %}
@@ -83,11 +84,12 @@
   </tr>
 {% endmacro %}  
   
-{% macro family_row(family, show_export=False, show_edit=False, column_setup=None) %}
+{% macro family_row(family, show_export=False, show_edit=False, column_setup=None, exact_matches=None) %}
   {% if column_setup is none %}
     {% set column_setup = ["family_id", "family_name", "num_samples", "num_functions", "is_library"] %}
   {% endif %}
   <tr class="family-row parent_{{ kwargs['parent'] }}" >
+    {% if exact_matches %}{{ exact_match_col(exact_matches.get(family.family_id)) }}{% endif %}
   {% for column_type in column_setup %}
     {% if column_type == "family_id" %}
       <th align="right" valign="middle" class="id" scope="row">{{ "%d"|format(family.family_id) }}</th>

@@ -25,6 +25,7 @@ Families
   </div>
 
 {{ family_table(families, show_export=True, show_edit=True, sort_pagination=pagination, column_setup=user_column_setup,
+   exact_matches=exact_matches,
    empty_message=("No families match \"" ~ query ~ "\".") if query else None) }}
 {% if families %}
 {{ pagination_widget(pagination) }}

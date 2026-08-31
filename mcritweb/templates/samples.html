@@ -26,6 +26,7 @@ Samples
 
 
 {{ sample_table(samples, job_collection=job_collection, show_export=True, show_edit=True, sort_pagination=pagination, column_setup=user_column_setup,
+   exact_matches=exact_matches,
    empty_message=("No samples match \"" ~ query ~ "\".") if query else None) }}
 {% if samples %}
 {{ pagination_widget(pagination) }}
