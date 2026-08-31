@@ -2,6 +2,7 @@ import hashlib
 import os
 import re
 from datetime import datetime
+from urllib.parse import quote
 
 from flask import Blueprint, Response, current_app, flash, json, redirect, render_template, request, send_from_directory, session, url_for
 from mcrit.queue.LocalQueue import Job
@@ -904,6 +905,39 @@ def request_filename_info():
     return json.dumps(result), 200
 
 
+def quote_backend_query_value(value):
+    """Percent-encode a value for the query string `McritClient` builds by hand.
+
+    `McritClient.addBinarySample` does not hand filename, family and version to
+    requests as `params=`; it concatenates them itself - `f"family={family}"`, joined
+    with `&` - and the backend reads them back out of `req.params`
+    (`SampleResource.on_post_submit_binary`, which still carries the upstream
+    "# TODO parse respective query fields -> escape / sanitize input"). So every
+    character that means something in a query string travels through unescaped: a
+    family of "R&D" is stored as "R", a file named "C++_sample.exe" as "C  _sample.exe",
+    and "x&is_dump=1&base_addr=0x41414141" appends parameters of its own, making the
+    backend disassemble the upload as a mapped dump at an address this form never
+    parsed. Nothing here validates family or version, and the filename is the
+    browser's.
+
+    Encoding rather than an allowlist, because a filename legitimately contains
+    characters a validation set would have to refuse - "+" first among them. This is
+    what the client would have emitted with `params=`; the durable fix belongs
+    upstream, and this can go when it lands.
+
+    `safe=""` is load-bearing. `requests.requote_uri` re-quotes whatever URL it is
+    given before it goes on the wire, and the escapes it *decodes* on the way are
+    exactly those for the unreserved set - the set `safe=""` never escapes. So no
+    escape written here is undone, and none is written twice: a family of "100%"
+    arrives as "100%" rather than "100%25", and one of "%41" stays "%41" instead of
+    decoding to "A". tests/testSubmitMetadata.py asserts that round trip against the
+    real client and falcon's own parser rather than describing it.
+    """
+    if value is None:
+        return None
+    return quote(str(value), safe="")
+
+
 @bp.route('/submit_or_query', methods=('POST',))
 @contributor_required
 @mcrit_server_required
@@ -955,7 +989,11 @@ def submit():
             else:
                 with open(os.sep.join([current_app.instance_path, "temp", "uploads", upload_sha256]), "wb") as fout:
                     fout.write(binary_content)
-                job_id = client.addBinarySample(binary_content, filename=f.filename, family=family, version=version, is_dump=is_dump, base_addr=base_address, bitness=bitness)
+                job_id = client.addBinarySample(binary_content,
+                    filename=quote_backend_query_value(f.filename),
+                    family=quote_backend_query_value(family),
+                    version=quote_backend_query_value(version),
+                    is_dump=is_dump, base_addr=base_address, bitness=bitness)
                 return url_for('data.job_by_id', job_id=job_id, refresh=3, forward=1), 202 # Accepted
         else:
             flash('Sample was already in database', category='warning')
