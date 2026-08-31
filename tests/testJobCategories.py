@@ -166,8 +166,9 @@ def test_every_category_with_an_empty_state_is_also_a_known_category():
     "is not a job type" message becoming a lie, in exactly the case the guard was
     written for: a bookmark for a category whose jobs have since been deleted.
     """
-    from mcritweb.views.data import JOB_CATEGORIES
     from testEmptyTableMessages import _empty_state_map_keys
+
+    from mcritweb.views.data import JOB_CATEGORIES
 
     for category in sorted(_empty_state_map_keys()):
         assert category in JOB_CATEGORIES, (
