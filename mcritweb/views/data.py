@@ -38,6 +38,25 @@ bp = Blueprint('data', __name__, url_prefix='/data')
 # Helper functions
 ################################################################
 
+def quote_backend_query_value(value):
+    """Percent-encode one value for a query string `McritClient` builds by hand.
+
+    `safe=""` escapes every character outside the unreserved set, and escapes nothing
+    inside it. That is exactly the set `requests.requote_uri` leaves alone on the way
+    to the wire, so no escape written here is undone and none is written twice:
+    "100%" stays "100%", "%41" stays "%41", "C++_sample.exe" keeps its plusses.
+
+    Correct only while the client concatenates rather than passing `params=` to
+    requests, which would encode these a second time. `setup.py` has no ceiling on
+    mcrit, so tests/testSubmitMetadata.py asserts the concatenation is still there.
+
+    Used for `addBinarySample`'s three text fields. `getQueueData` and
+    `deleteQueueData` build their query strings the same way and are reached with
+    unvalidated values through `api.api_router`; that is a separate change.
+    """
+    return quote(str(value), safe="")
+
+
 def load_cached_result(app, job_id):
     matching_result = {}
     cache_path = os.sep.join([app.instance_path, "cache", "results"])
@@ -905,39 +924,6 @@ def request_filename_info():
     return json.dumps(result), 200
 
 
-def quote_backend_query_value(value):
-    """Percent-encode a value for the query string `McritClient` builds by hand.
-
-    `McritClient.addBinarySample` does not hand filename, family and version to
-    requests as `params=`; it concatenates them itself - `f"family={family}"`, joined
-    with `&` - and the backend reads them back out of `req.params`
-    (`SampleResource.on_post_submit_binary`, which still carries the upstream
-    "# TODO parse respective query fields -> escape / sanitize input"). So every
-    character that means something in a query string travels through unescaped: a
-    family of "R&D" is stored as "R", a file named "C++_sample.exe" as "C  _sample.exe",
-    and "x&is_dump=1&base_addr=0x41414141" appends parameters of its own, making the
-    backend disassemble the upload as a mapped dump at an address this form never
-    parsed. Nothing here validates family or version, and the filename is the
-    browser's.
-
-    Encoding rather than an allowlist, because a filename legitimately contains
-    characters a validation set would have to refuse - "+" first among them. This is
-    what the client would have emitted with `params=`; the durable fix belongs
-    upstream, and this can go when it lands.
-
-    `safe=""` is load-bearing. `requests.requote_uri` re-quotes whatever URL it is
-    given before it goes on the wire, and the escapes it *decodes* on the way are
-    exactly those for the unreserved set - the set `safe=""` never escapes. So no
-    escape written here is undone, and none is written twice: a family of "100%"
-    arrives as "100%" rather than "100%25", and one of "%41" stays "%41" instead of
-    decoding to "A". tests/testSubmitMetadata.py asserts that round trip against the
-    real client and falcon's own parser rather than describing it.
-    """
-    if value is None:
-        return None
-    return quote(str(value), safe="")
-
-
 @bp.route('/submit_or_query', methods=('POST',))
 @contributor_required
 @mcrit_server_required
@@ -989,6 +975,12 @@ def submit():
             else:
                 with open(os.sep.join([current_app.instance_path, "temp", "uploads", upload_sha256]), "wb") as fout:
                     fout.write(binary_content)
+                # These three ride in the query string McritClient builds by hand, so
+                # they are escaped rather than trusted. All three are str by
+                # construction - `f` is None-checked above, and both form fields would
+                # have raised a 400 before here. The cost is length: a 255-character
+                # non-ASCII filename encodes to ~2.3 kB of request line, against
+                # gunicorn's 4094-byte default for the whole line.
                 job_id = client.addBinarySample(binary_content,
                     filename=quote_backend_query_value(f.filename),
                     family=quote_backend_query_value(family),

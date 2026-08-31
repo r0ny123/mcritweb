@@ -138,6 +138,30 @@ def submitted(client, as_role, wire):
     return _submitted
 
 
+def test_the_client_still_leaves_the_query_string_to_us(wire):
+    """The assumption the whole fix rests on, asserted rather than assumed.
+
+    `data.quote_backend_query_value` is correct only while `McritClient.addBinarySample`
+    concatenates its query string by hand. If a future mcrit hands requests `params=`
+    instead - the durable fix, and one this repository cannot ship - requests would
+    encode the already-encoded values a second time and every family would be stored
+    as "R%26D". `setup.py` pins `mcrit>=1.5.3` with no ceiling, so a deployment that
+    merely pip-upgrades would corrupt metadata quietly. This fails first, and loudly.
+
+    Measured against mcrit 1.8.1: a raw '&' reaches the URL untouched, which is only
+    true of a client that does no encoding of its own. Under `params=` the query
+    string would not be in the URL handed to `requests.post` at all.
+    """
+    wire.client.addBinarySample(b"MZ", filename="a.exe", family="R&D", version="1.0")
+
+    assert "family=R&D" in wire.urls[-1], (
+        "mcrit's addBinarySample no longer builds its query string by hand. It now "
+        "encodes the parameters itself, so data.quote_backend_query_value double-"
+        "encodes: drop it and pass the raw values, and raise the mcrit floor in "
+        "setup.py and requirements.txt to the release that fixed it."
+    )
+
+
 def test_a_filename_keeps_its_plus_signs(submitted):
     """`+` is a space in a query string, and the filename is the browser's, not ours -
     C++ project names are ordinary, so this one corrupts real submissions with nobody
