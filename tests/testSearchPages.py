@@ -199,10 +199,10 @@ def test_the_empty_search_page_carries_no_message(client, as_role):
 
 
 def test_a_search_the_backend_could_not_answer_does_not_claim_nothing_matched(client, as_role, fake_mcrit, monkeypatch):
-    """`search()` reads a failed call as `results is None` and flashes "search ...
-    failed!". The page then has no rows either, so the empty-result message would
-    fire on top of it and tell the reader their term matched nothing - which is a
-    different, and wrong, thing to say."""
+    """`search()` reads a failed call as `results is None` and flashes that the
+    backend did not answer (issue #79 wrote that message). The page then has no rows
+    either, so the empty-result message would fire on top of it and tell the reader
+    their term matched nothing - which is a different, and wrong, thing to say."""
     as_role("visitor")
     monkeypatch.setattr(fake_mcrit, "search_families", lambda *args, **kwargs: None)
     monkeypatch.setattr(fake_mcrit, "search_samples", lambda *args, **kwargs: None)
@@ -212,7 +212,7 @@ def test_a_search_the_backend_could_not_answer_does_not_claim_nothing_matched(cl
 
     assert response.status_code == 200
     page = response.get_data(as_text=True)
-    assert "failed!" in page, "the flashed error is what tells the reader what happened"
+    assert "the backend did not answer" in page, "the flashed error is what tells the reader what happened"
     assert "Nothing matched" not in page
 
 
@@ -246,7 +246,7 @@ def test_one_category_failing_does_not_silence_the_answer_for_the_others(client,
 
     page = client.get("/explore/search?query=zzzznomatchzzzz").get_data(as_text=True)
 
-    assert "failed!" in page, "the failure still has to be reported"
+    assert "the backend did not answer" in page, "the failure still has to be reported"
     assert "Nothing matched" in page, "and so does the answer for the categories that worked"
     assert "sample, function" in page, "which should name the ones it is talking about"
 
