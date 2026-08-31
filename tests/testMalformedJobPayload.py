@@ -83,6 +83,12 @@ def job_document(job_id, params, method="getMatchesForSample", number=1,
         "finished_at": {"$date": "2026-01-01T00:00:02.000Z"} if finished else None,
         "last_error": None, "terminated": False, "attempts_left": 3,
         "progress": 1 if finished else 0, "result": "r" if finished else None,
+        # a real queue document always carries these; `state=` is derived from them
+        # (mongoqueue._identifyJobState, transcribed as fixtureData._job_state), and a
+        # document missing them is a KeyError rather than a job in some state
+        "locked_at": None, "locked_by": None,
+        "notify_done": False, "priority": 0,
+        "required_by": [], "unfinished_dependencies": [],
     }
 
 

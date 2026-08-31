@@ -237,10 +237,13 @@ def test_the_message_escapes_the_search_term(client, as_role):
 
 
 def test_one_category_failing_does_not_silence_the_answer_for_the_others(client, as_role, fake_mcrit, monkeypatch):
-    """Three independent searches behind one flag: families failing used to suppress
-    "nothing matched" for samples and functions, which had answered perfectly well and
-    found nothing. The reader got one flash about families and then the same blank void
-    issue #54 is about, for the two categories that did answer."""
+    """Independent searches behind one flag: families failing used to suppress
+    "nothing matched" for the others, which had answered perfectly well and found
+    nothing. The reader got one flash about families and then the same blank void
+    issue #54 is about, for the categories that did answer.
+
+    Functions are not among them without `?type=`: issue #77 leaves them unticked by
+    default, because a plain term costs a full scan of every function name."""
     as_role("visitor")
     monkeypatch.setattr(fake_mcrit, "search_families", lambda *args, **kwargs: None)
 
@@ -248,7 +251,9 @@ def test_one_category_failing_does_not_silence_the_answer_for_the_others(client,
 
     assert "the backend did not answer" in page, "the failure still has to be reported"
     assert "Nothing matched" in page, "and so does the answer for the categories that worked"
-    assert "sample, function" in page, "which should name the ones it is talking about"
+    assert "sample" in page, "which should name the ones it is talking about"
+    assert "family" not in page.split("Nothing matched")[1][:200], (
+        "the category that failed must not be counted among the ones that answered")
 
 
 def test_every_category_failing_still_says_nothing_about_matches(client, as_role, fake_mcrit, monkeypatch):

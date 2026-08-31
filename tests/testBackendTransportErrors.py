@@ -146,7 +146,13 @@ def test_an_explore_page_says_the_backend_is_unreachable(client, as_role, fake_m
 
 #: every backend call index() makes for a signed-in, non-pending user. Each one is a
 #: way for the index page itself to be the thing that cannot reach the backend.
-INDEX_CALLS = ["getQueueData", "getSampleById", "getFamily", "search_samples"]
+#:
+#: getFamily is deliberately not here. index() asks the queue for
+#: `method="getMatchesForSample"` only, and `Job.family_id` answers None for that
+#: method (`LocalQueue.Job.family_id` covers method_types["family_id"] and
+#: getUniqueBlocks), so the getFamily loop below it never runs. It looked reachable
+#: only while the corpus fake ignored `method=`, which issue #77 fixed.
+INDEX_CALLS = ["getQueueData", "getSampleById", "search_samples"]
 
 
 @pytest.mark.parametrize(
