@@ -308,14 +308,20 @@ def query():
             return "", 403 # Bad Request
         # persist the upload in binary format
 
+        smda_report = None
         if form_options == "smda":
             content_as_dict = json.loads(binary_content)
             smda_report = SmdaReport.fromDict(content_as_dict)
-            upload_sha256 = smda_report.sha256
-        else:
-            # check here if it is already part of corpus
-            upload_sha256 = hashlib.sha256(binary_content).hexdigest()
 
+        # the upload is stored under the digest of the bytes that were actually posted,
+        # for every kind of upload alike. A report's own `sha256` field is whatever its
+        # uploader typed there, so naming the file by it let any visitor overwrite
+        # another user's stored query by declaring that user's digest - the write is
+        # "wb" with no existence check, and nothing ever restores the original.
+        # Two users uploading the same bytes still collide here, harmlessly: the name is
+        # a function of the content, so the second write reproduces the first byte for
+        # byte. That is the deduplication the binary branches always had.
+        upload_sha256 = hashlib.sha256(binary_content).hexdigest()
         with open(os.sep.join([current_app.instance_path, "temp", "uploads", upload_sha256]), "wb") as fout:
             fout.write(binary_content)
 
