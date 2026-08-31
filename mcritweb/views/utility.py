@@ -99,11 +99,22 @@ def get_user_column_setup(table_type:str):
     ucs_dict = user_column_settings.toUserColumnSettings()
     return ucs_dict[table_type]["active"]
 
-#: A backend-issued job id, as it is allowed to appear in a path. MongoQueue answers a
-#: 24-character ObjectId and LocalQueue a uuid4, so both hex and hyphens are normal;
-#: nothing else is, and in particular no separator and no dot, so a job id coming back
-#: off the wire or in from a URL cannot walk out of the uploads folder.
-QUERY_UPLOAD_JOB_ID = re.compile(r"^[A-Za-z0-9-]{1,64}\Z")
+#: A backend-issued job id, as it is allowed to appear in a path: the two shapes the
+#: two queue implementations actually answer, and nothing else. MongoQueue hands back
+#: `str(ObjectId)` and LocalQueue `str(uuid.uuid4())`.
+#:
+#: Matching the shape rather than merely excluding separators is what keeps three
+#: things out. A path cannot walk out of the folder. `MongoQueue.put` returns None on
+#: an unacknowledged insert and `QueueRemoteCalls.submitPayloadQueue` wraps its answer
+#: in `str()`, so a backend failing that way hands out the literal string "None" - one
+#: name, shared by every such failure, which is the collision this whole change exists
+#: to remove. And a Windows device name - NUL, CON, AUX, COM1 - is a valid filename
+#: that opens the device instead of a file, so `open(".../uploads/NUL", "wb")` stores
+#: nothing at all and says nothing about it.
+#:
+#: `\Z` and not `$`, which would also match before a trailing newline.
+QUERY_UPLOAD_JOB_ID = re.compile(
+    r"^(?:[0-9a-fA-F]{24}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\Z")
 
 
 def query_upload_path(app, job_id):
@@ -123,7 +134,8 @@ def query_upload_path(app, job_id):
     the bytes that were posted, so there is no path from a job to that name.
 
     Returns None for anything that is not a usable job id, so the caller decides what
-    an unpromotable job should say rather than this raising.
+    an unpromotable job should say rather than this raising. An id that does not look
+    like one means a backend that is not answering properly, not a name to repair.
     """
     if not isinstance(job_id, str) or not QUERY_UPLOAD_JOB_ID.match(job_id):
         return None
