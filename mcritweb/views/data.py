@@ -87,6 +87,59 @@ def diagram_file(filename):
 # Import + Export
 ################################################################
 
+#: Key under which a refused upload leaves its reason in the session. The completion page
+#: is reached by redirect, one request later, so the reason has to survive the hop - and it
+#: has to be distinguishable from both a finished import and an untouched session, which is
+#: precisely what a bare `None` in `last_import` was not.
+IMPORT_REJECTED = "rejected"
+
+#: What an upload that is not MCRIT data gets told. Kept verbatim: it is the honest answer
+#: for this case, and only for this case.
+NOT_MCRIT_DATA = "This doesn't seem to be valid MCRIT data in JSON format"
+
+
+def _import_refusal_reason(import_data):
+    """Why this instance would not take a file that *is* a JSON object.
+
+    `MinHashIndex.addImportData` refuses on three conditions and reports none of them: it
+    bare-`return`s, the server answers `data: null`, and `McritClient.addImportData` hands
+    back `None`. Two of the three are about the receiving instance's configuration, whose
+    hashes the backend does not publish (`GET /config` is HTTP_NOT_IMPLEMENTED), so they
+    cannot be told apart from here - but the version floor is checked against a field the
+    upload itself carries, so that one can be named exactly.
+    """
+    config = import_data.get("config")
+    if not isinstance(config, dict):
+        return None
+    version = config.get("version")
+    if not isinstance(version, str):
+        return None
+    if version <= "0.0.0":
+        return ("This MCRIT instance refused the import: the export declares config.version "
+                f"'{version}', and only exports above 0.0.0 can be imported. The file is not "
+                "malformed - re-export it from an instance running a current MCRIT.")
+    return ("This MCRIT instance refused the import: the file is valid MCRIT data, but it was "
+            "created by an instance with a different shingler or minhash configuration "
+            f"(the export carries config.shingler '{config.get('shingler')}' and config.minhash "
+            f"'{config.get('minhash')}'). Minhashes are only comparable when both settings match "
+            "exactly, so the two instances have to be configured alike - or the samples have to "
+            "be submitted to this instance instead of imported.")
+
+
+def _refuse_import(reason):
+    """Answer one rejected upload, in both of the places the user can read it.
+
+    The dropzone posts by XHR: on a non-2xx it marks the tile failed and shows the response
+    body as the message (`_handleUploadError` -> `_errorProcessing` in static/dropzone.js),
+    where a 200 has it report an upload that worked. It redirects to the completion page
+    either way, because the page's `queuecomplete` handler fires for a failed file too - so
+    the reason also has to survive that hop, which is what the session marker is for. Without
+    it the completion page reads an empty `last_import` and blames a file that was fine.
+    """
+    session["last_import"] = {IMPORT_REJECTED: reason}
+    return reason, 400
+
+
 @bp.route('/import',methods=('GET', 'POST'))
 @contributor_required
 @mcrit_server_required
@@ -99,22 +152,30 @@ def import_view():
             import_data = json.load(request.files['file'])
         except (KeyError, ValueError):
             import_data = None
-        if isinstance(import_data, dict):
-            client = get_client()
-            session["last_import"] = client.addImportData(import_data)
-        else:
-            flash("This doesn't seem to be valid MCRIT data in JSON format", category='error')
+        if not isinstance(import_data, dict):
+            return _refuse_import(NOT_MCRIT_DATA)
+        client = get_client()
+        import_report = client.addImportData(import_data)
+        if not import_report:
+            # a JSON object the backend would not take: either it was never an export (the
+            # index reads config/family_mapping/sample_entries unguarded, so a stray .json
+            # is a 500 there and a None here), or the two instances are incompatible
+            reason = _import_refusal_reason(import_data)
+            return _refuse_import(reason if reason is not None else NOT_MCRIT_DATA)
+        session["last_import"] = import_report
     return render_template("import.html")
 
 @bp.route('/import_complete')
 @contributor_required
 def import_complete():
-    import_results = session.pop('last_import',{})
+    import_results = session.pop('last_import', None)
+    if isinstance(import_results, dict) and IMPORT_REJECTED in import_results:
+        flash(import_results[IMPORT_REJECTED], category='error')
+        return render_template("import.html")
     if import_results:
         return render_template("import_complete.html", results=import_results)
-    else:
-        flash("This doesn't seem to be valid MCRIT data in JSON format", category='error')
-        return render_template("import.html")
+    flash("Nothing was imported in this session - drop an MCRIT export below to import one.", category='info')
+    return render_template("import.html")
 
 
 @bp.route('/export',methods=('GET', 'POST'))

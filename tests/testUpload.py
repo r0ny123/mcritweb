@@ -77,14 +77,19 @@ def test_the_import_report_is_carried_to_the_completion_page(client, as_role):
 
 def test_the_report_is_consumed_once(client, as_role):
     """`import_complete` pops the report. A second visit must not re-report an import
-    that already happened - it should fall back to the error path instead."""
+    that already happened - it should fall back to saying so instead.
+
+    The message it falls back to used to be the malformed-file one, which is what made a
+    refused-but-valid export unreportable; the fallback now says nothing was imported,
+    which is what an emptied session actually means. What is pinned is unchanged: the
+    report is consumed exactly once, and the page still tells the user where they are."""
     as_role("contributor")
     upload(client, EXPORT)
     client.get("/data/import_complete")
 
     page = client.get("/data/import_complete").get_data(as_text=True)
     assert "Import completed" not in page
-    assert "valid MCRIT data" in page
+    assert "nothing was imported" in page.lower()
 
 
 @pytest.mark.parametrize(
@@ -100,6 +105,81 @@ def test_an_unusable_upload_is_reported_rather_than_a_500(client, as_role, paylo
     as_role("contributor")
     response = upload(client, payload)
     assert response.status_code < 500, f"upload that is {reason} took the page down"
+
+
+# --- the three ways an import can end, and telling them apart ---------------------
+
+#: Genuine MCRIT data from an instance configured differently to ours: same schema, other
+#: hashes. `MinHashIndex.addImportData` compares `config.shingler` and `config.minhash`
+#: against its own and bare-`return`s when either differs, so the client hands the view a
+#: `None` report - the same falsy value an empty session yields, which is how a perfectly
+#: good file came to be reported as malformed JSON.
+INCOMPATIBLE_EXPORT = dict(EXPORT, config={
+    "version": "1.5.3",
+    "shingler": "shingler-hash-of-some-other-instance",
+    "minhash": "minhash-hash-of-some-other-instance",
+})
+
+#: The other half of the same refusal: an export from before the version floor. This one
+#: mcritweb can attribute exactly, because the check is on a field the file carries.
+OUTDATED_EXPORT = dict(EXPORT, config={"version": "0.0.0"})
+
+
+def test_a_file_that_is_not_mcrit_data_is_refused_as_such(client, as_role):
+    """(a) The dropzone posts by XHR, so a 200 makes it redirect to the completion page
+    and the user never reads the response. A file that is not MCRIT data has to come back
+    as an error status, carrying the reason as its body."""
+    as_role("contributor")
+    response = upload(client, b"this is not json")
+
+    assert 400 <= response.status_code < 500, "a rejected upload answered 2xx"
+    assert "valid MCRIT data in JSON format" in response.get_data(as_text=True)
+
+
+def test_an_export_this_instance_refuses_is_not_called_malformed(client, as_role):
+    """(b) The file is fine; the configurations are incompatible. Saying "not valid MCRIT
+    data in JSON format" here points the contributor at their file, which is the one thing
+    that is not wrong."""
+    as_role("contributor")
+    response = upload(client, INCOMPATIBLE_EXPORT)
+    body = response.get_data(as_text=True)
+
+    assert 400 <= response.status_code < 500
+    assert "valid MCRIT data in JSON format" not in body, "a refused export blamed the file"
+    assert "shingler" in body and "minhash" in body.lower(), f"no reason given: {body!r}"
+
+
+def test_a_refused_export_explains_itself_on_the_completion_page_too(client, as_role):
+    """The dropzone is not the only way to arrive: the redirect target is a plain GET, and
+    whoever lands on it must be told the same thing, not the malformed-file message."""
+    as_role("contributor")
+    upload(client, INCOMPATIBLE_EXPORT)
+
+    page = client.get("/data/import_complete").get_data(as_text=True)
+    assert "Import completed" not in page
+    assert "valid MCRIT data in JSON format" not in page
+    assert "shingler" in page, "the completion page did not carry the reason"
+
+
+def test_an_export_from_before_the_version_floor_names_the_version(client, as_role):
+    """The third refusal in `addImportData` is on `config.version`, a field the upload
+    itself carries - so this one can be attributed precisely rather than as "one of two"."""
+    as_role("contributor")
+    body = upload(client, OUTDATED_EXPORT).get_data(as_text=True)
+
+    assert "config.version" in body, f"the version floor was not named: {body!r}"
+    assert "0.0.0" in body
+
+
+def test_a_bare_visit_to_the_completion_page_says_nothing_was_imported(client, as_role):
+    """(c) No import happened in this session at all - a bookmark, a reload, a back button.
+    Nothing was uploaded, so nothing about the upload can be wrong."""
+    as_role("contributor")
+    page = client.get("/data/import_complete").get_data(as_text=True)
+
+    assert "Import completed" not in page
+    assert "valid MCRIT data in JSON format" not in page, "an empty session blamed a file"
+    assert "nothing was imported" in page.lower()
 
 
 # --- the sample dropzone: binary payloads, and the fields that ride with them ------
