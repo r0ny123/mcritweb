@@ -251,5 +251,37 @@ def test_the_job_page_ignores_a_funid_that_is_not_a_number(client, as_role, fake
     assert response.headers["Location"] == f"/data/result/{job_id}"
 
 
+
+def test_a_backend_that_will_not_start_the_job_says_so_rather_than_500ing(
+        client, as_role, fake_mcrit, monkeypatch):
+    """`handle_response` answers None for every non-200, so a refused job is
+    indistinguishable from a backend that is down.
+
+    Unguarded, that None reaches `url_for(job_id=None)`; werkzeug drops the None and then
+    cannot build `data.job_by_id` at all, so the route raises BuildError - a 500 with a
+    traceback where the reader should have got a sentence.
+
+    The landing page is asserted, not merely "some page rendered": the fallback is
+    deliberately the listing rather than this function's own page, so a backend that is
+    genuinely down does not answer with a second, wrong message on top of this one.
+    """
+    as_role("visitor")
+    monkeypatch.setattr(fake_mcrit, "requestMatchesForSample", lambda *args, **kwargs: None)
+
+    response = client.get(f"/analyze/compare_function/{FUNCTION_ID}", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert "would not start the job" in response.get_data(as_text=True)
+    assert response.request.path == "/explore/functions"
+
+if __name__ == "__main__":
+    unittest.main()
+
+if __name__ == "__main__":
+    unittest.main()
+
+if __name__ == "__main__":
+    unittest.main()
+
 if __name__ == "__main__":
     unittest.main()
