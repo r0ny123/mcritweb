@@ -29,7 +29,13 @@ from mcritweb.views.params import (
     parseBitnessFromFilename,
 )
 from mcritweb.views.ScoreColorProvider import ScoreColorProvider
-from mcritweb.views.utility import get_session_user_id, mcrit_server_required
+from mcritweb.views.utility import (
+    describable_jobs,
+    get_session_user_id,
+    job_parameters_or_blank,
+    job_parameters_or_none,
+    mcrit_server_required,
+)
 
 bp = Blueprint('data', __name__, url_prefix='/data')
 
@@ -699,55 +705,6 @@ UNREADABLE_PAYLOAD_REASON = (
 )
 
 
-def job_parameters_or_none(job):
-    """`job.parameters`, or None for a job whose payload cannot be read.
-
-    Job.parameters is rebuilt on every access rather than stored: it calls json.loads on
-    payload["params"] and then .items() on the result, so a document whose params is
-    malformed, `null`, a JSON array, or not a string at all raises JSONDecodeError,
-    AttributeError or TypeError. This is the one place that recovery happens, so a
-    caller gets to decide what to do about it instead of each site guessing.
-
-    None means "could not be read", which is distinct from the "" that Job.parameters
-    legitimately answers for a record carrying no params at all - `parameters or ""`
-    cannot tell a corrupt job from an empty one.
-
-    Those three are the whole list of what an unreadable payload can raise here, and
-    catching only them is deliberate: a bare `except Exception` would turn a future bug
-    in `Job` into every job page calmly reporting a corrupt payload, which is both wrong
-    and unreportable.
-    """
-    try:
-        return job.parameters
-    except (ValueError, TypeError, AttributeError):
-        # ValueError covers json.JSONDecodeError, which subclasses it
-        current_app.logger.exception("Could not read parameters for job %s", getattr(job, "job_id", "?"))
-        return None
-
-
-def job_parameters_or_blank(job):
-    """`job.parameters`, or "" for a job whose payload cannot be read.
-
-    One such job used to break the single page of the browse view that showed it;
-    filtering the whole category for a search would let it break every page of the
-    search instead. A job whose parameters cannot be read cannot contain the search
-    term either, so leaving it out is also the right answer.
-    """
-    return job_parameters_or_none(job) or ""
-
-
-def readable_jobs(jobs):
-    """The jobs in `jobs` whose payload can be read.
-
-    A page that lists jobs looks up the samples and families they name, and everything
-    that names one - `sample_ids`, `family_id`, `arguments` - is rebuilt from the same
-    `payload["params"]` that `parameters` is, so a single unreadable job in the list
-    takes down the page it appears on rather than its own row. Skip those here;
-    `job_description` renders what is left of them.
-    """
-    return [job for job in jobs or [] if job_parameters_or_none(job) is not None]
-
-
 @bp.route('/jobs')
 @visitor_required
 @mcrit_server_required
@@ -863,7 +820,7 @@ def jobs():
         jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, ascending=ascending)
     samples_by_id = {}
     families_by_id = {}
-    described_jobs = readable_jobs(jobs)
+    described_jobs = describable_jobs(jobs)
     for job in described_jobs:
         if job.sample_ids is not None:
             for sample_id in [sid for sid in job.sample_ids if sid not in samples_by_id]:
@@ -930,7 +887,7 @@ def job_by_id(job_id):
     # the lookups below read that payload, and so does the row macro. Both degrade to
     # the one row rather than the page - a cross compare's children are the jobs it did
     # the work in, so dropping one would misreport what it ran.
-    described_children = readable_jobs(child_jobs)
+    described_children = describable_jobs(child_jobs)
     for job in described_children:
         if job.sample_ids is not None:
             for sample_id in [sid for sid in job.sample_ids if sid not in samples_by_id]:
