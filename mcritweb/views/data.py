@@ -940,7 +940,13 @@ def job_by_id(job_id):
             return redirect(url_for('data.result', job_id=job_id))
     if 'addBinarySample' in parameters and not suppress_processing_message and auto_refresh:
         flash('We received your sample, currently processing!', category='info')
-    child_jobs = sorted([client.getJobData(id) for id in job_info.all_dependencies], key=lambda x: x.number)
+    # a dependency can be gone by the time this page is opened - deleted through this
+    # app's own job delete, which also has a "delete every job of this method" form, or
+    # cleaned up in the backend - and getJobData answers None for it rather than raising.
+    # Sorting that None on .number used to take the whole overview down with a 500.
+    resolved_children = [client.getJobData(id) for id in job_info.all_dependencies]
+    missing_children = sum(1 for job in resolved_children if job is None)
+    child_jobs = sorted([job for job in resolved_children if job is not None], key=lambda x: x.number)
     samples_by_id = {}
     families_by_id = {}
     # A child whose own payload cannot be read must not take its parent's page down:
@@ -955,7 +961,7 @@ def job_by_id(job_id):
     for job in described_children:
         if job.family_id is not None:
             families_by_id[job.family_id] = client.getFamily(job.family_id)
-    return render_template('job_overview.html', families=families_by_id, samples=samples_by_id, job_info=job_info, auto_refresh=auto_refresh, child_jobs=child_jobs)
+    return render_template('job_overview.html', families=families_by_id, samples=samples_by_id, job_info=job_info, auto_refresh=auto_refresh, child_jobs=child_jobs, missing_children=missing_children)
 
 
 @bp.route('/jobs/<job_id>/delete', methods=('POST',))
