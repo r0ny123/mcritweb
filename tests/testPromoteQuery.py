@@ -653,6 +653,28 @@ def test_a_report_without_a_usable_hash_promotes_nothing(client, as_role, fake_m
         f"the upload was not looked for under its job id: {opened}"
 
 
+@pytest.mark.parametrize("job_id", ["None", "NUL", "job-1"])
+def test_a_job_whose_id_could_not_have_named_a_file_promotes_nothing(client, as_role, fake_mcrit, uploads, job_id):
+    """The shape check belongs to the path, so the route has to be standing behind it
+    rather than beside it.
+
+    A job id reaches here off the wire and out of a URL, and only two shapes are ever
+    issued: an ObjectId, or a uuid4. "None" is what `QueueRemoteCalls` hands back when
+    `MongoQueue.put` returns None on an unacknowledged insert - one name for every such
+    failure - and "NUL" is a Windows device rather than a file. Neither can name an
+    upload, so neither may be promoted from one, whatever happens to be lying at that
+    name in a folder every query writes into.
+    """
+    as_role("contributor")
+    register_query(fake_mcrit, job_id=job_id)
+    store_upload(uploads, QUERIED_BYTES, job_id)
+
+    response = promote(client, job_id=job_id)
+
+    assert response.status_code == 302
+    assert wrote_nothing(fake_mcrit)
+
+
 def test_promotion_is_not_reachable_by_get(client, as_role, fake_mcrit, uploads):
     """Issue #84: a write a browser performs on plain navigation is reachable from any
     page the victim visits, and carries no CSRF token to check."""
