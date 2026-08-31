@@ -121,22 +121,32 @@ class CursorPagination:
 
     @property
     def is_first_page(self):
-        """Whether this request arrived without a cursor, i.e. nobody has paged yet.
+        """Whether this request is showing the first page of its result set.
 
-        `cursor["current"]` is the only one of the four that comes from the request
-        rather than from the backend's answer - `read_cursor_from_result` fills
-        `forward` and `backward` and leaves this one alone - so it is the honest test
-        for "no cursor yet", and it stays honest after that call. `cursor["first"]`
-        is documented above as always None for the same reason: no cursor *is* the
-        first page.
+        There are two ways to be on it and both have to count. A fresh URL carries
+        no cursor at all. Paging *back* to it carries the backward cursor the second
+        page handed out - `get_link("backward")`, which is what both the previous
+        arrow and the "page 1" number link in table/pagination_widget.html emit - so
+        "has no cursor" answers False for a page 1 the reader walked back to. A
+        listing that drops the exact hit on the way back is issue #56 in mirror
+        image: the record you searched for, gone from a page that showed it a moment
+        earlier, under the same page number.
 
-        Not `page == 1`: `page` is cosmetic by this class's own admission, it is
-        whatever the query string claimed, and a hand-edited `?page=1` alongside a
-        cursor would lie. Not `not hasBackward` either: that is the backend's
-        statement about the result set, and it only becomes true after the search has
-        run. Falsy rather than `is None` so an empty `?cursor=` counts as no cursor.
+        The backend cannot answer this for us. `MinHashIndex._getSearchResultTemplate`
+        sets a backward cursor for *any* request that carried one and returned rows,
+        so `hasBackward` is true on a first page reached backwards; mcrit's cursor
+        protocol has no "you are at the start" signal.
+
+        `page` is this class's own bookkeeping, decremented by
+        `_direction_to_page_num` on every backward link and carried in the query
+        string, and it is the only thing that survives that round trip. It does not
+        drive the query, and a hand-edited `?page=1&cursor=...` can lie about it -
+        but the cost of that lie is one extra row for a record that does match the
+        query, never a hidden one, and hiding is the failure this whole issue is
+        about. `cursor["first"]` stays None so the "first" link is genuinely
+        cursorless and lands here through the first clause.
         """
-        return not self.cursor["current"]
+        return not self.cursor["current"] or self.page <= 1
 
 
     def _getArgs(self, direction="current"):
@@ -149,9 +159,16 @@ class CursorPagination:
         result[self.page_param] = self._direction_to_page_num(direction)
         return result
     
+    #: The cursors that belong to the backend's answer. "current" comes from the
+    #: request and "first" is always None, and `is_first_page` reads the former - so
+    #: merge by name rather than blindly, or a new key in a future mcrit release
+    #: would quietly change what that property means.
+    RESULT_CURSOR_KEYS = ("forward", "backward")
+
     def read_cursor_from_result(self, result):
         if result is not None:
-            self.cursor.update(result["cursor"])
+            for key in self.RESULT_CURSOR_KEYS:
+                self.cursor[key] = result["cursor"].get(key)
             self._repairPage()
 
     def get_link(self, direction, **kwargs_overwrites):

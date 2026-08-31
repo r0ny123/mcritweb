@@ -60,8 +60,10 @@ def exact_matches_to_prepend(results, pagination):
     so the next page resumes *after* the row we dropped rather than at it. Issue #56
     is about a listing hiding a record that exists; trading one hidden record for
     another would be no fix. The exact hit is an answer to the query rather than a
-    member of the paged result set - which is how the search page has always framed
-    it - so it sits outside the page budget.
+    member of the paged result set, so it sits outside the page budget.
+
+    All four places that list search results use this: the three listings and the
+    three tables of /explore/search.
     """
     if results is None or not pagination.is_first_page:
         return []
@@ -457,13 +459,18 @@ def search():
         if results is None:
             flash(f"Ups, search for {query} in MCRIT's families failed!", category="error")
         else:
-            id_match = results['id_match']
-            if id_match is not None:
-                family = FamilyEntry.fromDict(id_match)
-                families.append(family)
+            # the exact hit belongs to the first page and is folded in by id, as on
+            # the listings - see exact_matches_to_prepend. Keying by id is what stops
+            # a record that is both the exact hit and a text hit rendering twice in
+            # the same table, which this branch used to do. Issue #56.
+            by_id = {}
+            for exact in exact_matches_to_prepend(results, family_pagination):
+                family = FamilyEntry.fromDict(exact)
+                by_id[family.family_id] = family
             for family_entry in results['search_results'].values():
                 family = FamilyEntry.fromDict(family_entry)
-                families.append(family) 
+                by_id.setdefault(family.family_id, family)
+            families = list(by_id.values())
             family_exact_matches = exact_match_marks(results, 'family_id')
 
     samples = {}
@@ -476,15 +483,11 @@ def search():
         if results is None:
             flash(f"Ups, search for {query} in MCRIT's samples failed!", category="error")
         else:
-            sha_match = results['sha_match']
-            if sha_match is not None:
-                sample_entry = SampleEntry.fromDict(sha_match)
-                samples[sample_entry.sample_id] = sample_entry
-            id_match = results['id_match']
-            if id_match is not None:
-                # both of these arrive as dicts off the wire, like sha_match above -
-                # which is the one branch here that deserialises before reading a field
-                sample_entry = SampleEntry.fromDict(id_match)
+            # sha256 first, then id, and only on the first page - see
+            # exact_matches_to_prepend. Both arrive as dicts off the wire, like the
+            # text hits below. Issue #56.
+            for exact in exact_matches_to_prepend(results, sample_pagination):
+                sample_entry = SampleEntry.fromDict(exact)
                 samples[sample_entry.sample_id] = sample_entry
             for sample_dict in results['search_results'].values():
                 sample_entry = SampleEntry.fromDict(sample_dict)
@@ -503,11 +506,16 @@ def search():
         if results is None:
             flash(f"Ups, search for {query} in MCRIT's functions failed!", category="error")
         else:
-            id_match = results['id_match']
-            if id_match is not None:
-                functions.append(FunctionEntry.fromDict(id_match))
+            # as in the families branch above: first page only, and keyed by id so
+            # an exact hit that is also a text hit is one row. Issue #56.
+            by_id = {}
+            for exact in exact_matches_to_prepend(results, function_pagination):
+                function_entry = FunctionEntry.fromDict(exact)
+                by_id[function_entry.function_id] = function_entry
             for function_dict in results['search_results'].values():
-                functions.append(FunctionEntry.fromDict(function_dict))
+                function_entry = FunctionEntry.fromDict(function_dict)
+                by_id.setdefault(function_entry.function_id, function_entry)
+            functions = list(by_id.values())
             function_exact_matches = exact_match_marks(results, 'function_id')
 
     family_column_setup = get_user_column_setup("family_table")

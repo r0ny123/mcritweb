@@ -31,16 +31,24 @@ def fake_mcrit(corpus_mcrit):
     return corpus_mcrit
 
 
-def table_of(response, table_id):
-    page = response.get_data(as_text=True)
+def table_html(page, table_id):
     start = page.find(f'id="{table_id}"')
     assert start != -1, f"no table {table_id!r} on the page"
     return page[start:page.index("</table>", start)]
 
 
-def rows_of(response, table_id):
-    """(id, badge label or None) per body row, in render order."""
-    body = table_of(response, table_id)
+def table_of(response, table_id):
+    return table_html(response.get_data(as_text=True), table_id)
+
+
+def rows_of_table(page, table_id):
+    """(id, badge label or None) per body row, in render order.
+
+    Takes the page markup rather than the response, so a test that already has the
+    HTML in hand - testListingIdMatches walks several pages per test - can read the
+    same markup contract through the same one description of it.
+    """
+    body = table_html(page, table_id)
     found = []
     for row in body.split("<tr")[1:]:
         id_cell = ID_CELL.search(row)
@@ -49,6 +57,10 @@ def rows_of(response, table_id):
         badge = re.search(r'<span class="badge[^"]*"[^>]*>([^<]*)</span>', row)
         found.append((int(id_cell.group(1)), badge.group(1) if badge else None))
     return found
+
+
+def rows_of(response, table_id):
+    return rows_of_table(response.get_data(as_text=True), table_id)
 
 
 def marks_of(response, table_id):
