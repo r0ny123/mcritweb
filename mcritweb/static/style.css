@@ -46,7 +46,9 @@
     /* the tick / cross pair marking a boolean column */
     --status-yes: green;
     --status-no: darkred;
-    /* cross-compare's sample picker: chosen, and already-computed */
+    /* a sample picker row already in the comparison; the already-computed and the
+       just-clicked ones take --surface-muted. Both are applied by class, never
+       written into a style attribute - see `tr.row-selected` below. */
     --row-selected-bg: yellowgreen;
     /* the dashed drop target */
     --dropzone-border: black;
@@ -201,6 +203,17 @@ html {
   .nav-pills .nav-link.active { background-color: var(--surface-muted); color:var(--control-text)}
   .nav-pills .nav-link{color:var(--control-text)}
   .thead-light { background-color: var(--surface-muted); color:var(--control-text)}
+
+  /* The three sample pickers under /analyze (compare, 1 vs 1, cross compare) mark
+     each row's state here rather than by writing a colour into its style attribute.
+     The scripts on those pages have to read the state back to toggle it, and a
+     colour they can compare against is a colour the theme cannot change: cross
+     compare's handler tested `style.backgroundColor != "yellowgreen"` and so pinned
+     both tints to the light palette. They toggle the class instead - #70.
+     Bootstrap leaves `--bs-table-bg` transparent, so a background on the row shows
+     through its cells; `.table-hover`'s tint is painted over this, not instead. */
+  tr.row-selected { background-color: var(--row-selected-bg); }
+  tr.row-pending  { background-color: var(--surface-muted); }
  a > * {
     pointer-events: none;
   }
