@@ -245,7 +245,7 @@ def test_a_failed_job_is_not_reported_as_an_unknown_one(client, as_role, corpus_
     assert b"ran out of attempts" in response.data
 
 
-def test_a_terminated_job_says_it_was_terminated(client, as_role, corpus_mcrit, monkeypatch):
+def test_a_terminated_job_is_not_reported_as_an_unknown_one(client, as_role, corpus_mcrit, monkeypatch):
     as_role("visitor")
     job_id = _with_job(corpus_mcrit, monkeypatch, terminated=True)
 
