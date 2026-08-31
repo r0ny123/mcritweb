@@ -6,6 +6,7 @@ lives in functiondiff.py. See issue #88.
 
 import collections
 import functools
+import math
 import os
 import re
 import shutil
@@ -142,15 +143,83 @@ def probe_server(probe, ttl, server_url):
     return answer
 
 
+_UNSET = object()
+_ttl_warned_about = _UNSET
+
+
+def probe_ttl_from_config():
+    """`MCRIT_SERVER_PROBE_TTL` as a usable number of seconds, or 0 if it is not one.
+
+    Resolved and coerced *outside* the decorator's try block, which is the whole point.
+    A config file is hand-written, so `MCRIT_SERVER_PROBE_TTL = "5"` is an easy thing to
+    write. Left inside the try, the `ttl > 0` comparison raises TypeError, the broad
+    `except Exception` below reads that as the backend being unreachable, and every one
+    of the 36 decorated routes redirects with "No connection to the MCRIT server" -
+    while the undecorated index renders happily against the same healthy backend, and
+    nothing is logged.
+
+    A quoted number is read as the number: the defect is the misreported outage, not the
+    quoting, and "5" says what it means. Anything else costs the cache and nothing else -
+    fall back to 0, the un-cached behaviour this feature replaced, and name the key in
+    the log so an operator can find it.
+
+    `inf` and `nan` have to be refused explicitly, because `float()` accepts both and
+    neither is caught by a `< 0` test. They are not merely useless here, they are worse
+    than the bug this function fixes: at `inf` the entry never expires, and since
+    `probe_server` replays a cached `RequestException` by re-raising it, one transient
+    blip would pin "No connection to the MCRIT server" on all 36 routes for the life of
+    the worker process. At `nan` every comparison is False, so the fast path is skipped,
+    the cache is written under the lock on every request, and it can never hit.
+
+    `bool` is refused for the same reason a reader would be surprised by it: `True` is
+    not a one-second cache, it is somebody expecting an on/off switch.
+    """
+    raw = current_app.config.get("MCRIT_SERVER_PROBE_TTL", 0)
+    if isinstance(raw, bool):
+        return _unusable_ttl(raw, "is a boolean, and this key is a number of seconds")
+    try:
+        ttl = float(raw)
+    except (TypeError, ValueError):
+        return _unusable_ttl(raw, "is not a number")
+    if not math.isfinite(ttl):
+        return _unusable_ttl(raw, "is not a finite number")
+    if ttl < 0:
+        return _unusable_ttl(raw, "is negative")
+    return ttl
+
+
+def _unusable_ttl(raw, complaint):
+    """0, plus one log line per distinct bad value rather than one per request.
+
+    The decorator runs on 36 routes, so warning unconditionally would turn a
+    one-character config typo into an unbounded stream on the hot request path. Keyed on
+    the value, so correcting the config - or breaking it a second, different way - is
+    still reported.
+    """
+    global _ttl_warned_about
+    if repr(raw) != repr(_ttl_warned_about):
+        _ttl_warned_about = raw
+        current_app.logger.warning(
+            "MCRIT_SERVER_PROBE_TTL is %r, which %s - probing the backend on every "
+            "request instead of caching the answer. Set it to a number of seconds, or "
+            "remove it to take the default.", raw, complaint)
+    return 0
+
+
 def mcrit_server_required(view):
     @functools.wraps(view)
     def wrapped_view(**kwargs):
         # resolved from config so tests can substitute it, in the same way the
         # backend client itself is substituted via MCRIT_CLIENT_FACTORY (issue #88)
         probe = current_app.config.get("MCRIT_SERVER_PROBE", default_server_probe)
-        ttl = current_app.config.get("MCRIT_SERVER_PROBE_TTL", 0)
+        # both of these are resolved outside the try on purpose. A bad config value and
+        # a database that will not open are faults in this application; reported from
+        # inside, the `except Exception` below would dress either up as a backend
+        # outage - the exact defect probe_ttl_from_config exists to fix.
+        ttl = probe_ttl_from_config()
+        server_url = get_server_url() if ttl > 0 else None
         try:
-            if not probe_server(probe, ttl, get_server_url() if ttl > 0 else None):
+            if not probe_server(probe, ttl, server_url):
                 flash('Connected to MCRIT server but could not authenticate - Did you configure a token in the server settings?', category='error')
                 return redirect(url_for('index'))
         except Exception:
