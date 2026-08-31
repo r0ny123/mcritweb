@@ -46,6 +46,11 @@ def job_id_of(report):
     return load(f"{report}.job")["_id"]["$oid"]
 
 
+#: The sample the captured 1-vs-N report (`matches_for_sample`) was produced for, and
+#: the sample the reference functions belong to.
+MATCHED_SAMPLE_ID = 0
+
+
 def altered_job(report, job_id, **payload_params):
     """A copy of a captured job under a new id, with its payload fields replaced."""
     job_dict = copy.deepcopy(load(f"{report}.job"))
@@ -348,6 +353,23 @@ class CorpusMcritClient:
             "functions": len({match[2] for match in matches}),
             "offsets": len(matches),
         }
+
+    # --- job submission ----------------------------------------------------------
+
+    def requestMatchesForSample(self, sample_id, *args, **kwargs):
+        """mcrit deduplicates by descriptor and answers the job it already has.
+
+        The corpus holds exactly one captured 1-vs-N job, for the sample its reference
+        functions belong to, so that is the only submission this can answer. Anything
+        else is a gap in the fixtures rather than a job, and says so.
+        """
+        self._record("requestMatchesForSample", sample_id, *args, **kwargs)
+        if int(sample_id) != MATCHED_SAMPLE_ID:
+            raise NotImplementedError(
+                f"The corpus has no captured 1-vs-N job for sample {sample_id}, only for "
+                f"sample {MATCHED_SAMPLE_ID}. Capture one with tests/fixtures/regenerate.py."
+            )
+        return job_id_of("matches_for_sample")
 
     # --- jobs and results --------------------------------------------------------
 
