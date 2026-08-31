@@ -2574,3 +2574,59 @@ issues for duplicates and re-verifying each against v1.8.1 by hand. The sharpest
 `MatchedFunctionEntry.getMatchTuple()` multiplies already-masked bits by their flags again,
 so six of eight values round-trip wrong — a pichash-only match is reported as a library
 match, and a library match loses its flag entirely — on a route that is actually served.
+
+## The integration rebuild: 68 branches, 45 conflicts, 1,884 passing
+
+`integration/all-68` @ `d830417`, pushed. 23 merges clean, **45 conflicted** - up from 36
+last round, which is what a further sixteen fix branches across the same files costs.
+
+    ruff check .   -> All checks passed!         RUFF_EXIT=0
+    pytest -q      -> 4 failed, 1884 passed      PYTEST_EXIT=1
+
+The four are the documented Windows platform failures. Master passes 235.
+
+### The silent revert, again, and worse
+
+#50 replaces the result tables with shared macros written against **master**, so merging
+it is a clean revert of #7 - `%3d` truncation back, and the tooltip divisor back to
+`reference_sample_entry.binweight`. git sees "ours deleted the block, theirs replaced it
+with a macro call" and resolves it without a conflict; #7's tests read the rendered page,
+so they keep passing. Ported into the macro again (`famlib_row` takes `divisors`, six call
+sites), and verified independently afterwards: zero truncating specifiers left on a score,
+six rounding ones, no raw `binweight` divisor.
+
+The same merge also re-added the synchronous diagram calls #68 removed and the
+`job_info=result_json` bug #99 fixed, and #70's `base.html` re-added the two stylesheets
+#63 had taken out.
+
+### A fix with a half-life of one rebuild
+
+Last round I found the missing-dependency warning rendered twice, fixed it on the
+integration branch, and tightened the test there too. Both evaporated when the branch was
+rebuilt from its sources - which is what an integration branch is *for* - and the defect
+came straight back, with nothing left to catch it. Found this time by checking the same
+three integration-only fixes by hand rather than by any test.
+
+The rule that follows: **a fix that lives only on the integration branch does not survive
+the next rebuild.** If a merge artifact is worth a guard, the guard belongs on the branch
+that owns the file. The count assertion now lives on
+`fix/job-overview-500-on-deleted-dependency`, and merging that branch again is what made
+the duplicate visible.
+
+The brace-balance and colour-literal ratchets I wrote last round were lost the same way.
+The agent doing the rebuild searched all 68 branches for the brace test, correctly found
+it on none of them, and wrote its own - `tests/testStylesheetStructure.py`. My brief had
+told it those tests were on the branches; they never were.
+
+### The rest
+
+`<job>-dark.png` parsed as an unknown job id again, so every dark diagram was a broken
+image on a cold cache - mutation-checked here by dropping the `-dark` group from the
+grammar, which fails 16 tests. Four branches wrote four different `getMatchesForPicHash`
+fakes; #93 and #80 wrote two incompatible `build_yara_rule`s; #7 and #80 both created
+`tests/testBrowser.py`; three ADRs came out labelled `ADR-0003`; `SCHEMA_V1_4_8` was
+defined twice, because `safe_union` guards `def` and `class` but not assignments.
+
+Two security ones worth naming: #77 moved the type-ahead's data out of reach of the
+escaping filter, and #44's conflict tail would have reopened the upload-overwrite hole #9
+closes.
