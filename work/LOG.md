@@ -2364,3 +2364,117 @@ correctly reported missing. A check that cannot fail is not evidence.
 Re-run correctly: 59 merged, 0 missing - and then the 60th separately, because
 `while read` skips a final line with no trailing newline. Then a third way, over every
 `fix/*` ref on origin: 60 found, 0 missing.
+
+## Auditing my own "What I didn't do" notes: 266 bullets, 60 PRs
+
+Every PR opened upstream carries a *What I didn't do* / *Risks* section. Those sections are
+promises about the edges of the work, and nobody had ever gone back to check them. So:
+266 bullets extracted into `scratchpad/notes/pr<N>.notes.md`, split into six balanced
+groups, six worktrees off `integration/all-60-v2`, six agents, one verdict per bullet from
+{FIXED, ACCEPTED, STALE, REAL BUG, UNVERIFIABLE HERE} with evidence attached. Diagnosis
+only - no agent was allowed to fix anything, so that finding and fixing stayed separable.
+
+First, the setup that made it possible: mcrit's `origin` here was the user's **fork**, so
+`git pull` was pulling a copy of ourselves. Added `upstream` (`danielplohmann/mcrit`) and
+fast-forwarded - default branch `main`, now **v1.8.1** (`e2ef132`), five commits ahead of
+what this campaign had been reasoning against, including a tunable unique-block cover and
+a submission-boundary fix. Several notes were re-checked against that newer code.
+
+### The shape of the answer
+
+The great majority of the notes held up: deferrals that were still correctly deferred,
+risks that were correctly priced. What the audit was actually for is the other three
+categories.
+
+**STALE** - the note was true when written and has since been overtaken, usually by a
+later commit on its own branch. #144's section still says the loop-boundary checkbox is
+disabled and untested; its own branch implemented and tested it two commits later. #149
+says a running job can have no total "without a clock"; the clock landed on the same
+branch. #145 says the page "cannot know the diagram's size without rendering it" - the
+same PR later derived it from instruction counts. #115 says filtered job counts can only
+be fixed upstream; mcritweb worked around it in-tree. Stale notes are not harmless: a
+reviewer reads them as current, and #144's would have sent one looking for a defect that
+is not there.
+
+**Notes that were simply wrong**, which is worse than stale. #128 states that band
+`0` ("Off") and `1` ("Complete") behave identically in mcrit, and ships that claim as a
+code comment in `views/params.py`. `MatcherInterface._getMatchesRoutineInner` guards the
+entire minhash stage with `if self._band_matches_required > 0:` - at 0 mcrit does
+**pichash-only** matching. It has been that way since v1.1.7 in 2023, so the claim was
+never true, and acting on it would silently delete a real mode.
+
+**REAL BUG** - 18 across the six groups, and they are the point of the exercise.
+
+### The bugs the notes were hiding
+
+Ranked by what they cost a real user:
+
+- **The login throttle keys on the proxy.** #101's own note deferred "what the client IP
+  is" - and the answer, behind the NGINX deployment AGENTS.md recommends, is *the proxy*.
+  Measured: eleven failed logins with distinct `X-Forwarded-For` put ten rows on the proxy
+  address and zero on any client; the next request, correct password, different client,
+  was refused. Ten requests locks every user out for fifteen minutes, and the
+  brute-force protection the branch exists to add meters nothing per-attacker.
+- **Stored XSS through the family-name type-ahead.** `static/autocomplete.js` interpolates
+  the suggestion into a template string and assigns it to `innerHTML`. A family named
+  `x<img src=q onerror=...>` executes for anyone who opens an edit modal and types `x`.
+  Driven in Chromium: `window.__pwned === 1`. Five affected pages, not the four reported.
+- **A visitor can destroy another user's stored query.** `analyze.query` writes
+  `uploads/<sha>` where, for a `.smda` upload, `<sha>` is the *report's own declared
+  field*. #104 disclosed it, #105 disclosed it, neither owned it.
+- **`?endpoint=x` is a 500 on every paginated page in the app** - `url_for()` got multiple
+  values - plus `?_method=` (500) and `?_external=1` with a spoofed `Host`, which silently
+  rewrites every pagination link onto an attacker's domain. Untouched since the initial
+  commit; #132 declined it and offered to file it; nobody did.
+- **Submit smuggles query parameters into mcrit.** `addBinarySample` builds its URL by
+  hand, so a family of `x&is_dump=1&base_addr=0x41414141` makes the backend disassemble
+  the upload as a mapped dump at an address the form's validation never saw. And without
+  any adversary: `C++_sample.exe` is stored as `C  _sample.exe`, `R&D` as `R`.
+- **`style.css` lost a closing brace in my own merge**, so both of issue #52's rules
+  applied in dark theme only - and light is the default. The existing test searches the
+  file as text and the rules were still *present*, just reparented.
+
+Plus: a duplicated warning block from a conflict resolution; `compare_function` left as
+the one job-request site with no guard; `/data/jobs/<id>` still 500ing on a malformed
+payload while the helper to fix it sits two hundred lines away; an exact id match
+re-prepended on every cursor page; the dark theme rendering click-selected rows at
+1.14:1 contrast; three throws on the side-by-side CFG page; and four defects in mcrit
+itself - flag bits corrupted on a live route, a score denominator that disagrees with a
+per-request threshold, a per-family score that keeps the last match rather than the best,
+and an unguarded `None` deref in `getSampleSearchResults`.
+
+### Seven prints on request paths
+
+Found while fixing one of them. `data.match_functions` printed the *entire* 1-vs-1 match
+report - both function entries, minhashes, picblockhashes - on every view.
+`delete_job_by_id` printed the whole job descriptor on every deletion, and the
+`getJobData` call feeding it was read by nothing else, so every delete also bought a
+backend round-trip to produce a line of stdout. Under gunicorn stdout is the container
+log. Two were in the audit; the AST ratchet I wrote to pin the fix found five more.
+
+### Where I got it wrong
+
+- **I widened a fix on a reviewer's word without checking the integrated product.** The
+  reviewer of the `compare_function` guard said five sibling routes had the identical
+  unguarded shape. True on that branch - and already fixed on the integration branch by
+  issue #43's `require_result`, which the #35 branch simply predates. I had guarded all
+  six before checking, then reverted to the one site that is genuinely uncovered. The
+  reviewer was right about the branch and wrong about the product, and I should have
+  looked before acting.
+- **My own TTL fix introduced a worse bug than the one it fixed.** `float("inf")` passes
+  both a `try` and a `< 0` test, and `probe_server` replays a cached `RequestException`
+  by re-raising it - so one transient blip would have pinned "No connection to the MCRIT
+  server" on all 36 routes for the life of the worker process. The review caught it.
+- **I mis-stated a floor and had to correct the audit.** Group 4 reported that a 3.10
+  install "succeeds, then dies with `AttributeError` on `datetime.UTC`". Every mcrit from
+  1.5.3 onward declares `requires-python >=3.11`, so pip finds nothing satisfiable and the
+  install fails at resolution. The README's "Python 3.8+" is still false; the predicted
+  failure mode is not what happens.
+- **A `git stash` mutation check that proved nothing.** Stashing removed the fix *and* the
+  test, so "15 passed" was vacuous. Redone by reverting only the source file, which
+  reproduced the exact `BuildError`.
+- **Two branch-name collisions and a reserved device name.** `git checkout -B` failed
+  because another worktree held the branch, the `&&` chain stopped, and the commit never
+  ran - so the push that followed pushed an unchanged tip. Same lesson as before: a
+  blocked command leaves none of its side effects. And `scratchpad/fx/prn` cannot exist on
+  Windows: `PRN` is a reserved device name.
