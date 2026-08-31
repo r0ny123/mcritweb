@@ -1,9 +1,13 @@
 #!/usr/bin/python
 
 import logging
+import re
 import unittest
 
-from mcritweb.views.pagination import Pagination
+import pytest
+from fixtureData import job_id_of
+
+from mcritweb.views.pagination import Pagination, request_args_for_link_building
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
@@ -72,6 +76,142 @@ class PaginationTestSuite(unittest.TestCase):
             self.assertEqual(p.max_page, test_set["expected_max_page"])
             self.assertEqual(p.page_index, test_set["expected_page_index"])
             self.assertEqual(p.pages, test_set["expected_pages"])
+
+
+# --- query parameters that collide with url_for() --------------------------------
+#
+# Both pagination classes rebuild the current URL by splatting the request's args
+# back into url_for(), which made every query parameter a possible collision with
+# url_for()'s own arguments. `?endpoint=` raised a TypeError and `?_method=` a
+# BuildError - both HTTP 500 - while `?_external=` and `?_scheme=` raised nothing
+# and silently rebuilt every link as an absolute URL off the Host header.
+#
+# One page per class, because they are used by different pages and were broken
+# independently: /explore/samples is a CursorPagination page (get_link and
+# get_sort_link), /data/jobs a Pagination one (get_link).
+
+PAGINATED_PAGES = [
+    ("/explore/samples", "CursorPagination"),
+    ("/data/jobs", "Pagination"),
+]
+
+#: Every name url_for() takes for itself instead of putting it in the URL.
+RESERVED_ARGS = ["endpoint", "_external", "_scheme", "_anchor", "_method"]
+
+
+@pytest.fixture
+def fake_mcrit(corpus_mcrit):
+    """Rows, so the widgets render paging links there is something to assert on."""
+    return corpus_mcrit
+
+
+def pagination_links(response, path):
+    """The paging and sorting URLs the pagination macros built for `path`.
+
+    Sort links are emitted inside an onclick rather than an href, so both spellings
+    are collected: `_external` poisons them just the same. Other links on the page
+    point at the same path - the jobs state menu, for one - so a link only counts as
+    a pagination link once it carries the page parameter.
+    """
+    body = response.get_data(as_text=True)
+    found = re.findall(rf"""(?:href="|window\.location\.href=')([^"']*{re.escape(path)}\?[^"']*)""", body)
+    links = [link.replace("&amp;", "&") for link in found]
+    return [link for link in links if re.search(r"[?&](?:p|page)=", link)]
+
+
+@pytest.mark.parametrize("path, pagination_class", PAGINATED_PAGES)
+def test_a_query_parameter_named_endpoint_does_not_break_the_page(client, as_role, path, pagination_class):
+    """`url_for() got multiple values for argument 'endpoint'` -> HTTP 500."""
+    as_role("admin")
+    response = client.get(f"{path}?endpoint=x")
+
+    assert response.status_code == 200, f"{pagination_class} page {path} died on ?endpoint="
+    assert pagination_links(response, path), "no pagination links to check"
+    assert not [link for link in pagination_links(response, path) if "endpoint=" in link]
+
+
+@pytest.mark.parametrize("path, pagination_class", PAGINATED_PAGES)
+@pytest.mark.parametrize("reserved", ["_method=DELETE", "_scheme=https"])
+def test_a_reserved_underscore_parameter_does_not_break_the_page(client, as_role, path, pagination_class, reserved):
+    """`_method` failed the build outright - `BuildError: Could not build url for
+    endpoint ... ('DELETE')`, HTTP 500. `_scheme` is the quiet one: Flask turns
+    `_external` on by itself whenever a scheme is given (`app.py`: `_external =
+    _scheme is not None`), so it rewrote every link as an absolute URL instead of
+    raising."""
+    as_role("admin")
+    response = client.get(f"{path}?{reserved}")
+
+    assert response.status_code == 200, f"{pagination_class} page {path} died on ?{reserved}"
+    links = pagination_links(response, path)
+    assert links, "no pagination links to check"
+    assert not [link for link in links if reserved.split("=")[0] in link]
+    assert not [link for link in links if "//" in link], f"{reserved} made the links absolute: {links[:3]}"
+
+
+@pytest.mark.parametrize("path, pagination_class", PAGINATED_PAGES)
+def test_external_cannot_be_turned_on_from_the_query_string(client, as_role, path, pagination_class):
+    """The one with security weight: `?_external=1` made url_for() build absolute
+    URLs, and the host it builds them from is the request's own Host header. A link
+    handed to a visitor then points wherever the Host said - here at
+    http://attacker.example/... - so the query string alone poisons every paging and
+    sorting link on the page."""
+    user_id = as_role("admin")
+    # the session cookie is scoped to the host it was set on, so the spoofed Host
+    # needs a logged-in cookie of its own
+    with client.session_transaction(base_url="http://attacker.example/") as session:
+        session["user_id"] = user_id
+
+    response = client.get(f"{path}?_external=1", headers={"Host": "attacker.example"})
+
+    assert response.status_code == 200
+    links = pagination_links(response, path)
+    assert links, "no pagination links to check"
+    assert not [link for link in links if "//" in link], f"{pagination_class} built absolute links: {links[:3]}"
+    assert "attacker.example" not in response.get_data(as_text=True)
+
+
+@pytest.mark.parametrize("path, pagination_class", PAGINATED_PAGES)
+def test_an_anchor_from_the_query_string_does_not_reach_the_links(client, as_role, path, pagination_class):
+    """`_anchor` is a supported argument of the pagination macros, which is exactly
+    why a visitor-supplied one must not be able to take its place."""
+    as_role("admin")
+    response = client.get(f"{path}?_anchor=evil")
+
+    assert response.status_code == 200
+    assert not [link for link in pagination_links(response, path) if "#evil" in link]
+
+
+@pytest.mark.parametrize("path, param, value", [
+    ("/explore/samples", "query", "zeus"),
+    ("/data/jobs", "state", "finished"),
+])
+def test_an_ordinary_query_parameter_is_still_carried_into_the_links(client, as_role, path, param, value):
+    """The counterweight: only the reserved names are dropped. A filter the visitor
+    set has to survive into the next page's URL or paging loses the filter."""
+    as_role("admin")
+    response = client.get(f"{path}?{param}={value}")
+
+    links = pagination_links(response, path)
+    assert links, "no pagination links to check"
+    assert all(f"{param}={value}" in link for link in links), links[:3]
+
+
+def test_the_anchor_the_template_asks_for_still_reaches_the_links(client, as_role):
+    """The other half of dropping `_anchor` from the query string: the macros pass
+    an `_anchor` of their own through `kwargs_overwrites`, which is deliberately not
+    filtered, so a result page's paging links must still land on the right table."""
+    as_role("visitor")
+    response = client.get(f"/data/result/{job_id_of('matches_for_sample')}")
+
+    assert response.status_code == 200
+    assert "#sample-matches" in response.get_data(as_text=True)
+
+
+@pytest.mark.parametrize("reserved", RESERVED_ARGS)
+def test_the_arg_filter_drops_every_name_url_for_reserves(reserved):
+    filtered = request_args_for_link_building(MockRequest({reserved: "x", "keep": "yes"}))
+
+    assert filtered == {"keep": "yes"}
 
 
 if __name__ == "__main__":
