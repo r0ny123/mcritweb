@@ -74,3 +74,41 @@ def test_a_rendered_sample_table_carries_the_class(client, as_role):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _rule_nesting_depth(css, selector):
+    """How many enclosing blocks `selector`'s rule sits inside. 0 means top level."""
+    index = css.index(selector)
+    return css.count("{", 0, index) - css.count("}", 0, index)
+
+
+def test_the_stylesheet_closes_every_block_it_opens():
+    """A dropped `}` does not fail a regex, it silently reparents everything after it.
+
+    `test_the_stylesheet_keeps_headings_and_action_cells_on_one_line` above searches the
+    file as text, so it passes just as happily when the rule it finds has been swallowed
+    into a `:root[data-theme="dark"]` block by a missing brace - which is exactly what a
+    merge did to this file: the two rules below applied in dark theme only, and light is
+    the default. Depth, not presence, is the property worth asserting.
+    """
+    css = STYLESHEET.read_text()
+
+    depth = 0
+    for line_number, line in enumerate(css.splitlines(), start=1):
+        depth += line.count("{") - line.count("}")
+        assert depth >= 0, f"style.css closes a block that was never opened, line {line_number}"
+    assert depth == 0, f"style.css leaves {depth} block(s) open at the end of the file"
+
+
+def test_the_table_rules_are_not_trapped_inside_a_theme_block():
+    """The consequence the brace count exists to prevent, asserted directly.
+
+    These two rules answer issue #52 for every reader; nested inside the dark palette
+    they answer it only for readers who have chosen dark, and the default is light.
+    """
+    css = STYLESHEET.read_text()
+
+    for selector in ("table.table thead th", "table.table td.buttons"):
+        assert _rule_nesting_depth(css, selector) == 0, \
+            f"{selector} is nested {_rule_nesting_depth(css, selector)} block(s) deep"
+

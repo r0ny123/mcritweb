@@ -107,6 +107,9 @@ UNGUARDED_ROUTES = [
     ("admin", "post", "/admin/schedule_recalc_minhashes", "recalculateMinHashes", None, None),
     ("visitor", "get", "/analyze/blocks/sample/1", "requestUniqueBlocksForSamples", None, None),
     ("visitor", "get", "/analyze/compare/1", "requestMatchesForSample", None, None),
+    # the flask button on a function row. It arrived on a later branch than the guard
+    # its five siblings above got, so it was the one route still answering BuildError.
+    ("visitor", "get", "/analyze/compare_function/2", "requestMatchesForSample", None, None),
     ("visitor", "get", "/analyze/compare/1/2", "requestMatchesForSampleVs", None, None),
     ("visitor", "get", "/analyze/start_cross_compare?samples=1,2", "requestMatchesCross", None, None),
     ("contributor", "post", "/explore/modifyFamily", "deleteFamily", DELETE_FAMILY, None),

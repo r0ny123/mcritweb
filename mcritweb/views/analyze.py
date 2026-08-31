@@ -439,7 +439,7 @@ def compare_function(function_id):
         return redirect(url_for('explore.functions'))
     rematch = parse_checkbox_query_param(request, 'rematch')
     minhash_band_range = parse_band_range(request)
-    job_id = client.requestMatchesForSample(function_entry.sample_id, force_recalculation=rematch, band_matches_required=minhash_band_range)
+    job_id = require_result(client.requestMatchesForSample(function_entry.sample_id, force_recalculation=rematch, band_matches_required=minhash_band_range), "a job for this comparison")
     # forward=1 so a job that is already finished goes straight to the report; while it
     # is still running the job page auto-refreshes and carries funid along until it is
     return redirect(url_for('data.job_by_id', job_id=job_id, refresh=3, forward=1, funid=function_id))

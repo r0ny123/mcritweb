@@ -343,6 +343,7 @@ html {
     --spinner-text: #8c9eff;
     --rule-strong: #495057;
     --legend-loop-text: #000;
+}
 
   /* The MCRIT diagram is fetched separately from the result page that shows it, so
      this fills the box the <img> has reserved (see templates/match_diagram.html)
