@@ -11,6 +11,15 @@ from werkzeug.security import generate_password_hash
 from mcritweb import create_app
 from mcritweb.db import ServerInfo, UserInfo, init_db
 
+#: The MinHash-relevant configuration this fake instance claims. `MinHashIndex.addImportData`
+#: compares an export's `config.shingler` / `config.minhash` against the receiving instance's
+#: own hashes and bare-`return`s when either differs (or when `config.version <= "0.0.0"`), so
+#: the server answers `{"status": "successful", "data": null}` and the client hands the view a
+#: `None` report. Modelling that refusal here is what lets a test drive it - from the view's
+#: side it is otherwise indistinguishable from an upload that was never MCRIT data.
+FAKE_SHINGLER_HASH = "shingler-config-hash-of-this-instance"
+FAKE_MINHASH_HASH = "minhash-config-hash-of-this-instance"
+
 
 class FakeMcritClient:
     """Stand-in for McritClient.
@@ -117,10 +126,19 @@ class FakeMcritClient:
         wire, so this one does too - otherwise a view that uploads the wrong shape
         would look like it worked. The return value is the import report the server
         builds (MinHashIndex.addImportData), which `import_complete.html` renders as
-        a table of counters."""
+        a table of counters - or `None`, when this instance refuses the data as
+        incompatible (see FAKE_SHINGLER_HASH above)."""
         self._record("addImportData", import_data)
         if not isinstance(import_data, dict):
             raise ValueError("Can only forward dictionaries with export data.")
+        config = import_data.get("config", {})
+        if (
+            config.get("version", "0.0.0") <= "0.0.0"
+            or config.get("shingler", FAKE_SHINGLER_HASH) != FAKE_SHINGLER_HASH
+            or config.get("minhash", FAKE_MINHASH_HASH) != FAKE_MINHASH_HASH
+        ):
+            # incompatible export: the real index refuses it and reports nothing
+            return None
         return {
             "num_samples_imported": len(import_data.get("samples", {})),
             "num_samples_skipped": 0,
