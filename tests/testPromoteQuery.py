@@ -11,9 +11,13 @@ backend keeps a query's input in GridFS behind a job reference and exposes no ro
 that reads it back - `application_routes.py` has `/jobs/{id}`, `/jobs/{id}/result`
 and `/results/{id}`, and nothing for a job's *input* - and `McritClient` has no verb
 that turns a query job into a sample. The only copy that can be resubmitted is the
-one `analyze.query` writes into `instance/temp/uploads/<sha256>`, named by the
-sha256 of the queried *sample* - which is what the query's report records, and not
-always what the job descriptor holds.
+one `analyze.query` writes into `instance/temp/uploads/`, under the id of the job it
+queued. Neither of the two hashes in play names that file: the query's report records
+the sha256 the queried *sample* declares, and the job descriptor holds the hash of
+whatever `QueueRemoteCalls` serialised - the canonicalised report JSON, for an .smda
+query. Both still matter here, the first to ask the corpus whether the sample is
+already stored and the second to check that the file found is the one the job ran on,
+but a promotion locates the file with neither.
 
 That copy is local to a single host and is written by the web upload alone:
 `api.api_router` forwards a query straight to the backend, so a query from the API or
@@ -25,6 +29,7 @@ fails.
 import builtins
 import copy
 import hashlib
+import io
 import json
 import logging
 import pathlib
@@ -72,6 +77,20 @@ def fake_mcrit(corpus_mcrit):
 
     corpus_mcrit.addBinarySample = _add_binary_sample
     corpus_mcrit.addReport = _add_report
+
+    # the three verbs `analyze.query` queues through, so a test can run a real upload
+    # in and then promote what it left behind. They answer the one job id the synthetic
+    # jobs here live under, which is what a query does: the id names the new job, and
+    # the upload is filed under it.
+    def _queue_query(name):
+        def _call(*args, **kwargs):
+            corpus_mcrit._record(name, *args, **kwargs)
+            return QUERY_JOB_ID
+        return _call
+
+    for verb in ("requestMatchesForUnmappedBinary", "requestMatchesForMappedBinary",
+                 "requestMatchesForSmdaReport"):
+        setattr(corpus_mcrit, verb, _queue_query(verb))
     return corpus_mcrit
 
 
@@ -159,6 +178,17 @@ def smda_upload(sha256, family="", version=""):
     }).encode()
 
 
+def store_upload(uploads, content, job_id=QUERY_JOB_ID):
+    """Put a file where `analyze.query` leaves one: under the id of the job it queued.
+
+    Written once rather than at every call site, because it is the one thing these
+    tests and that route have to agree about - and agreeing with each other is not the
+    same as agreeing with it, which is what `test_a_query_uploaded_through_the_web_can
+    _be_promoted` at the bottom is for.
+    """
+    (uploads / job_id).write_bytes(content)
+
+
 def promote(client, job_id=QUERY_JOB_ID, **fields):
     """POST the promotion form the result page renders."""
     data = {"family": "test.family", "version": "1.0"}
@@ -181,8 +211,7 @@ def test_the_query_result_page_offers_promotion_while_the_upload_is_here(client,
     """The captured query report, with its uploaded file still in place. This is the
     only state in which the button is honest, so it is the only state that shows it."""
     as_role("contributor")
-    report_sha256 = load("matches_for_query.result")["info"]["sample"]["sha256"]
-    (uploads / report_sha256).write_bytes(QUERIED_BYTES)
+    store_upload(uploads, QUERIED_BYTES, job_id_of("matches_for_query"))
 
     page = client.get(f"/data/result/{job_id_of('matches_for_query')}").get_data(as_text=True)
     assert f'action="/data/promote_query/{job_id_of("matches_for_query")}"' in page
@@ -203,8 +232,7 @@ def test_a_visitor_is_not_offered_promotion(client, as_role, uploads):
     """Promotion adds to the corpus, which is contributor work - `data.submit` draws
     the same line. The route enforces it; the page must not dangle it either."""
     as_role("visitor")
-    report_sha256 = load("matches_for_query.result")["info"]["sample"]["sha256"]
-    (uploads / report_sha256).write_bytes(QUERIED_BYTES)
+    store_upload(uploads, QUERIED_BYTES, job_id_of("matches_for_query"))
 
     page = client.get(f"/data/result/{job_id_of('matches_for_query')}").get_data(as_text=True)
     assert "/data/promote_query/" not in page
@@ -226,8 +254,8 @@ def test_promotion_resubmits_the_bytes_that_were_queried(client, as_role, fake_m
     """The point of the feature: the corpus gets the same file that was matched, with
     the family and version the analyst decided on afterwards."""
     as_role("contributor")
-    digest = register_query(fake_mcrit)
-    (uploads / digest).write_bytes(QUERIED_BYTES)
+    register_query(fake_mcrit)
+    store_upload(uploads, QUERIED_BYTES)
 
     response = promote(client)
 
@@ -243,8 +271,8 @@ def test_the_promoted_sample_is_reached_through_its_job(client, as_role, fake_mc
     """`addBinarySample` only queues disassembly, so there is no sample id yet - the
     same hop `data.submit` makes."""
     as_role("contributor")
-    digest = register_query(fake_mcrit)
-    (uploads / digest).write_bytes(QUERIED_BYTES)
+    register_query(fake_mcrit)
+    store_upload(uploads, QUERIED_BYTES)
 
     response = promote(client)
     assert f"/data/jobs/{NEW_JOB_ID}" in response.headers["Location"]
@@ -255,9 +283,9 @@ def test_a_mapped_query_is_promoted_as_the_dump_it_was(client, as_role, fake_mcr
     under. The backend defaults bitness to 32 when it is not told, so a 64-bit dump
     promoted without it would be disassembled differently than the report on screen."""
     as_role("contributor")
-    digest = register_query(fake_mcrit, method="getMatchesForMappedBinary",
-                            base_address=0x140000000, bitness=64)
-    (uploads / digest).write_bytes(QUERIED_BYTES)
+    register_query(fake_mcrit, method="getMatchesForMappedBinary",
+                   base_address=0x140000000, bitness=64)
+    store_upload(uploads, QUERIED_BYTES)
 
     promote(client)
 
@@ -274,9 +302,9 @@ def test_a_kernel_mode_dump_is_promoted_at_the_address_it_was_mapped_to(client, 
     a promotion reading it raw either refuses the dump or, worse, maps it nowhere."""
     as_role("contributor")
     base_address = 0xFFFFF80000000000
-    digest = register_query(fake_mcrit, method="getMatchesForMappedBinary",
-                            base_address=base_address, bitness=64)
-    (uploads / digest).write_bytes(QUERIED_BYTES)
+    register_query(fake_mcrit, method="getMatchesForMappedBinary",
+                   base_address=base_address, bitness=64)
+    store_upload(uploads, QUERIED_BYTES)
 
     promote(client)
 
@@ -293,7 +321,7 @@ def test_an_smda_query_is_promoted_through_its_report(client, as_role, fake_mcri
     digest = "ab" * 32
     queried = smda_upload(digest)
     register_query(fake_mcrit, method="getMatchesForSmdaReport", digest=digest, queried_report=queried)
-    (uploads / digest).write_bytes(queried)
+    store_upload(uploads, queried)
 
     response = promote(client)
 
@@ -305,23 +333,31 @@ def test_an_smda_query_is_promoted_through_its_report(client, as_role, fake_mcri
     assert f"/explore/samples/{PROMOTED_SAMPLE.sample_id}" in response.headers["Location"]
 
 
-def test_an_smda_query_is_found_by_the_sample_hash_not_the_descriptor_hash(client, as_role, fake_mcrit, uploads):
-    """Which hash names the stored upload is not obvious, and getting it wrong is
-    silent. `analyze.query` files every upload under the sha256 of the *sample*, while
-    the job descriptor holds the hash of whatever `QueueRemoteCalls` serialised - for
-    an .smda query that is the canonicalised report JSON, so the two differ. Reading
-    the descriptor would report every .smda query as no longer available."""
+def test_an_smda_query_is_found_without_being_named_by_either_of_its_hashes(client, as_role, fake_mcrit, uploads):
+    """An .smda query carries two different hashes and is named by neither.
+
+    The report declares the sha256 of the *sample* it describes; the job descriptor
+    holds the hash of what `QueueRemoteCalls` serialised, which for this method is the
+    canonicalised report JSON. Naming the file by the first is what let one visitor
+    overwrite another user's stored query, and naming it by a digest of the upload -
+    the obvious correction - is a value the promote path cannot reconstruct from
+    either, so every .smda query would have become unpromotable. It is named by the
+    job. This asserts the two hashes really do differ here, so a scheme that quietly
+    fell back to one of them could not pass by coincidence, and that promotion works
+    anyway."""
     as_role("contributor")
     digest = "ab" * 32
     queried = smda_upload(digest)
     register_query(fake_mcrit, method="getMatchesForSmdaReport", digest=digest, queried_report=queried)
     descriptor = json.loads(fake_mcrit._jobs[QUERY_JOB_ID][0]["payload"]["descriptor"])
     assert descriptor[2]["0"] != digest, "the fixture no longer reproduces the two hashes"
-    (uploads / digest).write_bytes(queried)
+    assert hashlib.sha256(queried).hexdigest() not in (digest, descriptor[2]["0"]), \
+        "the fixture no longer distinguishes the upload from the hashes it carries"
+    store_upload(uploads, queried)
 
     promote(client)
 
-    assert calls_to(fake_mcrit, "addReport"), "the upload was not found under the sample hash"
+    assert calls_to(fake_mcrit, "addReport"), "the upload was not found under its job id"
 
 
 def test_an_smda_report_keeps_its_own_family_when_none_is_typed(client, as_role, fake_mcrit, uploads):
@@ -330,7 +366,7 @@ def test_an_smda_report_keeps_its_own_family_when_none_is_typed(client, as_role,
     digest = "ab" * 32
     queried = smda_upload(digest, family="win.citadel", version="2019")
     register_query(fake_mcrit, method="getMatchesForSmdaReport", digest=digest, queried_report=queried)
-    (uploads / digest).write_bytes(queried)
+    store_upload(uploads, queried)
 
     promote(client, family="", version="")
 
@@ -347,7 +383,7 @@ def test_promoting_a_query_that_is_already_in_the_corpus_creates_nothing(client,
     as_role("contributor")
     known = next(iter(fake_mcrit._samples.values()))
     register_query(fake_mcrit, digest=known.sha256)
-    (uploads / known.sha256).write_bytes(QUERIED_BYTES)
+    store_upload(uploads, QUERIED_BYTES)
 
     response = promote(client)
 
@@ -399,7 +435,7 @@ def test_promotion_of_a_job_that_is_not_a_query_writes_nothing(client, as_role, 
     queried_sha256 = load("matches_for_sample.result")["info"]["sample"]["sha256"]
     deleted = next(sample for sample in fake_mcrit._samples.values() if sample.sha256 == queried_sha256)
     del fake_mcrit._samples[deleted.sample_id]
-    (uploads / queried_sha256).write_bytes(QUERIED_BYTES)
+    store_upload(uploads, QUERIED_BYTES, job_id)
 
     response = promote(client, job_id=job_id)
 
@@ -422,8 +458,8 @@ def test_a_local_copy_that_no_longer_matches_the_query_is_not_submitted(client, 
     hash to something else is not that input. Promoting it would put a different
     sample in the corpus under a report that never described it."""
     as_role("contributor")
-    digest = register_query(fake_mcrit)
-    (uploads / digest).write_bytes(b"something else entirely")
+    register_query(fake_mcrit)
+    store_upload(uploads, b"something else entirely")
 
     response = promote(client)
 
@@ -439,9 +475,9 @@ def test_a_dump_whose_report_records_no_base_address_is_not_submitted(client, as
     or a result rewritten by hand - leaves nothing to resubmit it under, and that has
     to become a message rather than an exception or some other address."""
     as_role("contributor")
-    digest = register_query(fake_mcrit, method="getMatchesForMappedBinary", bitness=64)
+    register_query(fake_mcrit, method="getMatchesForMappedBinary", bitness=64)
     fake_mcrit._jobs[QUERY_JOB_ID][1]["info"]["sample"]["base_addr"] = recorded
-    (uploads / digest).write_bytes(QUERIED_BYTES)
+    store_upload(uploads, QUERIED_BYTES)
 
     response = promote(client)
 
@@ -456,7 +492,7 @@ def test_an_smda_upload_that_describes_another_sample_is_not_submitted(client, a
     digest = "ab" * 32
     register_query(fake_mcrit, method="getMatchesForSmdaReport", digest=digest,
                    queried_report=smda_upload(digest))
-    (uploads / digest).write_bytes(smda_upload("cd" * 32))
+    store_upload(uploads, smda_upload("cd" * 32))
 
     response = promote(client)
 
@@ -486,7 +522,7 @@ def test_an_smda_upload_forged_to_claim_the_queried_hash_is_not_submitted(client
     planted["metadata"]["family"] = "totally.benign"
     planted["binary_size"] = 1337
     assert planted["sha256"] == digest, "the forgery is only interesting under the queried name"
-    (uploads / digest).write_bytes(json.dumps(planted).encode())
+    store_upload(uploads, json.dumps(planted).encode())
 
     response = promote(client, family="", version="")
 
@@ -504,9 +540,9 @@ def test_a_query_whose_job_records_no_payload_hash_is_not_promoted(client, as_ro
     stops there - and a descriptor shaped unexpectedly has to stop it the same way,
     rather than raise on the way past."""
     as_role("contributor")
-    digest = register_query(fake_mcrit)
+    register_query(fake_mcrit)
     fake_mcrit._jobs[QUERY_JOB_ID][0]["payload"]["descriptor"] = descriptor
-    (uploads / digest).write_bytes(QUERIED_BYTES)
+    store_upload(uploads, QUERIED_BYTES)
 
     response = promote(client)
 
@@ -521,7 +557,7 @@ def test_an_unreadable_smda_upload_is_reported_rather_than_a_500(client, as_role
     as_role("contributor")
     digest = "ab" * 32
     register_query(fake_mcrit, method="getMatchesForSmdaReport", digest=digest)
-    (uploads / digest).write_bytes(payload)
+    store_upload(uploads, payload)
 
     response = promote(client)
 
@@ -536,8 +572,8 @@ def test_metadata_that_could_inject_backend_parameters_is_refused(client, as_rol
     of its own to the backend call - `is_dump`, or another `family`. Nothing shaped
     like that gets that far."""
     as_role("contributor")
-    digest = register_query(fake_mcrit)
-    (uploads / digest).write_bytes(QUERIED_BYTES)
+    register_query(fake_mcrit)
+    store_upload(uploads, QUERIED_BYTES)
 
     response = promote(client, **{field: "evil&is_dump=1&family=other"})
 
@@ -553,8 +589,8 @@ def test_metadata_that_the_backend_query_string_would_alter_is_refused(client, a
     with `unquote_plus` - so a family typed as "win.a+b" would be stored as "win.a b",
     silently, and only on the binary path: the .smda path posts JSON and keeps it."""
     as_role("contributor")
-    digest = register_query(fake_mcrit)
-    (uploads / digest).write_bytes(QUERIED_BYTES)
+    register_query(fake_mcrit)
+    store_upload(uploads, QUERIED_BYTES)
 
     response = promote(client, **{field: "win.a+b"})
 
@@ -567,8 +603,8 @@ def test_metadata_with_a_space_is_still_accepted(client, as_role, fake_mcrit, up
     reach the backend as typed - the allowlist is narrowed to what round-trips, not to
     whatever is easiest to refuse."""
     as_role("contributor")
-    digest = register_query(fake_mcrit)
-    (uploads / digest).write_bytes(QUERIED_BYTES)
+    register_query(fake_mcrit)
+    store_upload(uploads, QUERIED_BYTES)
 
     promote(client, family="win.a b", version="1.0 rc")
 
@@ -580,14 +616,18 @@ def test_metadata_with_a_space_is_still_accepted(client, as_role, fake_mcrit, up
 
 
 def test_a_report_without_a_usable_hash_promotes_nothing(client, as_role, fake_mcrit, uploads, monkeypatch):
-    """The sha256 becomes a filename, so it only does so once it is a sha256. A report
-    that names something else must not be able to reach out of the uploads folder.
+    """A report is uploaded, so the sha256 it declares is a string an uploader chose.
 
-    Asserting that nothing was submitted is not enough here: with the hash check
-    removed, the traversal succeeds, the file is read, and the promotion is then
-    rejected further down because the bytes do not hash to the "digest". That leaves
-    an arbitrary-file-read behind a passing test - and, on the .smda branch, an
-    arbitrary file parsed as JSON. So this asserts the file is never opened at all.
+    It used to be the filename, and then it had to be checked to be a hash before it
+    could become part of a path. It is not the filename any more - the job id is - so
+    this now holds a narrower statement: whatever the report declares, it stays out of
+    the path entirely, and only the corpus is asked about it.
+
+    Asserting that nothing was submitted would not be enough. A path built from that
+    field would traverse, the file would be read, and the promotion would then be
+    rejected further down because the bytes do not hash to the declared "digest" -
+    leaving an arbitrary file read behind a passing test, and on the .smda branch an
+    arbitrary file parsed as JSON. So this asserts on which file was opened.
     """
     as_role("contributor")
     # a target outside the uploads folder, reached by exactly as many steps as it
@@ -597,7 +637,7 @@ def test_a_report_without_a_usable_hash_promotes_nothing(client, as_role, fake_m
     outside = uploads.parent.parent / "outside.txt"
     outside.write_bytes(b"not an upload")
     register_query(fake_mcrit, digest="../../" + outside.name)
-    (uploads / "sample").write_bytes(QUERIED_BYTES)
+    store_upload(uploads, QUERIED_BYTES)
 
     opened = []
     real_open = builtins.open
@@ -608,14 +648,17 @@ def test_a_report_without_a_usable_hash_promotes_nothing(client, as_role, fake_m
     assert response.status_code == 302
     assert wrote_nothing(fake_mcrit)
     assert not [path for path in opened if outside.name in str(path)], f"read outside the uploads folder: {opened}"
+    # and the file it did open is the one the job names, not one the report asked for
+    assert [path for path in opened if str(path).endswith(QUERY_JOB_ID)], \
+        f"the upload was not looked for under its job id: {opened}"
 
 
 def test_promotion_is_not_reachable_by_get(client, as_role, fake_mcrit, uploads):
     """Issue #84: a write a browser performs on plain navigation is reachable from any
     page the victim visits, and carries no CSRF token to check."""
     as_role("contributor")
-    digest = register_query(fake_mcrit)
-    (uploads / digest).write_bytes(QUERIED_BYTES)
+    register_query(fake_mcrit)
+    store_upload(uploads, QUERIED_BYTES)
 
     response = client.get(f"/data/promote_query/{QUERY_JOB_ID}")
 
@@ -627,12 +670,81 @@ def test_promotion_needs_a_contributor(client, as_role, fake_mcrit, uploads):
     """The same floor `data.submit` stands on, enforced in the route rather than only
     in the template that hides the form."""
     as_role("visitor")
-    digest = register_query(fake_mcrit)
-    (uploads / digest).write_bytes(QUERIED_BYTES)
+    register_query(fake_mcrit)
+    store_upload(uploads, QUERIED_BYTES)
 
     response = promote(client)
 
     assert response.status_code == 403
+    assert wrote_nothing(fake_mcrit)
+
+
+# --- the two halves, joined --------------------------------------------------------
+#
+# Every test above places the stored upload itself, which is the right shape for
+# asking what promotion does with a file that is there. It cannot answer whether the
+# file is ever there: that depends on `analyze.query` and this module on how it names
+# what it wrote, and two tests agreeing with each other about a name is not evidence
+# that the two *routes* agree. They did not - a query upload was filed under the
+# sha256 an .smda report declares about itself, which any visitor could set to another
+# user's digest, and correcting that to a digest of the uploaded bytes would have left
+# nothing here able to find the file at all. Both halves run in these.
+
+
+QUERY_BASE_ADDRESS = "0x1e64000"
+
+
+def run_query(client, content, options="unmapped", filename="query.exe"):
+    """Upload through `analyze.query`, the way the query dropzone does."""
+    data = {"options": options, "file": (io.BytesIO(content), filename)}
+    if options in ("dumped", "smda"):
+        data["base_addr"] = QUERY_BASE_ADDRESS
+    return client.post("/analyze/query", data=data, content_type="multipart/form-data")
+
+
+@pytest.mark.parametrize("options, method", [
+    ("unmapped", "getMatchesForUnmappedBinary"),
+    ("dumped", "getMatchesForMappedBinary"),
+    ("smda", "getMatchesForSmdaReport"),
+])
+def test_a_query_uploaded_through_the_web_can_be_promoted(client, as_role, fake_mcrit, options, method):
+    """A query goes in through the upload form; its result page then offers promotion,
+    and promoting it reaches the corpus with the bytes that were queried.
+
+    This is the whole feature on a clean instance, and the only test that fails if the
+    two routes disagree about where the file lives. The .smda case is the one that was
+    broken: its report declares a sha256 that is neither a digest of the upload nor the
+    hash in its job descriptor, so a naming scheme built on either leaves the promote
+    path looking somewhere the file is not - permanently, on every host."""
+    as_role("contributor")
+    if options == "smda":
+        content = smda_upload(hashlib.sha256(QUERIED_BYTES).hexdigest())
+        register_query(fake_mcrit, method=method, queried_report=content)
+    else:
+        content = QUERIED_BYTES
+        register_query(fake_mcrit, method=method)
+
+    assert run_query(client, content, options=options).status_code == 202
+
+    page = client.get(f"/data/result/{QUERY_JOB_ID}").get_data(as_text=True)
+    assert f'action="/data/promote_query/{QUERY_JOB_ID}"' in page,         "the result page did not offer to promote a query this instance stored"
+
+    assert promote(client).status_code == 302
+    assert not wrote_nothing(fake_mcrit), "the promotion reached the corpus with nothing"
+
+
+def test_a_query_this_instance_never_saw_is_still_not_promotable(client, as_role, fake_mcrit):
+    """The other side of the same statement, so the test above cannot be satisfied by
+    offering promotion unconditionally. A query from the API or the IDA plugin, or one
+    that reached another host of the same deployment, leaves no local file."""
+    as_role("contributor")
+    register_query(fake_mcrit)
+
+    page = client.get(f"/data/result/{QUERY_JOB_ID}").get_data(as_text=True)
+    assert "/data/promote_query/" not in page
+    assert "no longer available on this server" in page
+
+    assert promote(client).status_code == 302
     assert wrote_nothing(fake_mcrit)
 
 

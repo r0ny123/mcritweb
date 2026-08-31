@@ -31,7 +31,7 @@ from mcritweb.views.params import (
     parseBitnessFromFilename,
 )
 from mcritweb.views.ScoreColorProvider import ScoreColorProvider
-from mcritweb.views.utility import get_session_user_id, mcrit_server_required
+from mcritweb.views.utility import get_session_user_id, mcrit_server_required, query_upload_path
 
 bp = Blueprint('data', __name__, url_prefix='/data')
 
@@ -526,11 +526,10 @@ def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult
         library_pagination = Pagination(request, matching_result.num_library_matches, limit=10, query_param="libp", limit_param="libl")
         function_pagination = Pagination(request, len(matching_result.getAggregatedFunctionMatches()), limit=100, query_param="funp", limit_param="funl")
         # a query can be promoted to a sample (issue #9), but only while the file it
-        # was run for is still on this host - the page has to say which it is. The
-        # reference entry carries the sha256 that names it, so this costs no round trip
+        # was run for is still on this host - the page has to say which it is. The file
+        # is filed under the job's own id, so this costs no round trip either
         is_query_result = job_info.method in QUERY_UPLOAD_KINDS
-        reference_sha256 = getattr(matching_result.reference_sample_entry, "sha256", None)
-        return render_template("result_compare_all.html", job_info=job_info, famp=family_pagination, libp=library_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_all, is_query_result=is_query_result, can_promote_query=is_query_result and query_upload_exists(current_app, reference_sha256))
+        return render_template("result_compare_all.html", job_info=job_info, famp=family_pagination, libp=library_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_all, is_query_result=is_query_result, can_promote_query=is_query_result and query_upload_exists(current_app, job_info.job_id))
 
 
 def result_matches_for_cross(job_info, result_json):
@@ -985,9 +984,6 @@ QUERY_UPLOAD_KINDS = {
     "getMatchesForSmdaReport": "smda",
 }
 
-#: The sha256 of a queried sample, which becomes a filename below.
-UPLOAD_SHA256 = re.compile(r"^[a-fA-F0-9]{64}\Z")
-
 #: What may be submitted as a family or a version. `McritClient.addBinarySample`
 #: builds its request by concatenating these into a query string without
 #: percent-encoding, so a value carrying '&' or '=' would append parameters of its own
@@ -1002,34 +998,23 @@ UPLOAD_SHA256 = re.compile(r"^[a-fA-F0-9]{64}\Z")
 PROMOTION_METADATA = re.compile(r"^[A-Za-z0-9 ._-]{0,64}\Z")
 
 
-def query_upload_path(app, upload_sha256):
-    """Where `analyze.query` kept the file a query was run for, or None.
+def query_upload_exists(app, job_id):
+    """Whether a query can still be promoted, i.e. whether its bytes are still here.
 
     The bytes of a query live in the backend's GridFS behind a job reference, and the
-    backend exposes no route that reads a job's *input* back, so this copy is the only
-    one that can be resubmitted. It follows that a query is promotable only on the
-    host that received it, and only when it arrived through the web upload -
-    `api.api_router` never writes this file.
+    backend exposes no route that reads a job's *input* back, so the copy
+    `analyze.query` keeps is the only one that can be resubmitted. It follows that a
+    query is promotable only on the host that received it, and only when it arrived
+    through the web upload - `api.api_router` never writes that file.
 
-    `analyze.query` names it by the sha256 of the queried sample, which is what the
-    query's own report records as `info.sample.sha256`. That is also the only value
-    that identifies the file for all three upload kinds: the job descriptor carries
-    the same hash for a binary query, but for an .smda upload it carries the hash of
-    the canonicalised JSON instead - `Worker.getMatchesForSmdaReport` declares the
-    report as a `json_locations` parameter, and `QueueRemoteCalls` hashes what it
-    serialised rather than the sample.
-
-    The hash is computed over an uploaded file, so it only becomes part of a path once
-    it has been checked to be a hash.
+    It is filed under the job id, which is why nothing here has to reason about hashes
+    to find it. `utility.query_upload_path` is the single definition of that name, and
+    carries the reason it is not a hash: the sha256 a query report records is the one
+    the uploaded .smda report declared about itself, so naming the file by it let one
+    visitor overwrite another user's stored query - and a digest of the uploaded bytes,
+    which fixes that, is a value nothing on this side of the feature can reconstruct.
     """
-    if not isinstance(upload_sha256, str) or not UPLOAD_SHA256.match(upload_sha256):
-        return None
-    return os.sep.join([app.instance_path, "temp", "uploads", upload_sha256.lower()])
-
-
-def query_upload_exists(app, upload_sha256):
-    """Whether a query can still be promoted, i.e. whether its bytes are still here."""
-    upload_path = query_upload_path(app, upload_sha256)
+    upload_path = query_upload_path(app, job_id)
     return upload_path is not None and os.path.isfile(upload_path)
 
 
@@ -1039,11 +1024,11 @@ def query_payload_sha256(job_info):
     `QueueRemoteCalls` hashes every parameter it ships through GridFS and writes the
     hashes into the job's descriptor, which `Job.sha256` reads back for exactly the
     three query methods. That is the only statement about the queried bytes that a
-    promotion does not get from the file it is about to resubmit - and it needs one,
-    because `instance/temp/uploads` is written by name: `analyze.query` files an .smda
-    upload under the sha256 the *report* declares, so any role that may run a query
-    may write any name there. A report checked against a field of its own agrees with
-    itself; this hash was taken over what the job actually ran on.
+    promotion does not get from the file it is about to resubmit, and it is worth
+    having even now that the file is named by the job rather than by anything the
+    upload chose: the folder is shared, unpruned, and a report checked against a field
+    of its own only ever agrees with itself. This hash was taken over what the job
+    actually ran on.
 
     The descriptor is job data from the backend, so it is read defensively rather than
     trusted to be shaped as expected.
@@ -1103,13 +1088,19 @@ def promote_query(job_id):
     if job_info.method not in QUERY_UPLOAD_KINDS:
         flash('Only a query can be promoted to a sample.', category='error')
         return redirect(result_page)
-    sample_info = query_report_sample_info(client, job_info)
-    upload_sha256 = sample_info.get("sha256")
-    upload_path = query_upload_path(current_app, upload_sha256)
+    upload_path = query_upload_path(current_app, job_info.job_id)
     if upload_path is None:
+        flash('This job cannot be promoted.', category='error')
+        return redirect(result_page)
+    sample_info = query_report_sample_info(client, job_info)
+    # the sample's declared sha256 no longer names the stored file. It is only what the
+    # corpus is asked about below; what was actually resubmitted is checked against the
+    # job descriptor further down instead.
+    upload_sha256 = sample_info.get("sha256")
+    upload_sha256 = upload_sha256.lower() if isinstance(upload_sha256, str) else None
+    if upload_sha256 is None:
         flash('The report of this query does not record which file it was run for, so it cannot be promoted.', category='error')
         return redirect(result_page)
-    upload_sha256 = upload_sha256.lower()
     # whether the local copy survived or not, a sample that is already stored is the
     # answer to "promote this" - so promoting twice lands on it instead of adding it.
     # Two promotions racing past this check still make one sample, but they are not
