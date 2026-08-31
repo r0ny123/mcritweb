@@ -1,11 +1,13 @@
 #!/usr/bin/python
-"""The loop visualisation on the function comparison page, driven in a browser.
+"""The function comparison page's graphs, driven in a browser.
 
-Issue #69 asks for the loop visualisation to be fixed. All of it is script: the two
-CFGs are fetched, laid out by dagre and annotated by `static/trace_CFG/main_duo.js`
-after the page has loaded, so nothing about it is visible to a test that renders the
-template and reads the HTML back. The markup assertions in testResultPages.py are
-what CI keeps; these are the tests that watch the boundaries actually get drawn.
+Issue #69 asks for the FunctionVs visualisation to be fixed. All of it is script:
+the two CFGs are fetched, laid out by dagre and annotated by
+`static/trace_CFG/main_duo.js` after the page has loaded, so nothing about it is
+visible to a test that renders the template and reads the HTML back. The markup
+assertions in testResultPages.py are what CI keeps; these are the tests that watch
+the page behave - the loop boundaries getting drawn, and below them the hover, the
+tooltip and the edge click, none of which used to survive being used at all.
 
 The harness is the offline one the rest of the suite uses - `CorpusMcritClient`
 behind MCRIT_CLIENT_FACTORY, no backend and no network - served on a loopback port
@@ -19,6 +21,7 @@ module skips there rather than failing.
 
 import json
 import logging
+import re
 import threading
 
 import pytest
@@ -242,3 +245,239 @@ def test_the_checkbox_takes_the_boundaries_off_and_puts_them_back(comparison_pag
     checkbox.check()
     assert "none" not in displays()
     assert len(displays()) == 2, "re-drawing a panel left it with two boundary groups"
+
+
+# --- the hover, tooltip and edge-click handlers ---------------------------------
+#
+# `main_duo.js` binds all three inside `showGraph(graph_id, ...)`, which runs once
+# per panel. Everything below is about the fact that it used to bind them without
+# saying *which* panel: the selections were unscoped and the handlers reached for
+# ids the one-graph template has and this one does not. The helpers here therefore
+# always name a panel, so a fix that reaches only one of the two is a failure.
+
+#: One api name out of the captured control flow graph of FUNCTION_A, and a
+#: replacement for it that carries markup. Import names are read out of the
+#: analysed binary by smda (`toDotGraph(with_api=True)`) and land in the block
+#: label verbatim, so they are attacker-controlled for anyone who can get a sample
+#: submitted. The payload avoids double quotes because the whole label is a
+#: double-quoted dot string, and quotes its handler because an unquoted HTML
+#: attribute value may not contain `=`.
+API_NAME = re.compile(r"[\w.]+\.dll![\w@?]+")
+API_NAME_WITH_MARKUP = "evil.dll!<img src=x onerror='window.__xssFired = true'>"
+
+
+@pytest.fixture
+def thrown(browser_page):
+    """Everything the page threw, and everything it logged as an error.
+
+    An exception out of a d3 event handler does not fail navigation and does not
+    stop the next handler, so a page that throws on every hover still looks fine to
+    a test that only asserts on the DOM. Chromium reports it as `pageerror`.
+    """
+    errors = []
+    browser_page.on("pageerror", lambda error: errors.append(str(error)))
+    browser_page.on(
+        "console",
+        lambda message: errors.append(message.text) if message.type == "error" else None,
+    )
+    return errors
+
+
+def blocks_of(page, panel):
+    return page.locator("#graphContainer_" + panel + " g.node.enter")
+
+
+def hover_a_block(page, panel, index=0):
+    """Hover one rendered block and hand back its lines, in order."""
+    block = blocks_of(page, panel).nth(index)
+    block.hover()
+    return block.evaluate(
+        "node => Array.from(node.querySelectorAll('text tspan')).map(line => line.textContent)"
+    )
+
+
+def a_clickable_edge_point(page, panel):
+    """A viewport point that lies on one of a panel's rendered edges.
+
+    An edge is a stroked path, so the centre of its bounding box is usually not on
+    it and clicking there hits the canvas instead; and the CFGs sit below the fold,
+    so the point has to be scrolled to before it can be hit at all. This walks the
+    panel's edges until it finds one with a point Chromium agrees is the edge.
+    """
+    page.locator("#xcfg_container").scroll_into_view_if_needed()
+    return page.evaluate(
+        """panel => {
+            const paths = document.querySelectorAll(
+                '#graphContainer_' + panel + ' g.edgePath.enter path');
+            for (const path of paths) {
+                const length = path.getTotalLength();
+                if (!length) { continue; }
+                const matrix = path.getScreenCTM();
+                for (const fraction of [0.5, 0.25, 0.75, 0.1, 0.9]) {
+                    const point = path.getPointAtLength(length * fraction);
+                    const x = point.x * matrix.a + point.y * matrix.c + matrix.e;
+                    const y = point.x * matrix.b + point.y * matrix.d + matrix.f;
+                    if (x < 2 || y < 2 || x > innerWidth - 2 || y > innerHeight - 2) { continue; }
+                    if (document.elementFromPoint(x, y) === path) { return {x: x, y: y}; }
+                }
+            }
+            return null;
+        }""",
+        panel,
+    )
+
+
+TRANSLATE = re.compile(r"translate\(\s*([-\d.e]+)\s*,\s*([-\d.e]+)\s*\)")
+
+
+def block_positions(page, panel):
+    """Where every block of a panel currently sits, in the graph's own coordinates."""
+    transforms = page.eval_on_selector_all(
+        "#graphContainer_" + panel + " g.node.enter",
+        "blocks => blocks.map(block => block.getAttribute('transform'))",
+    )
+    return [tuple(float(number) for number in TRANSLATE.search(transform).groups())
+            for transform in transforms]
+
+
+def displaced(before, after, tolerance=1.0):
+    """Which blocks are somewhere else now.
+
+    A tolerance rather than equality because a d3 transition interpolates its way
+    back to the transform it started from and lands a few billionths of a pixel
+    off it, which is settled for any purpose but `==`.
+    """
+    return [index for index, (was, is_now) in enumerate(zip(before, after))
+            if abs(was[0] - is_now[0]) > tolerance or abs(was[1] - is_now[1]) > tolerance]
+
+
+def tooltip_state(page, panel):
+    return page.evaluate(
+        """panel => {
+            const tooltip = document.getElementById('tooltip_' + panel);
+            const value = document.getElementById('value_' + panel);
+            return {
+                hidden: tooltip.classList.contains('hidden'),
+                text: value.textContent,
+                children: value.children.length,
+                html: value.innerHTML,
+            };
+        }""",
+        panel,
+    )
+
+
+@pytest.mark.parametrize("panel", ["a", "b"])
+def test_hovering_a_block_throws_nothing(comparison_page, thrown, panel):
+    """The linked-highlight fallback selected `#text_code p`, the paragraphs of the
+    code panel the single-function page has. This template has no `#text_code`, and
+    d3 3.4.11 answers a miss with a selection - an array holding one empty group -
+    rather than with nothing, so the length test passed and `.node()` was called on
+    a plain Array. Every hover of every block threw."""
+    lines = hover_a_block(comparison_page, panel)
+    assert lines, "panel " + panel + " rendered a block with no text to hover"
+    assert thrown == []
+
+
+def test_the_tooltip_control_shows_the_hovered_block_in_that_panel(comparison_page, thrown):
+    """`Enable Tooltip` targeted `#tooltip` and `#value`. This page has one of each
+    per panel - `#tooltip_a`/`#value_a` and `#tooltip_b`/`#value_b` - so the control
+    toggled a flag that then wrote to nothing: a dead checkbox. A fix that reaches
+    only one of the two panels is no better, so both are hovered here."""
+    comparison_page.check("#enableTooltip")
+
+    for panel, other in (("a", "b"), ("b", "a")):
+        lines = hover_a_block(comparison_page, panel)
+        state = tooltip_state(comparison_page, panel)
+        assert not state["hidden"], "the tooltip stayed hidden while hovering panel " + panel
+        for line in lines:
+            assert line in state["text"], "panel " + panel + " tooltip is missing " + repr(line)
+        assert tooltip_state(comparison_page, other)["hidden"], (
+            "hovering panel " + panel + " opened panel " + other + "'s tooltip"
+        )
+
+    comparison_page.mouse.move(0, 0)
+    assert tooltip_state(comparison_page, "b")["hidden"], "the tooltip never closes again"
+    assert thrown == []
+
+
+def test_the_tooltip_stays_off_until_the_control_is_switched_on(comparison_page, thrown):
+    """The checkbox has to still mean something once it works."""
+    hover_a_block(comparison_page, "a")
+    assert tooltip_state(comparison_page, "a")["hidden"]
+    assert thrown == []
+
+
+@pytest.mark.parametrize("panel", ["a", "b"])
+def test_clicking_an_edge_throws_nothing_and_moves_its_two_blocks(comparison_page, thrown, panel):
+    """The edge handlers were bound to `g.edgePath.enter` unscoped - so the second
+    panel to render rebound the first panel's edges to its own graph - and looked
+    the clicked edge up in the global `g`, which the one-graph page assigns and this
+    page never does. Clicking any edge threw on a null `g` before it did anything.
+    The two incident blocks are meant to jump apart and settle back."""
+    point = a_clickable_edge_point(comparison_page, panel)
+    assert point, "no edge of panel " + panel + " could be pointed at"
+
+    before = block_positions(comparison_page, panel)
+    comparison_page.mouse.click(point["x"], point["y"])
+    comparison_page.wait_for_timeout(250)
+    assert thrown == []
+    assert len(displaced(before, block_positions(comparison_page, panel))) == 2, (
+        "an edge click is meant to move the two blocks it joins, and only those"
+    )
+
+    # and it has to leave the graph as it found it
+    comparison_page.wait_for_timeout(2000)
+    assert displaced(before, block_positions(comparison_page, panel)) == []
+
+
+@pytest.fixture
+def page_with_a_dangerous_api_name(browser_page, live_server):
+    """The comparison page with markup planted in one of function A's api names.
+
+    Served by rewriting the dot graph on its way to the browser rather than by
+    doctoring the fixture, so the corpus stays the corpus and the substitution is
+    visible right here. Loop detection still sees the rewritten graph, which is
+    what the page posts to it.
+    """
+    replaced = []
+
+    def plant(route):
+        response = route.fetch()
+        dot_graph, count = API_NAME.subn(API_NAME_WITH_MARKUP, response.text(), count=1)
+        replaced.append(count)
+        route.fulfill(response=response, body=dot_graph)
+
+    browser_page.route("**/explore/fetchDotGraph/" + str(FUNCTION_A), plant)
+    browser_page.goto(live_server + "/data/matches/function/%d/%d" % (FUNCTION_A, FUNCTION_B))
+    browser_page.wait_for_selector("#graphContainer_a g.node", state="attached")
+    assert replaced == [1], "no api name in function A's dot graph to plant markup in"
+    return browser_page
+
+
+def test_an_api_name_carrying_markup_is_shown_as_text(page_with_a_dangerous_api_name, thrown):
+    """The tooltip assigned the block's text into `innerHTML`. That text is the dot
+    graph's node label, which carries the import names smda read out of the analysed
+    binary - so whoever can get a sample submitted chooses part of it. It could not
+    fire while the hover threw first; fixing the hover or the tooltip arms it, which
+    is why it is closed in the same change. The same sink is still present in
+    `static/trace_CFG/main.js`, held shut there by a different throw."""
+    page = page_with_a_dangerous_api_name
+    page.check("#enableTooltip")
+
+    index = page.evaluate(
+        """() => Array.from(document.querySelectorAll('#graphContainer_a g.node.enter'))
+               .findIndex(block => block.textContent.includes('__xssFired'))"""
+    )
+    assert index >= 0, "the planted api name was not rendered into any block"
+
+    hover_a_block(page, "a", index)
+    state = tooltip_state(page, "a")
+
+    assert not state["hidden"], "the tooltip did not open, so nothing was proven"
+    assert API_NAME_WITH_MARKUP in state["text"], (
+        "the api name did not survive as text: " + repr(state["text"])
+    )
+    assert state["children"] == 0, "the api name built elements: " + repr(state["html"])
+    assert page.evaluate("() => window.__xssFired") is None, "the planted markup ran"
+    assert thrown == []
