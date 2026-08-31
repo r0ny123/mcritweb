@@ -56,3 +56,20 @@ function copy_to_clipboard(btn, val){
 {%- macro format_sha_short_clipboard(sha256) -%}
   {{ format_monospace(sha256[:8]) }} {{ clipboard_btn(sha256) }}
 {%- endmacro -%}
+
+{#- A search answers with its text hits and, beside them, the exact hit on an id or a
+    sha256. Once both are in one table the exact one reads as an ordinary text hit, so
+    the row carries a badge naming what matched. Issue #56.
+    The column is only rendered when a table has an exact hit to mark, and the header
+    and the rows are handed the same mapping, so they always agree on the column count. -#}
+{%- macro exact_match_header_col() -%}
+  <th scope="col" style="text-align: center;">Match</th>
+{%- endmacro -%}
+
+{%- macro exact_match_col(matched_on) -%}
+  <td align="center" valign="middle">
+    {%- if matched_on -%}
+      <span class="badge bg-primary" title="Exact match on this record's {{ matched_on }}">{{ matched_on }}</span>
+    {%- endif -%}
+  </td>
+{%- endmacro -%}

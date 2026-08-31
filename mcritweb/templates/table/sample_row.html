@@ -1,5 +1,5 @@
 {% from 'table/pagination_widget.html' import sortable_header_col %}
-{% from 'table/links.html' import format_pichash, format_offset, format_family_name, format_family_id, format_sample_id, format_function_id %}
+{% from 'table/links.html' import format_pichash, format_offset, format_family_name, format_family_id, format_sample_id, format_function_id, exact_match_header_col, exact_match_col %}
 
 {% macro sample_row_std_js() %}
 <script>
@@ -61,13 +61,14 @@
 
 
 
-{% macro sample_header(no_family=False, compact_view=False, show_analyze=True, show_export=False, show_hint=False, show_edit=False, sort_pagination=None, column_setup=None) %}
+{% macro sample_header(no_family=False, compact_view=False, show_analyze=True, show_export=False, show_hint=False, show_edit=False, sort_pagination=None, column_setup=None, exact_matches=None) %}
   {# accept but discard additional kwargs #}
   {% if False %}{{ kwargs }}{% endif %} 
   {% if column_setup is none %}
     {% set column_setup = ["sample_id", "sha256", "family", "version", "filename", "bitness", "num_functions", "is_library"] %}
   {% endif %}
   <tr>
+    {% if exact_matches %}{{ exact_match_header_col() }}{% endif %}
     {% for column_type in column_setup %}
       {% if column_type == "sample_id" %}
         {% call sortable_header_col(sort_pagination, "sample_id") %}
@@ -111,11 +112,12 @@
 {% endmacro %}
   
   
-{% macro sample_row(sample, no_family=False, compact_view=False, show_analyze=True, show_export=False, show_edit=False, show_hint=False, job_collection=None, column_setup=None) %}
+{% macro sample_row(sample, no_family=False, compact_view=False, show_analyze=True, show_export=False, show_edit=False, show_hint=False, job_collection=None, column_setup=None, exact_matches=None) %}
   {% if column_setup is none %}
     {% set column_setup = ["sample_id", "sha256", "family", "version", "filename", "bitness", "num_functions", "is_library"] %}
   {% endif %}
   <tr class="sample-row parent_{{ kwargs['parent'] }}" >
+    {% if exact_matches %}{{ exact_match_col(exact_matches.get(sample.sample_id)) }}{% endif %}
     {% for column_type in column_setup %}
       {% if column_type == "sample_id" %}
        <th align="left" valign="middle" scope="row" class="sample-id">{{ "%d"|format(sample.sample_id) }}</th>

@@ -56,7 +56,9 @@ def job_id_of(report):
 #    "backward": str|None}, "id_match": dict|None[, "sha_match": dict|None]}
 #
 #   * `forward` is set only while results remain after this page
-#   * `backward` is set only once the caller has left the first page
+#   * `backward` is set for any request that carried a cursor and returned rows -
+#     mcrit has no "you are at the start" signal, so a first page reached by paging
+#     *back* to it carries one too, and cannot be recognised by its absence
 #   * handing a token back yields the adjacent page
 #   * `search_results` values are **dicts**, as they arrive off the wire - the
 #     views call `SampleEntry.fromDict` on them, and a fake handing back entry
@@ -127,7 +129,7 @@ def _page(entries, search_term, fields, default_sort, sort_by, is_ascending, cur
         "search_results": {getattr(entry, default_sort): entry.toDict() for entry in page},
         "cursor": {
             "forward": _encode_cursor(start + limit, True) if start + limit < len(matched) else None,
-            "backward": _encode_cursor(start, False) if start > 0 else None,
+            "backward": _encode_cursor(start, False) if cursor and page else None,
         },
     }
 
