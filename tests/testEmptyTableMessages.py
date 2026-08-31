@@ -8,7 +8,9 @@ choose, with the old text as the fallback.
 """
 
 import logging
+import re
 import unittest
+from pathlib import Path
 
 import pytest
 
@@ -16,8 +18,40 @@ LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
 logging.disable(logging.CRITICAL)
 
+import mcritweb  # noqa: E402  - imported after logging is silenced
+
 GENERIC_SAMPLE_PROMPT = "Click here to upload your first sample"
 GENERIC_JOB_PROMPT = "Click here to create your first job"
+
+
+def _queueable_job_methods():
+    """Every job method the backend can run - the source of truth for the job list.
+
+    A job category reaches the page as the `method` the backend reports in
+    `getQueueStatistics()` / `getQueueData(method=...)`, and those are exactly the
+    `@Remote`-marked methods of `mcrit.Worker.Worker`. It is derived from the code
+    that implements the jobs, so unlike the two hand-written lists nearby it cannot
+    silently fall behind: `Job.method_types` in mcrit already omits
+    `recalculateMinHashes` and `recalculatePicHashes`, which MCRITweb's own jobs menu
+    offers, and the menu in `views/data.py` in turn omits `getMatchesForSampleVsGroup`
+    and `doDbCleanup`, which the worker runs.
+    """
+    from mcrit.Worker import Worker
+
+    return {name for name in dir(Worker) if getattr(getattr(Worker, name, None), "remote", False)}
+
+
+QUEUEABLE_JOB_METHODS = sorted(_queueable_job_methods())
+
+JOBS_TEMPLATE = Path(mcritweb.__file__).parent / "templates" / "jobs.html"
+
+
+def _empty_state_map_keys():
+    """The categories `jobs.html` has a sentence for."""
+    body = JOBS_TEMPLATE.read_text(encoding="utf-8")
+    block = re.search(r"set job_category_empty_states = \{(.*?)\n\s*\} %\}", body, re.S)
+    assert block is not None, "the per-category empty-state map has moved or been renamed"
+    return set(re.findall(r'"(\w+)"\s*:\s*\(', block.group(1)))
 
 
 @pytest.fixture
@@ -122,6 +156,72 @@ def test_a_family_with_no_samples_says_so(client, as_role, app, empty_mcrit, cor
 
 
 # --- the job list, which is what the issue names ---------------------------------
+#
+# The first pass at this listed four categories by hand, which is how the map came to
+# be missing two of them: a hand-written list of cases cannot notice a case nobody
+# wrote down. The cases below are enumerated from `mcrit.Worker.Worker` instead, so a
+# job method added to the backend - or a tab added here - fails the suite rather than
+# quietly shipping "create your first job" to somebody whose queue is full.
+
+class QueueOfEveryKind:
+    """A backend that has run one job of every kind, and none of them on this page.
+
+    A category only reaches the jobs page when the backend reports it in
+    `getQueueStatistics()`, so a fake that reports nothing cannot exercise a tab at
+    all - `views.data.jobs` reads `statistics[active_category]` directly.
+    """
+
+    def __init__(self, corpus):
+        self._corpus = corpus
+
+    def __getattr__(self, name):
+        return getattr(self._corpus, name)
+
+    def getQueueStatistics(self, *args, **kwargs):
+        return {method: {"queued": 0, "in_progress": 0, "finished": 1}
+                for method in QUEUEABLE_JOB_METHODS}
+
+    def getQueueData(self, *args, **kwargs):
+        return []
+
+
+@pytest.fixture
+def every_kind_of_job(corpus_mcrit):
+    return QueueOfEveryKind(corpus_mcrit)
+
+
+def test_the_empty_state_map_covers_every_job_the_backend_can_queue():
+    """The map is hand-written; this is what keeps it honest.
+
+    Reported as a set rather than one case at a time so the failure names every
+    category that is missing, not just the first one.
+    """
+    missing = set(QUEUEABLE_JOB_METHODS) - _empty_state_map_keys()
+
+    assert not missing, (
+        "job categories with no empty-state message in jobs.html, so each falls back "
+        f"to \"{GENERIC_JOB_PROMPT}\": {sorted(missing)}"
+    )
+
+
+def test_the_empty_state_map_has_no_message_for_a_job_that_does_not_exist():
+    """The other direction: a message for a method the worker no longer runs is dead
+    text, and usually a typo in the key."""
+    unknown = _empty_state_map_keys() - set(QUEUEABLE_JOB_METHODS)
+
+    assert not unknown, f"jobs.html has empty-state messages for unknown job methods: {sorted(unknown)}"
+
+
+@pytest.mark.parametrize("category", QUEUEABLE_JOB_METHODS)
+def test_each_job_category_says_what_it_is_missing(client, as_role, app, every_kind_of_job, category):
+    """Rendered, not read off the map: this is the sentence the reader actually gets."""
+    app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: every_kind_of_job
+    as_role("visitor")
+
+    page = client.get(f"/data/jobs?active={category}").get_data(as_text=True)
+
+    assert GENERIC_JOB_PROMPT not in page, f"{category} has no empty-state message of its own"
+
 
 @pytest.mark.parametrize("category,expected", [
     ("combineMatchesToCross", "No cross compare jobs yet."),
@@ -129,7 +229,8 @@ def test_a_family_with_no_samples_says_so(client, as_role, app, empty_mcrit, cor
     ("getMatchesForSample", "No 1 vs N matching jobs yet."),
     ("getUniqueBlocks", "No unique blocks jobs yet."),
 ])
-def test_each_job_category_says_what_it_is_missing(client, as_role, app, empty_mcrit, category, expected):
+def test_the_wording_names_the_kind_of_job(client, as_role, app, empty_mcrit, category, expected):
+    """Completeness is enumerated above; these pin the actual sentences."""
     app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: empty_mcrit
     as_role("visitor")
 
