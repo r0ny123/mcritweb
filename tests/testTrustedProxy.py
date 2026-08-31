@@ -25,9 +25,10 @@ wrote. The values to its left came from the client and are ignored.
 import logging
 
 import pytest
+from flask import request
 from werkzeug.security import generate_password_hash
 
-from mcritweb import create_app, db
+from mcritweb import MAX_TRUSTED_PROXY_COUNT, create_app, db
 from mcritweb.db import ServerInfo, UserInfo, init_db
 
 LOG = logging.getLogger(__name__)
@@ -231,10 +232,80 @@ def test_a_forged_header_does_not_poison_another_address_by_default(direct):
     assert "Too many failed attempts" not in page, "the victim was throttled by a forged header"
 
 
-@pytest.mark.parametrize("setting", ["one", None, -1, ""])
+#: What a request looks like once it has been through the trusted proxy: exactly one
+#: X-Forwarded-Proto value, because NGINX *replaces* that header (`$scheme`) where it
+#: *appends* to X-Forwarded-For (`$proxy_add_x_forwarded_for`). The two headers do not
+#: have the same depth, which is why one hop count cannot drive both.
+HTTPS = "https"
+
+
+def scheme_seen_by_the_app(application, forwarded_proto=None, forwarded_for=None):
+    """`request.scheme`, which is what every `url_for(..., _external=True)` is built on.
+
+    admin_server.html builds the registration link that way, so a scheme that stays
+    `http` behind a TLS-terminating proxy hands the admin an http:// invitation link.
+    """
+    @application.route("/testing/scheme-probe")
+    def scheme_probe():
+        return request.scheme
+
+    environ = {"REMOTE_ADDR": PROXY}
+    if forwarded_proto is not None:
+        environ["HTTP_X_FORWARDED_PROTO"] = forwarded_proto
+    if forwarded_for is not None:
+        environ["HTTP_X_FORWARDED_FOR"] = forwarded_for
+    return application.test_client().get(
+        "/testing/scheme-probe", environ_base=environ).get_data(as_text=True)
+
+
+# --- X-Forwarded-Proto is one value deep whatever the hop count ------------------------
+
+
+def test_one_trusted_hop_takes_the_scheme_from_the_header(tmp_path, fake_mcrit):
+    application = build_app(tmp_path, fake_mcrit, TRUSTED_PROXY_COUNT=1)
+
+    assert scheme_seen_by_the_app(application, HTTPS) == "https"
+
+
+def test_two_trusted_hops_still_take_the_scheme_from_the_header(tmp_path, fake_mcrit):
+    """The defect this pins: X-Forwarded-Proto is replaced by each proxy, not appended,
+    so it carries one value however long the chain is. Driving x_proto with the hop
+    count asks for a second value that a correctly configured NGINX never writes, and
+    ProxyFix answers by leaving the scheme alone - silently http, behind TLS."""
+    application = build_app(tmp_path, fake_mcrit, TRUSTED_PROXY_COUNT=2)
+
+    assert scheme_seen_by_the_app(application, HTTPS) == "https"
+
+
+def test_the_scheme_header_is_ignored_when_no_proxy_is_trusted(tmp_path, fake_mcrit):
+    """Same rule as the address: a directly served instance believes no header."""
+    application = build_app(tmp_path, fake_mcrit)
+
+    assert scheme_seen_by_the_app(application, HTTPS) == "http"
+
+
+def test_trusting_the_scheme_does_not_loosen_the_address(tmp_path, fake_mcrit):
+    """x_proto being pinned at one value must not quietly become the count for x_for:
+    at two hops the client is still the second value from the right."""
+    application = build_app(tmp_path, fake_mcrit, TRUSTED_PROXY_COUNT=2)
+
+    attempt(application.test_client(), "not the password", "192.0.2.1, 203.0.113.7, 10.0.0.2")
+
+    assert recorded_addresses(application) == {"203.0.113.7": 1}
+
+
+# --- a setting that is not a hop count ---------------------------------------------------
+
+
+@pytest.mark.parametrize("setting", ["one", None, -1, "", "2.0", 1.9, 0.5, True, False])
 def test_a_setting_that_is_not_a_hop_count_trusts_nothing(tmp_path, fake_mcrit, setting):
     """A typo in instance/config.py must fail closed. Falling back to ProxyFix's own
-    default here would be the opposite: it trusts one hop unless told otherwise."""
+    default here would be the opposite: it trusts one hop unless told otherwise.
+
+    `True` is the one worth naming - an operator answering "yes, I am behind a proxy"
+    writes it, and `int(True)` is 1, so a bare int() check lands on exactly the blind
+    one-hop default. A bool says nothing about how many proxies there are.
+    """
     application = build_app(tmp_path, fake_mcrit, TRUSTED_PROXY_COUNT=setting)
 
     assert application.config["TRUSTED_PROXY_COUNT"] == 0
@@ -243,9 +314,59 @@ def test_a_setting_that_is_not_a_hop_count_trusts_nothing(tmp_path, fake_mcrit, 
     assert recorded_addresses(application) == {PROXY: 1}
 
 
-def test_a_count_given_as_a_string_of_digits_still_counts(tmp_path, fake_mcrit):
-    """Environment-driven config arrives as text, and "1" plainly means one hop."""
-    application = build_app(tmp_path, fake_mcrit, TRUSTED_PROXY_COUNT="1")
+@pytest.mark.parametrize("setting", ["1", " 1 "])
+def test_a_count_given_as_a_string_of_digits_still_counts(tmp_path, fake_mcrit, setting):
+    """Environment-driven config arrives as text, and "1" plainly means one hop.
+    Deliberate leniency: unlike a bool or a float, this value is unambiguous."""
+    application = build_app(tmp_path, fake_mcrit, TRUSTED_PROXY_COUNT=setting)
 
     attempt(application.test_client(), "not the password", ATTACKER)
     assert recorded_addresses(application) == {ATTACKER: 1}
+
+
+# --- a count too large to be a real proxy chain ------------------------------------------
+
+
+@pytest.mark.parametrize("setting", [MAX_TRUSTED_PROXY_COUNT + 1, 10**9])
+def test_an_absurd_count_is_refused_rather_than_installed(tmp_path, fake_mcrit, setting):
+    """`x_for=1000000000` installs happily and then never matches a header, so every
+    request falls back to the proxy address: the global lockout this branch exists to
+    fix, restored silently. Refusing it puts the reason in the log instead."""
+    application = build_app(tmp_path, fake_mcrit, TRUSTED_PROXY_COUNT=setting)
+
+    assert application.config["TRUSTED_PROXY_COUNT"] == 0
+
+
+def test_the_ceiling_still_clears_any_real_chain(tmp_path, fake_mcrit):
+    """A CDN in front of a load balancer in front of NGINX is three. The ceiling is a
+    guard against a typo, not a limit anyone should meet."""
+    application = build_app(tmp_path, fake_mcrit, TRUSTED_PROXY_COUNT=MAX_TRUSTED_PROXY_COUNT)
+
+    assert application.config["TRUSTED_PROXY_COUNT"] == MAX_TRUSTED_PROXY_COUNT
+    assert MAX_TRUSTED_PROXY_COUNT >= 4
+
+
+# --- a header werkzeug cannot parse ------------------------------------------------------
+
+
+def test_an_unparseable_forwarded_header_falls_back_to_the_peer(proxied):
+    """Accepted and documented rather than fixed.
+
+    Werkzeug parses X-Forwarded-For with `parse_list_header`, not a split, so an
+    unterminated quote makes the whole header parse to nothing and REMOTE_ADDR stays the
+    proxy. The blast radius is the sender's own: they spend the proxy's bucket, which
+    only ever refuses other senders of unparseable headers - a well-formed request
+    resolves to its own address and is untouched, so this is not the lockout. Fixing it
+    would mean re-parsing the header ourselves, in front of werkzeug, which is a worse
+    trade than a documented footnote. Pinned so it stays a decision.
+    """
+    client = proxied.test_client()
+    for _ in range(db.LOGIN_ATTEMPT_LIMIT):
+        attempt(client, "not the password", '"evil, %s' % ATTACKER)
+
+    assert recorded_addresses(proxied) == {PROXY: db.LOGIN_ATTEMPT_LIMIT}
+    assert "Too many failed attempts" in attempt(client, "not the password", '"evil, %s' % ATTACKER)
+
+    # and the honest client alongside them is not caught by it
+    page = attempt(proxied.test_client(), PASSWORD, INNOCENT)
+    assert "Too many failed attempts" not in page
