@@ -178,14 +178,19 @@ def test_the_job_page_and_the_result_page_agree(client, as_role, report):
 
 
 @pytest.mark.parametrize(
-    "report,expected",
-    [("matches_for_sample", b"Match 1vN"), ("matches_for_sample_vs", b"Match 1v1")],
+    "category,expected",
+    [("getMatchesForSample", b"Match 1vN"), ("getMatchesForSampleVs", b"Match 1v1")],
 )
-def test_the_job_list_calls_it_the_same_thing(client, as_role, report, expected):
+def test_the_job_list_calls_it_the_same_thing(client, as_role, category, expected):
     """The list is where these names came from, so this is really a check that the
-    extraction did not change its wording."""
+    extraction did not change its wording.
+
+    One tab per category: the job list shows a single method at a time, so each name
+    has to be asked for on its own tab. (It read `/data/jobs` for both until the
+    corpus fake started honouring `method=` - issue #77.)
+    """
     as_role("visitor")
-    response = client.get("/data/jobs", follow_redirects=True)
+    response = client.get(f"/data/jobs?active={category}", follow_redirects=True)
     assert response.status_code == 200
     assert expected in response.data
 

@@ -208,15 +208,19 @@ def test_deleting_a_whole_queue_state_still_works_without_a_job_of_its_own(clien
 @pytest.mark.parametrize(
     "fake_mcrit", [("getFamilies", None)], indirect=True, ids=["getFamilies"],
 )
-def test_the_listing_pages_are_left_to_the_branch_that_rewrites_them(client, as_role, fake_mcrit):
-    """Not a fix, a marker. `/explore/samples` still breaks on this one, and the audit
-    says so: issue #77 replaces every one of those calls in the same functions, so
-    patching them here would be a merge conflict rather than a fix. When #77 lands,
-    this test is what says whether it closed them."""
+def test_the_sample_listing_no_longer_reads_the_whole_family_table(client, as_role, fake_mcrit):
+    """The marker this used to be, answered: #77 landed and closed it.
+
+    `/explore/samples` used to call `getFamilies()` to embed every family name in the
+    page for the edit modal's type-ahead, and `None` from it was an AttributeError -
+    the audit recorded that as a gap for #77 to close rather than patching it here.
+    #77 removed the call outright: the names are fetched from
+    `/explore/family_names` as they are typed. So there is nothing left to break, and
+    that is what this now asserts.
+    """
     as_role("visitor")
 
-    with pytest.raises((AttributeError, TypeError)):
-        client.get("/explore/samples")
+    assert client.get("/explore/samples").status_code == 200
 
 
 @pytest.mark.parametrize(
