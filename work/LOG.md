@@ -2478,3 +2478,99 @@ log. Two were in the audit; the AST ratchet I wrote to pin the fix found five mo
   ran - so the push that followed pushed an unchanged tip. Same lesson as before: a
   blocked command leaves none of its side effects. And `scratchpad/fx/prn` cannot exist on
   Windows: `PRN` is a reserved device name.
+
+## Fixing what the audit found: sixteen branches, every one reviewed before it shipped
+
+The instruction was: code-review every change with a subagent, fix the findings, *then* push.
+That order turned out to be the whole value of the exercise. Of sixteen branches, **eleven
+came back with findings that mattered**, and three of those were defects the fix had
+introduced or left open.
+
+Pushed, each mutation-checked by me rather than on an agent's word:
+
+| branch | what it closes |
+| --- | --- |
+| `fix/101-throttle-behind-a-proxy` | ten failed logins locked out every user behind NGINX |
+| `fix/autocomplete-escapes-suggestions` | stored XSS in the family type-ahead |
+| `fix/query-uploads-collide-across-users` + `fix/9-promote-a-query-to-a-sample` | a visitor could destroy another user's stored query |
+| `fix/pagination-reserved-query-args` | `?endpoint=` 500s everywhere; `?_external=1` retargeting links at a spoofed Host |
+| `fix/submit-metadata-into-the-query-string` | `family=x&is_dump=1&base_addr=…` smuggled into the backend |
+| `fix/70-selected-rows-follow-the-theme` | dark rows at 1.14:1, and a live selection regression |
+| `fix/import-rejected-is-not-malformed` | a valid export refused for config reasons, called malformed |
+| `fix/65-empty-state-map-drift` | wrong empty-state sentence, plus a `?active=` KeyError 500 |
+| `fix/sample-filtered-result-pagination-count` | widget said 706, table drew 772 |
+| `fix/89-cache-the-backend-probe` | a string TTL reporting a false outage on 36 routes |
+| `fix/35-analyze-a-single-function` | a refused job answering with a traceback |
+| `fix/stop-printing-match-reports` | seven prints dumping report data to the container log |
+| `fix/state-the-real-python-floor` | README promised 3.8+; nothing below 3.11 installs |
+| `fix/32-band-off-is-not-band-complete` | a false claim about mcrit, shipped as a code comment |
+| `fix/93-document-the-selection-page` | a manual describing the feature this branch replaced |
+| `integration/all-60-v2` | three merge-only defects |
+
+### The reviews that changed the outcome
+
+- **My TTL fix introduced something worse than the bug.** `float("inf")` passes a `try`
+  and a `< 0` test, and `probe_server` replays a cached `RequestException` by re-raising
+  it — so one blip would have pinned "No connection to the MCRIT server" on all 36 routes
+  for the life of the worker. `nan` was quieter and equally wrong: every comparison false,
+  so the cache is written under the lock on every request and can never hit.
+- **The upload fix had to be redesigned.** Naming files by content hash closed the hole and
+  made `.smda` promotion *permanently impossible* on the sibling branch, which looks the
+  file up by the declared hash. It is named by the backend-issued job id now — no part of
+  the request influences it, and the promote route already holds it. Both branches moved
+  together; a merge of the two was tested before either was pushed.
+- **The dark-theme branch had shipped a functional regression, not just a contrast one.**
+  Once #70 tokenised the row markup, `this.style.backgroundColor` read back
+  `"var(--row-selected-bg)"` and never `"yellowgreen"`, so the "already selected?" guard was
+  always true: clicking a sample already in a comparison added it twice and submitted a
+  duplicate id. Reproduced in both themes.
+- **The malformed-payload fix moved the 500 twice before closing it.** First to the parent
+  page (a healthy parent with one corrupt child), then — after guarding `parameters` — to
+  `sample_ids`, which has strictly more failure modes: `params="{}"` reads back a perfectly
+  good `parameters` and raises IndexError. And the home page has the same unguarded loop,
+  so one corrupt job among the five newest finished matches takes `/` down for everyone.
+- **The import fix over-claimed its cause.** `handle_response` answers `None` for 401 as
+  readily as for a config mismatch, so "created by an instance with a different shingler"
+  was asserted for a rejected API token. Naming a specific wrong cause is worse than the
+  vague message it replaced.
+- **The id-match fix reintroduced its own bug in mirror image.** Suppressing the exact hit
+  when a cursor is present means paging *back* to page 1 — which carries a backward cursor
+  — hides it again. Issue #56 is "a listing hides a record that exists".
+
+### Where my own tooling lied to me
+
+A stylesheet ratchet I wrote used `\b` word boundaries, and my heredoc wrote them into the
+file as literal **backspace bytes**. The pattern matched nothing, and the test passed
+against the exact defect it was added to catch. Nothing failed; I noticed only because the
+mutation check didn't. Rewritten with no backslash escapes at all — hex by `#`, functions
+by substring, names by set membership — and the discriminator now has its own test. Every
+file written this session was then scanned for the same corruption: one file, uncommitted.
+
+That is the fourth verification command this campaign that returned a confident wrong
+answer, after `git merge-tree`, awk's `$NF`, and the CRLF branch names. The pattern is
+always the same: the check cannot fail, so it doesn't.
+
+Two smaller ones in the same vein. A `git stash` mutation check reverted the fix *and* the
+test, so "15 passed" proved nothing — one of the agents independently walked into the same
+trap and reported it. And a mutation regex with `[^,()]+` silently skipped two of three
+call sites because the arguments contained parentheses, so a "no failures" result was
+vacuous.
+
+And one claim of mine that was simply false: I told an agent that a 12,000-character config
+value blows out the session cookie. It does not — itsdangerous zlib-compresses the payload,
+so a repetitive string arrives as 126 bytes. It reproduces only with incompressible
+content: 9,362 bytes against a 4,093 limit. The agent measured it and corrected me.
+
+### Upstream
+
+Eleven PR bodies now carry a note naming the bullets that no longer hold — a reviewer
+reading #144 would otherwise have gone looking for a checkbox that already works. Every
+edit was guarded on the closing-link set being identical before and after, and all eleven
+referenced issues were confirmed still open afterwards; the two accidental closures earlier
+in this campaign came from exactly this kind of edit.
+
+Four mcrit bugs filed as `danielplohmann/mcrit` #155–#158, after checking the 20 open
+issues for duplicates and re-verifying each against v1.8.1 by hand. The sharpest is #155:
+`MatchedFunctionEntry.getMatchTuple()` multiplies already-masked bits by their flags again,
+so six of eight values round-trip wrong — a pichash-only match is reported as a library
+match, and a library match loses its flag entirely — on a route that is actually served.
