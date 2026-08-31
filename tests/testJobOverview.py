@@ -89,7 +89,7 @@ def test_the_page_says_that_children_are_missing(overview):
     parent = job_data("parent", 10, "combineMatchesToCross", ["gone-a", "gone-b"])
     response = overview(parent, [])
     assert b"2 of this job's 2 sub-jobs" in response.data, response.data[-2000:]
-    assert b"no longer in the system" in response.data
+    assert response.data.count(b"no longer in the system") == 1, "said once. `in` is as true of two copies as of one, and a resolution that keeps both sides of this block has happened twice in the integration merges."
 
 
 def test_the_children_that_remain_are_still_listed_and_ordered(overview):
