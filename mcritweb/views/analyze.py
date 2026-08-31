@@ -1,5 +1,3 @@
-import hashlib
-import os
 import re
 
 from flask import Blueprint, current_app, flash, g, json, redirect, render_template, request, url_for
@@ -11,7 +9,7 @@ from mcritweb.views.client import get_client
 from mcritweb.views.cursor_pagination import CursorPagination
 from mcritweb.views.pagination import Pagination
 from mcritweb.views.params import parse_band_range, parse_checkbox_query_param, parse_integer_list_query_param
-from mcritweb.views.utility import mcrit_server_required
+from mcritweb.views.utility import mcrit_server_required, query_upload_path
 
 bp = Blueprint('analyze', __name__, url_prefix='/analyze')
 
@@ -306,24 +304,9 @@ def query():
         if role_limit is not None and len(binary_content) > role_limit:
             flash(f'Your account may only upload files for query that are up to {role_limit} bytes in size.', category='error')
             return "", 403 # Bad Request
-        # persist the upload in binary format
-
-        smda_report = None
         if form_options == "smda":
             content_as_dict = json.loads(binary_content)
             smda_report = SmdaReport.fromDict(content_as_dict)
-
-        # the upload is stored under the digest of the bytes that were actually posted,
-        # for every kind of upload alike. A report's own `sha256` field is whatever its
-        # uploader typed there, so naming the file by it let any visitor overwrite
-        # another user's stored query by declaring that user's digest - the write is
-        # "wb" with no existence check, and nothing ever restores the original.
-        # Two users uploading the same bytes still collide here, harmlessly: the name is
-        # a function of the content, so the second write reproduces the first byte for
-        # byte. That is the deduplication the binary branches always had.
-        upload_sha256 = hashlib.sha256(binary_content).hexdigest()
-        with open(os.sep.join([current_app.instance_path, "temp", "uploads", upload_sha256]), "wb") as fout:
-            fout.write(binary_content)
 
         minhash_band_range = parse_band_range(request)
         if form_options == "smda":
@@ -334,6 +317,22 @@ def query():
             job_id = client.requestMatchesForUnmappedBinary(binary=binary_content, disassemble_locally=False, force_recalculation=True, band_matches_required=minhash_band_range)
         
         if job_id is not None:
+            # persist the upload, so the query can later be promoted to a sample (#9).
+            # It is filed under the job id and not under any hash: the id is issued by
+            # the backend once the job is queued, so no part of the name comes from the
+            # request. Naming an .smda upload by the `sha256` its own report declares
+            # let any visitor overwrite another user's stored query by declaring that
+            # user's digest, and naming it by a digest of the uploaded bytes fixes that
+            # but leaves the promote path with no way to find the file - a query report
+            # records the sample's declared hash, not a hash of what was posted.
+            # The cost is that identical uploads no longer share one file, since each
+            # query is its own job while force_recalculation is set.
+            upload_path = query_upload_path(current_app, job_id)
+            if upload_path is not None:
+                with open(upload_path, "wb") as fout:
+                    fout.write(binary_content)
+            else:
+                current_app.logger.warning("analyze.query - refusing to store an upload under job id %r", job_id)
             flash('Sample submitted!', category='success')
             return url_for('data.job_by_id', job_id=job_id, refresh=3, forward=1), 202 # Accepted
         else:
