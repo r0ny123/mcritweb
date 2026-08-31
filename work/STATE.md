@@ -2,6 +2,25 @@
 
 Live document. Updated after every issue, not at the end.
 
+> **Update, 2026-08-31 (later).** The "What I didn't do" audit is done and its findings
+> are fixed. Read this paragraph as the newest state; the box below it is still true about
+> the 60 PRs, but it predates the audit.
+>
+> - **266 bullets across all 60 PRs were re-checked** against the merged tree and against
+>   mcrit v1.8.1. Most held. **18 were real bugs**, several disclosed in two PRs and owned
+>   by neither.
+> - **Sixteen fix branches**, each reviewed by a subagent before push; **eleven came back
+>   with findings that mattered**, three of them defects the fix itself had introduced or
+>   left open. See `work/LOG.md` for the list and for the ones I got wrong.
+> - **Four bugs are in mcrit, not here**, and are filed as `danielplohmann/mcrit`
+>   **#155-#158** after checking for duplicates and re-verifying each by hand.
+> - **Eleven upstream PR bodies** now carry a note naming the bullets that no longer hold.
+>   Every edit was guarded on the closing-link set being unchanged, and all eleven
+>   referenced issues were confirmed still open afterwards.
+> - `integration/all-60-v2` carries three merge-only defects that no source branch has,
+>   including a dropped `}` in style.css that put issue #52's rules inside the dark palette.
+>   **A rebuilt integration branch is still owed** once the sixteen fix branches land.
+>
 > **Current state, 2026-08-31.** Read this box before the table; several statements
 > further down were written on 2026-08-29 and are corrected here rather than deleted, so
 > the change is visible.
