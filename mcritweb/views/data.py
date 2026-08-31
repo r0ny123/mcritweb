@@ -71,7 +71,9 @@ def create_match_diagram(app, job_id, matching_result, filtered_family_id=None, 
         renderer.processReport(matching_result)
         image = renderer.renderStackedDiagram(filtered_family_id=filtered_family_id, filtered_sample_id=filtered_sample_id, filtered_function_id=filtered_function_id)
         image.save(output_path)
-        current_app.logger.debug("stored new MCRIT diagram: %s", output_path)
+        # `app`, not `current_app`: this function takes an app precisely so it does
+        # not depend on a request context, and uses app.instance_path fifteen lines up.
+        app.logger.debug("stored new MCRIT diagram: %s", output_path)
 
 # https://stackoverflow.com/a/39842765
 # https://stackoverflow.com/a/26972238
