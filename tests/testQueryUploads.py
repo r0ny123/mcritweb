@@ -67,7 +67,9 @@ def fake_mcrit(fake_mcrit):
     def _queue(name):
         def _call(*args, **kwargs):
             fake_mcrit._record(name, *args, **kwargs)
-            job_id = "job%019x" % len(fake_mcrit.issued)
+            # an ObjectId, which is what MongoQueue answers - the shape matters now
+            # that only a real job id shape is allowed to become a filename
+            job_id = "%024x" % len(fake_mcrit.issued)
             fake_mcrit.issued.append(job_id)
             return job_id
         return _call
@@ -156,15 +158,46 @@ def test_no_part_of_the_stored_name_comes_from_the_request(app, client, as_role)
 
 
 @pytest.mark.parametrize("job_id", [
+    # walking out of the folder
     "../../../instance/mcritweb.sqlite",
     "..\\..\\secret_key",
     "a/b", "a.b", "", "..", None, 42,
+    # `QueueRemoteCalls.submitPayloadQueue` returns `str(self.queue.put(...))`, and
+    # `MongoQueue.put` answers None when an insert goes unacknowledged - so a failing
+    # backend hands out the string "None", which is not a job id but is one name, the
+    # same for everybody. That is the collision shape again, in miniature.
+    "None", "none",
+    # Windows device names. `open("uploads/NUL", "wb")` writes to the null device and
+    # stores nothing at all, silently - not reachable from a backend-issued id, but
+    # this project is developed on Windows and the folder is not a safe place to find
+    # out. Reserved with or without an extension, and case does not matter.
+    "NUL", "nul", "CON", "AUX", "PRN", "COM1", "LPT1", "NUL.bin",
+    # right alphabet, wrong shape
+    "0123456789abcdef0123456", "0123456789abcdef012345678", "deadbeef",
+    "0123456789abcdef0123456g",
 ])
 def test_a_job_id_that_is_not_one_names_no_path(app, job_id):
     """The name is a job id off the wire or out of a URL, so it becomes part of a path
-    only once it looks like a job id: hex and hyphens, which is what MongoQueue's
-    ObjectId and LocalQueue's uuid4 both are."""
+    only once it is one: an ObjectId as MongoQueue answers, or the uuid4 LocalQueue
+    answers. Anything else is refused rather than sanitised, because a job id that does
+    not look like a job id is a backend that is not working, not a name to repair."""
     assert query_upload_path(app, job_id) is None
+
+
+@pytest.mark.parametrize("job_id", [
+    "0123456789abcdef01234567",              # MongoQueue: str(ObjectId)
+    "6a7464faf8b8d2c6f836649a",              # one out of tests/fixtures
+    "0123456789ABCDEF01234567",              # pymongo lower-cases, but do not assume it
+    "3f2504e0-4f89-41d3-9a0c-0305e82c3301",  # LocalQueue: str(uuid.uuid4())
+])
+def test_a_real_job_id_names_a_path_inside_the_uploads_folder(app, job_id):
+    """The other half, so the guard cannot be satisfied by refusing everything. Both
+    queue implementations have to keep working - a refused id means the query is
+    quietly not promotable."""
+    upload_path = query_upload_path(app, job_id)
+    assert upload_path is not None, "a job id the backend really issues was refused"
+    assert os.path.dirname(upload_path) == os.path.join(app.instance_path, "temp", "uploads")
+    assert os.path.basename(upload_path) == job_id
 
 
 # --- the half the first attempt at this fix broke -------------------------------------
@@ -215,6 +248,28 @@ def test_nothing_is_stored_when_the_backend_refuses_the_query(app, client, as_ro
     as_role("visitor")
 
     assert query_binary(client, VICTIM_BINARY).status_code == 400
+    assert stored(app) == {}
+
+
+def test_a_write_that_fails_does_not_cost_the_submitter_the_job(app, client, as_role, fake_mcrit, monkeypatch):
+    """The file is written after the job is queued, so by the time a disk fills up or a
+    permission is wrong, the job is already running.
+
+    There is no errorhandler in `mcritweb`, so an OSError out of this write would leave
+    the submitter with a 500 and no job URL for work the backend is doing anyway. The
+    copy is a convenience for promoting the query later; losing it costs a button, and
+    the promote path already says so plainly. Losing the job link costs the query.
+    """
+    def _refuse(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr("mcritweb.views.analyze.open", _refuse, raising=False)
+    as_role("visitor")
+
+    response = query_binary(client, VICTIM_BINARY)
+
+    assert response.status_code == 202, response.get_data(as_text=True)[:200]
+    assert fake_mcrit.issued[-1] in response.get_data(as_text=True), \
+        "the submitter was not told where the queued job is"
     assert stored(app) == {}
 
 

@@ -327,12 +327,20 @@ def query():
             # records the sample's declared hash, not a hash of what was posted.
             # The cost is that identical uploads no longer share one file, since each
             # query is its own job while force_recalculation is set.
+            # Keeping it is best-effort, and deliberately so now that it happens after
+            # the job was queued: a full disk or a wrong permission here would
+            # otherwise raise past this route - `mcritweb` registers no errorhandler -
+            # and answer 500 for a job the backend is already running, so the submitter
+            # would never be given its URL. What a failure costs is the ability to
+            # promote this one query later, which the promote page reports plainly.
             upload_path = query_upload_path(current_app, job_id)
-            if upload_path is not None:
+            try:
+                if upload_path is None:
+                    raise ValueError(f"not a job id: {job_id!r}")
                 with open(upload_path, "wb") as fout:
                     fout.write(binary_content)
-            else:
-                current_app.logger.warning("analyze.query - refusing to store an upload under job id %r", job_id)
+            except (OSError, ValueError) as storage_error:
+                current_app.logger.warning("analyze.query - could not store the upload of job %r: %s", job_id, storage_error)
             flash('Sample submitted!', category='success')
             return url_for('data.job_by_id', job_id=job_id, refresh=3, forward=1), 202 # Accepted
         else:
