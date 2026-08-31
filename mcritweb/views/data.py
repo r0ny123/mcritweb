@@ -71,7 +71,11 @@ def cache_result(app, job_info, matching_result):
     if job_info.result is not None:
         cache_path = os.sep.join([app.instance_path, "cache", "results"])
         timestamped_filename = utc_now().strftime(f"%Y%m%d-%H%M%S-{job_info.job_id}.json")
-        with open(cache_path + os.sep + timestamped_filename, "w") as fout:
+        # The download route (issue #75) streams this file back verbatim, while a cache
+        # miss serialises the same dict in memory with json.dumps - the two have to
+        # agree byte for byte. Text mode's platform newline translation breaks that on
+        # Windows, so ask for none.
+        with open(cache_path + os.sep + timestamped_filename, "w", newline="\n") as fout:
             json.dump(matching_result, fout, indent=1)
 
 
