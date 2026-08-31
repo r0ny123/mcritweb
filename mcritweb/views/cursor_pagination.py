@@ -119,6 +119,25 @@ class CursorPagination:
     def hasCurrent(self):
         return self.cursor["current"] is not None
 
+    @property
+    def is_first_page(self):
+        """Whether this request arrived without a cursor, i.e. nobody has paged yet.
+
+        `cursor["current"]` is the only one of the four that comes from the request
+        rather than from the backend's answer - `read_cursor_from_result` fills
+        `forward` and `backward` and leaves this one alone - so it is the honest test
+        for "no cursor yet", and it stays honest after that call. `cursor["first"]`
+        is documented above as always None for the same reason: no cursor *is* the
+        first page.
+
+        Not `page == 1`: `page` is cosmetic by this class's own admission, it is
+        whatever the query string claimed, and a hand-edited `?page=1` alongside a
+        cursor would lie. Not `not hasBackward` either: that is the backend's
+        statement about the result set, and it only becomes true after the search has
+        run. Falsy rather than `is None` so an empty `?cursor=` counts as no cursor.
+        """
+        return not self.cursor["current"]
+
 
     def _getArgs(self, direction="current"):
         result = {

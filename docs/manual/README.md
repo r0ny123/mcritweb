@@ -66,7 +66,9 @@ A term that is exactly a family, sample or function id - or a sample's `sha256` 
 matches that record directly, on top of every record whose text contains the term.
 Those exact hits are flagged with a badge in a `Match` column naming what they matched
 on, so they can be told apart from an incidental substring hit. This works the same way
-on the search page and on the family, sample and function listings.
+on the search page and on the family, sample and function listings. An exact hit is
+listed once, at the top of the first page of results; paging onwards shows the text hits
+alone.
 
 #### Families
 
