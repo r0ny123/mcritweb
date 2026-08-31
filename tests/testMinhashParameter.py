@@ -21,7 +21,7 @@ from mcrit.matchers.MatcherInterface import MatcherInterface
 from mcrit.queue.LocalQueue import Job
 
 from mcritweb.views.params import (
-    BAND_RANGE_ARG_TO_VALUE,
+    BAND_RANGE_BY_SLIDER_POSITION,
     BAND_RANGE_LABELS,
     get_minhash_matching_label,
 )
@@ -56,8 +56,8 @@ def test_the_slider_positions_stay_distinguishable():
     """Reading a job back only works while the positions map to distinct values - two
     positions sharing one would make the label a coin flip, and this is the only thing
     that would say so."""
-    assert len(set(BAND_RANGE_ARG_TO_VALUE.values())) == len(BAND_RANGE_ARG_TO_VALUE)
-    assert sorted(BAND_RANGE_ARG_TO_VALUE) == list(range(len(BAND_RANGE_LABELS)))
+    assert len(set(BAND_RANGE_BY_SLIDER_POSITION.values())) == len(BAND_RANGE_BY_SLIDER_POSITION)
+    assert sorted(BAND_RANGE_BY_SLIDER_POSITION) == list(range(len(BAND_RANGE_LABELS)))
 
 
 def test_band_off_is_a_different_mode_from_band_complete():

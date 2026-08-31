@@ -9,9 +9,14 @@ import json
 import logging
 import re
 
-# slider position -> band_matches_required, as submitted to mcrit. Bijective, which
-# is what lets a finished job be read back to the setting it was submitted with.
-BAND_RANGE_ARG_TO_VALUE = {
+#: The positions of the "Minhash Matching" slider on the analyze pages, and the
+#: `band_matches_required` each one asks the backend for. Read in both directions:
+#: the analyze routes turn a position into a value, a link back to one of those
+#: pages has to turn a value the job recorded into the position that shows it (#55),
+#: and the job list turns it into the label the form showed (#32) - so all three are
+#: this one table rather than several that can drift apart. Bijective, which is what
+#: lets a finished job be read back to the setting it was submitted with.
+BAND_RANGE_BY_SLIDER_POSITION = {
     # deactivate minhash bands
     0: 0,
     # 1: "Fast"
@@ -38,11 +43,26 @@ BAND_RANGE_LABELS = ["Off", "Fast", "Standard", "Complete"]
 # it does full minhash matching and keeps every candidate. They are different modes, not
 # two names for one - and collapsing the two slider positions on the strength of the old
 # comment would have silently removed the pichash-only one.
-BAND_VALUE_TO_LABEL = {value: BAND_RANGE_LABELS[arg] for arg, value in BAND_RANGE_ARG_TO_VALUE.items()}
+BAND_VALUE_TO_LABEL = {value: BAND_RANGE_LABELS[arg] for arg, value in BAND_RANGE_BY_SLIDER_POSITION.items()}
+
+
+def slider_position_for_band_range(band_matches_required):
+    """The slider position that asks for this `band_matches_required`, or None.
+
+    None means the slider cannot express the value, so a page preselected with it
+    would show a different comparison than the one it was reached from.
+    """
+    if isinstance(band_matches_required, bool) or not isinstance(band_matches_required, int):
+        return None
+    for position, value in BAND_RANGE_BY_SLIDER_POSITION.items():
+        if value == band_matches_required:
+            return position
+    return None
 
 
 def parse_band_range(request, from_form=False):
     minhash_band_range= 2
+    arg_to_value = BAND_RANGE_BY_SLIDER_POSITION
     try:
         if from_form:
             minhash_band_range = int(request.form['minhashBandRange'])
@@ -52,7 +72,7 @@ def parse_band_range(request, from_form=False):
         minhash_band_range = max(0, minhash_band_range)
     except Exception:
         minhash_band_range = 2
-    minhash_band_range = BAND_RANGE_ARG_TO_VALUE[minhash_band_range]
+    minhash_band_range = arg_to_value[minhash_band_range]
     return minhash_band_range
 
 
