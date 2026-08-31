@@ -35,6 +35,41 @@ def exact_match_marks(results, id_field):
     return marks
 
 
+def exact_matches_to_prepend(results, pagination):
+    """The exact identifier hits that belong at the top of *this* page: the first
+    page's, and none at all on any page after it.
+
+    mcrit derives `id_match` (and `sha_match`) from the search term alone, before the
+    cursor is applied, and attaches them to every page it answers - in
+    `MinHashIndex.getFamilySearchResults` and its two siblings the lookup runs at the
+    top of the method and the assignment happens after `_getSearchResultTemplate` has
+    already windowed the text hits, so the value is cursor-independent. Prepending it
+    unconditionally therefore repeated one row, exact-match badge and all, on page 2,
+    3, 4 ... of a listing.
+
+    First page only, rather than de-duplicating: a view renders a single page and has
+    no memory of the ones before it, so there is nothing here to de-duplicate against
+    - the check would have to live in the browser or in a session. And the placement
+    only means anything on the first page anyway: "the record you named, at the top"
+    is a statement about the top of the listing, not about the top of whichever page
+    the reader happened to walk to.
+
+    The prepended row is over and above `limit`, so a first page can carry limit+1
+    rows. Dropping a text hit to make room would hide that hit for good: mcrit builds
+    the forward cursor from the last entry it returned (`_getSearchResultTemplate`),
+    so the next page resumes *after* the row we dropped rather than at it. Issue #56
+    is about a listing hiding a record that exists; trading one hidden record for
+    another would be no fix. The exact hit is an answer to the query rather than a
+    member of the paged result set - which is how the search page has always framed
+    it - so it sits outside the page budget.
+    """
+    if results is None or not pagination.is_first_page:
+        return []
+    # sha first, so the id wins if one record came back as both - the order the
+    # samples view has always folded them in, and the order exact_match_marks uses
+    return [match for match in (results.get("sha_match"), results.get("id_match")) if match is not None]
+
+
 ##############################################################
 ### Unfiltered Collections: Families, Samples, Function
 ##############################################################
@@ -106,11 +141,11 @@ def families():
         # the exact-id hit arrives beside the text results, not among them, and this
         # page used to read only the latter - so searching a family page for an id
         # rendered "No families available" for a family that exists, while the search
-        # page found it. See issue #56.
+        # page found it. It is answered with every page, so it is prepended to the
+        # first one only - see exact_matches_to_prepend. Issue #56.
         by_id = {}
-        id_match = results.get('id_match')
-        if id_match is not None:
-            entry = FamilyEntry.fromDict(id_match)
+        for exact in exact_matches_to_prepend(results, pagination):
+            entry = FamilyEntry.fromDict(exact)
             by_id[entry.family_id] = entry
         for family_dict in results['search_results'].values():
             entry = FamilyEntry.fromDict(family_dict)
@@ -198,12 +233,12 @@ def samples():
         flash(f"Ups, search for {query} in MCRIT's samples failed!", category="error")
     else:
         # as in families above: the exact id, and for samples the exact sha256, arrive
-        # beside the text results rather than among them. See issue #56.
+        # beside the text results rather than among them, and belong to the first page
+        # only. See issue #56.
         by_id = {}
-        for exact in (results.get('sha_match'), results.get('id_match')):
-            if exact is not None:
-                entry = SampleEntry.fromDict(exact)
-                by_id[entry.sample_id] = entry
+        for exact in exact_matches_to_prepend(results, pagination):
+            entry = SampleEntry.fromDict(exact)
+            by_id[entry.sample_id] = entry
         for sample_dict in results['search_results'].values():
             entry = SampleEntry.fromDict(sample_dict)
             by_id.setdefault(entry.sample_id, entry)
@@ -241,9 +276,8 @@ def functions():
         # existing convention - function_row.html reads them by name either way, and
         # switching the whole page to FunctionEntry is a separate change. See issue #56.
         by_id = {}
-        id_match = results.get('id_match')
-        if id_match is not None:
-            by_id[id_match['function_id']] = id_match
+        for exact in exact_matches_to_prepend(results, pagination):
+            by_id[exact['function_id']] = exact
         for function_dict in results['search_results'].values():
             #functions.append(FunctionEntry.fromDict(function_dict))
             by_id.setdefault(function_dict['function_id'], function_dict)
