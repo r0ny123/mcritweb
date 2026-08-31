@@ -36,14 +36,16 @@
   // private and lossless - that is the issue #69 bug. But these four globals still
   // end up pointing at whichever panel rendered last, and which one that is is still
   // a race: 12 reloads of the same comparison page gave b 10 times and a twice. No
-  // reachable reader observes it today, because every one of them is dead code on
-  // this page - the edge-click handler throws on a null `g` two lines earlier, the
-  // node-drag and brush handlers are behind controls the duo template does not render
-  // (`#enableNodeDrag` is inside an HTML comment, `#enableBrush` appears nowhere), and
-  // `setupTrace()` and `getCodefromGraph()` have no live call site here. The highlight
-  // code below uses `cfgPanels` directly and never these. So this is latent, not
-  // active - but anyone wiring up `setupTrace` or fixing the edge-click has to take
-  // the panel from `cfgPanels` rather than trusting these.
+  // reachable reader observes it today, because every remaining one is dead code on
+  // this page - the node-drag and brush handlers are behind controls the duo template
+  // does not render (`#enableNodeDrag` is inside an HTML comment, `#enableBrush`
+  // appears nowhere), the backspace-deletes-a-block handler in showGraph reads the
+  // global `g`, which is null here, so it throws before it reaches `nodesAll`, and
+  // `setupTrace()` and `getCodefromGraph()` have no live call site. The highlight code
+  // below uses `cfgPanels` directly and never these, and so do showGraph's hover,
+  // tooltip and edge-click handlers since the throws were fixed. So this is latent,
+  // not active - but anyone wiring up `setupTrace`, or making that keybinding work,
+  // has to take the panel from `cfgPanels` rather than trusting these.
   function usePanel(panel){
     nodesAll = panel.nodes;
     edgesAll = panel.edges;
@@ -2160,6 +2162,19 @@ function highlightUERs(UERtype){
   function showGraph(graph_id, node_colors) {
     var container_id = "#graphContainer" + "_" + graph_id
 
+    // mcritweb: issue #69 - showGraph runs once per panel, and the handlers it
+    // binds at the bottom used to say nothing about which panel they were for.
+    // Everything they need is named here instead:
+    //  - panel        the per-panel stores (blocks, colours, loops, graph)
+    //  - panel_id     the div the panel is drawn in; both are position:relative,
+    //                 so it is also the frame the tooltip is positioned against
+    //  - tooltip_id   this panel's tooltip. The single-graph template has one
+    //                 #tooltip/#value; this one has a pair per panel.
+    var panel = cfgPanels[graph_id];
+    var panel_id = graph_id == "a" ? "#xcfg_left" : "#xcfg_right";
+    var tooltip_id = "#tooltip_" + graph_id;
+    var value_id = "#value_" + graph_id;
+
     var svg = d3.select(container_id);
     var inner = d3.select(container_id + " g");
 
@@ -2168,6 +2183,10 @@ function highlightUERs(UERtype){
     // renderer.run(g, d3.select("#graphContainer g"));
 
     //Render the modified file (output from loopified code) i.e. the file with invisible edges, ports etc.
+    // mcritweb: issue #69 - the rendered graph, kept because the edge ids in the
+    // DOM are its ids: cfgPanels[graph_id].graph is a second, separate parse of
+    // the same dot text, so it is the wrong graph to look a clicked edge up in.
+    var rendered_graph = graph_id == "a" ? graph_to_display_a : graph_to_display_b;
     if (graph_id == "a") {
       renderer.run(graph_to_display_a, d3.select(container_id + " g"));
     } else {
@@ -2629,7 +2648,10 @@ function highlightUERs(UERtype){
      // .call(rtClickdrag);
 
 
-    d3.selectAll("g.edgePath.enter")
+    // mcritweb: issue #69 - scoped to this panel. Unscoped, the second panel to
+    // finish rendering rebound the first panel's edges to its own graph as well,
+    // so an edge of A was looked up in B's graph.
+    d3.selectAll(container_id + " " + "g.edgePath.enter")
       .on("mouseover", function(){
 
 
@@ -2641,14 +2663,19 @@ function highlightUERs(UERtype){
       })
       .on("click", function(){
         
-        var incidences = g._strictGetEdge(d3.select(this).datum());
+        // mcritweb: issue #69 - was `g._strictGetEdge(...)` and `nodesAll[...]`.
+        // The global `g` is assigned by the single-graph page's loader and stays
+        // null here, so every edge click threw "Cannot read properties of null
+        // (reading '_strictGetEdge')" on this line and moved nothing. Both the
+        // graph and the rendered blocks now come from this panel.
+        var incidences = rendered_graph._strictGetEdge(d3.select(this).datum());
         var u = incidences.u;
         var v = incidences.v;
         
         var clickPt = d3.mouse(this);     
 
-        var uTransform = nodesAll[u].attr("transform");
-        var vTransform = nodesAll[v].attr("transform");
+        var uTransform = panel.nodes[u].attr("transform");
+        var vTransform = panel.nodes[v].attr("transform");
 
         var ut = []
         var vt = [];
@@ -2669,19 +2696,19 @@ function highlightUERs(UERtype){
           vt[1] = clickPt[1] + 30;
         }        
 
-        nodesAll[u].transition().duration(500)
+        panel.nodes[u].transition().duration(500)
         .ease("exp-out")
         .attr("transform", "translate(" + ut[0] + "," + ut[1] + ")");
         
-        nodesAll[u].transition().duration(250).delay(1000)
+        panel.nodes[u].transition().duration(250).delay(1000)
         .ease("exp-in")
         .attr("transform", uTransform);
 
-        nodesAll[v].transition().duration(500)
+        panel.nodes[v].transition().duration(500)
         .ease("exp-out")
         .attr("transform", "translate(" + vt[0] + "," + vt[1] + ")");
         
-        nodesAll[v].transition().duration(250).delay(1000)
+        panel.nodes[v].transition().duration(250).delay(1000)
         .ease("exp-in")
         .attr("transform", vTransform);
 
@@ -2695,7 +2722,9 @@ function highlightUERs(UERtype){
     });
 
       
-    d3.selectAll("g.node.enter")
+    // mcritweb: issue #69 - scoped to this panel, so the handlers below know which
+    // of the two tooltips and which block registry they are for.
+    d3.selectAll(container_id + " " + "g.node.enter")
       // .on("click", function()){
       // 		currentNode = this;
       // })	
@@ -2753,13 +2782,16 @@ function highlightUERs(UERtype){
             textToHighlight = nodeToTextGroups[nodeId];
           }
         } else {
+          // mcritweb: issue #69 - the fallback here selected "#text_code p", the
+          // paragraphs of the code panel the single-function page renders beside
+          // its graph. This template has no #text_code at all, and d3 3.4.11
+          // answers a miss with a selection - an array holding one empty group -
+          // rather than with nothing, so the length test below passed, `[0]` was
+          // a plain Array, and `.node()` threw "textToHighlight[i].node is not a
+          // function" on every hover of every block. With no code panel to link
+          // to there is nothing to highlight, so leave the list empty.
           if(nodeId in nodeToTextGroups){
             textToHighlight = nodeToTextGroups[nodeId];
-          } else {
-            textToHighlight = d3.selectAll("#text_code p")
-              .filter(function(d) {
-                return nodeId === d;
-              });
           }
 
         }
@@ -2787,30 +2819,57 @@ function highlightUERs(UERtype){
          
          if(isTooltipEnabled){
 
+            // mcritweb: issue #69 - "Enable Tooltip" was a dead control: it set
+            // the flag, and everything below then wrote to "#tooltip"/"#value",
+            // which the single-graph template has and this one does not - it has
+            // #tooltip_a/#value_a and #tooltip_b/#value_b. The panel this handler
+            // was bound for now supplies all four of the ids, and the position is
+            // taken against that panel's own div rather than always the left one.
+
             //Get the mouse event's x/y values relative to the containing div
             var pos = [0,0];
-            pos = d3.mouse(d3.select("#xcfg_left").node());
+            pos = d3.mouse(d3.select(panel_id).node());
             var xPosition = pos[0];	
             var yPosition = pos[1];
 
+            // mcritweb: issue #69 - and this is why the two are one change. The
+            // lines below are the dot graph's node label, which carries the api
+            // names smda read out of the analysed binary (`toDotGraph(with_api=
+            // True)`) - so whoever gets a sample submitted writes part of them.
+            // They used to be joined with "<br/>" and assigned into .innerHTML,
+            // which made an import called `<img src=x onerror=...>` run. Nothing
+            // reached the sink only because the hover threw a few lines above, so
+            // repairing either of those two arms it. Joined with newlines and set
+            // as text instead; the tooltip is told to keep the line breaks.
             var text = "";
             thisNode.selectAll("text tspan").each(function(){
-              text+=d3.select(this).text() + "<br/>";
+              text+=d3.select(this).text() + "\n";
             });
 
             var width = rect.node().getBBox().width;
 
             //Update the tooltip position and value
-            d3.select("#tooltip")
+            // The stylesheet under static/trace_CFG/ is vendored and styles
+            // "#tooltip" by id, so it does not reach these two; the handful of
+            // properties that make the tooltip readable are set here instead.
+            d3.select(tooltip_id)
+              .style("position", "absolute")
+              .style("z-index", "10")
+              .style("padding", "3px")
+              .style("border-radius", "10px")
+              .style("box-shadow", "4px 4px 10px rgba(0, 0, 0, 0.4)")
+              .style("background-color", "white")
+              .style("pointer-events", "none")
+              .style("white-space", "pre")
+              .style("font-family", "monospace")
               .style("left", xPosition + "px")
               .style("top", yPosition + "px")
               .style("width", function(){return (width*1.25) + "px"})
-              .select("#value")
-              .node().innerHTML = text;
-              // .text(text);
+              .select(value_id)
+              .text(text);
 
             //Show the tooltip
-            d3.select("#tooltip").classed("hidden", false);
+            d3.select(tooltip_id).classed("hidden", false);
           }
 
       })
@@ -2833,7 +2892,7 @@ function highlightUERs(UERtype){
         currentNode = null;
         
         //Hide the tooltip
-        d3.select("#tooltip").classed("hidden", true);
+        d3.select(tooltip_id).classed("hidden", true);  // mcritweb: issue #69
 
       })
     .call(drag);
