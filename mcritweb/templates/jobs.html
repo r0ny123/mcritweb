@@ -165,8 +165,10 @@ Jobs
     that starts one where such a page exists.
 
     Every job method the worker can run needs a key here, whether or not the menu
-    above offers a tab for it: `active` is a query parameter, and a category the
-    backend reports in getQueueStatistics() is reachable either way.
+    above offers a tab for it: `active` is a query parameter, so any category the
+    backend reports in getQueueStatistics() is reachable whether a tab links to it or
+    not - getMatchesForSampleVsGroup has no tab and is spawned per sample by a cross
+    compare over only the selected samples.
     tests/testEmptyTableMessages.py enumerates them from `mcrit.Worker.Worker` rather
     than from a list written by hand, so a method added to the backend fails the suite
     instead of silently falling back to the generic sentence - which is how

@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 
 import pytest
+from markupsafe import escape
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
@@ -38,20 +39,63 @@ def _queueable_job_methods():
     """
     from mcrit.Worker import Worker
 
-    return {name for name in dir(Worker) if getattr(getattr(Worker, name, None), "remote", False)}
+    methods = {name for name in dir(Worker) if getattr(getattr(Worker, name, None), "remote", False)}
+    # A floor, because everything below is driven by this set. If mcrit ever renames the
+    # marker, or wraps @Remote without carrying the attribute across, an empty set would
+    # make the completeness test pass with nothing to check and generate zero rendered
+    # cases, while the reverse test blamed jobs.html for every one of its good keys -
+    # loud failure, pointing at the wrong file. Fail here, where the coupling broke. The
+    # bounds are deliberately loose: this is a smoke alarm, not a count of the methods.
+    assert 15 <= len(methods) <= 30, (
+        f"expected mcrit.Worker.Worker to carry a normal number of @Remote job methods, "
+        f"found {len(methods)}: {sorted(methods)}. Has the marker been renamed or wrapped?"
+    )
+    return methods
 
 
 QUEUEABLE_JOB_METHODS = sorted(_queueable_job_methods())
 
 JOBS_TEMPLATE = Path(mcritweb.__file__).parent / "templates" / "jobs.html"
 
+_MAP_BLOCK = re.compile(r"set job_category_empty_states = \{(.*?)\n\s*\} %\}", re.S)
+# One entry: a quoted key at the start of a line, then whatever it maps to. Both quote
+# styles, because Jinja takes either. Deliberately not anchored on the value being a
+# tuple - a key whose value has been broken into some other shape is still a key, and
+# reporting it as absent would send the reader hunting for a line that is right there.
+_MAP_ENTRY = re.compile(r"""^[ \t]*(?P<q>["'])(?P<key>\w+)(?P=q)[ \t]*:[ \t]*(?P<value>.*)$""", re.M)
+_MESSAGE = re.compile(r"""^\(\s*(?P<q>["'])(?P<message>.*?)(?P=q)""")
+_JINJA_COMMENT = re.compile(r"\{#.*?#\}", re.S)
+
+
+def parse_empty_state_map(template_body):
+    """The categories `jobs.html` has a sentence for, and what each one says.
+
+    Returns {category: message}, the message being None where the entry is not a
+    (message, link) tuple.
+
+    Comments are stripped before the map is located, not after, and that ordering is
+    the point: commenting out the whole `{% set %}` is the one way to disable the map
+    that Jinja still renders - every category quietly falls back to the generic prompt
+    - and a parser that read the map out of the comment would call it complete. (An
+    individual entry cannot be commented out in place: `{# #}` inside the dict literal
+    is a Jinja syntax error, so that mutation takes the page down loudly instead.)
+    """
+    block = _MAP_BLOCK.search(_JINJA_COMMENT.sub("", template_body))
+    assert block is not None, "the per-category empty-state map has moved or been renamed"
+    body = block.group(1)
+    entries = {}
+    for match in _MAP_ENTRY.finditer(body):
+        message = _MESSAGE.match(match.group("value"))
+        entries[match.group("key")] = message.group("message") if message else None
+    return entries
+
+
+def _empty_state_messages():
+    return parse_empty_state_map(JOBS_TEMPLATE.read_text(encoding="utf-8"))
+
 
 def _empty_state_map_keys():
-    """The categories `jobs.html` has a sentence for."""
-    body = JOBS_TEMPLATE.read_text(encoding="utf-8")
-    block = re.search(r"set job_category_empty_states = \{(.*?)\n\s*\} %\}", body, re.S)
-    assert block is not None, "the per-category empty-state map has moved or been renamed"
-    return set(re.findall(r'"(\w+)"\s*:\s*\(', block.group(1)))
+    return set(_empty_state_messages())
 
 
 @pytest.fixture
@@ -190,6 +234,55 @@ def every_kind_of_job(corpus_mcrit):
     return QueueOfEveryKind(corpus_mcrit)
 
 
+# The guards below read the map out of the template, so the reader has to be able to
+# trust the reader. Each of these was a real misread of the first version of it, and
+# each fails in the direction that is hardest to notice: a message reported as missing
+# when it is present, or a category reported as covered when its message is gone.
+
+def _map_template(entries):
+    """The smallest thing shaped like the map in jobs.html."""
+    return "{% set job_category_empty_states = {\n" + entries + "\n  } %}\n"
+
+
+def test_the_map_parser_reads_an_entry_written_with_either_quote():
+    parsed = parse_empty_state_map(_map_template(
+        '    "doubleQuoted":  ("No double quoted jobs yet.", None),\n'
+        "    'singleQuoted':  ('No single quoted jobs yet.', None),"
+    ))
+
+    assert parsed == {"doubleQuoted": "No double quoted jobs yet.",
+                      "singleQuoted": "No single quoted jobs yet."}
+
+
+def test_the_map_parser_does_not_read_a_map_that_has_been_commented_out():
+    """The vacuous pass this is here to stop.
+
+    Wrapping the `{% set %}` in `{# #}` still renders - Jinja just drops it - and every
+    category silently goes back to "create your first job". A parser that read the map
+    out of the comment would report it complete while nothing on the page had a message.
+    """
+    commented_out = "{#\n" + _map_template('    "live":  ("No live jobs yet.", None),') + "#}\n"
+
+    with pytest.raises(AssertionError, match="moved or been renamed"):
+        parse_empty_state_map(commented_out)
+
+
+def test_the_map_parser_keeps_a_key_whose_value_is_not_a_tuple():
+    """A key is a key. Dropping it would report a message as missing while it is sitting
+    in the file, sending the next reader to add a duplicate."""
+    parsed = parse_empty_state_map(_map_template(
+        '    "notATuple":  "No jobs yet.",'
+    ))
+
+    assert set(parsed) == {"notATuple"}, "the key is present, whatever shape its value is in"
+    assert parsed["notATuple"] is None, "but there is no (message, link) pair to read"
+
+
+def test_the_map_parser_says_so_when_the_map_is_gone():
+    with pytest.raises(AssertionError, match="moved or been renamed"):
+        parse_empty_state_map("{% set something_else = {} %}")
+
+
 def test_the_empty_state_map_covers_every_job_the_backend_can_queue():
     """The map is hand-written; this is what keeps it honest.
 
@@ -214,13 +307,39 @@ def test_the_empty_state_map_has_no_message_for_a_job_that_does_not_exist():
 
 @pytest.mark.parametrize("category", QUEUEABLE_JOB_METHODS)
 def test_each_job_category_says_what_it_is_missing(client, as_role, app, every_kind_of_job, category):
-    """Rendered, not read off the map: this is the sentence the reader actually gets."""
+    """Rendered, not read off the map: this is the sentence the reader actually gets.
+
+    Asserted as a presence and not only as the absence of the generic prompt - a
+    redirect or an error page contains neither sentence and would satisfy a
+    `not in page` on its own.
+    """
     app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: every_kind_of_job
     as_role("visitor")
 
-    page = client.get(f"/data/jobs?active={category}").get_data(as_text=True)
+    response = client.get(f"/data/jobs?active={category}")
+    page = response.get_data(as_text=True)
 
-    assert GENERIC_JOB_PROMPT not in page, f"{category} has no empty-state message of its own"
+    assert response.status_code == 200
+    expected = _empty_state_messages().get(category)
+    assert expected, f"{category} has no empty-state message in jobs.html"
+    assert str(escape(expected)) in page, f"{category} does not render its own message"
+    assert GENERIC_JOB_PROMPT not in page, f"{category} fell back to the generic prompt"
+
+
+def test_a_category_the_backend_has_never_run_is_not_a_server_error(client, as_role, app, every_kind_of_job):
+    """`active` is a query parameter, so it is whatever somebody put in the URL.
+
+    The view sized its pagination with `statistics[active_category]`, which raises
+    KeyError - a 500 - for any category the backend has not reported. An old bookmark
+    for a category whose jobs have since been deleted is enough to hit it, and so is a
+    typo. It is an empty list, not an error.
+    """
+    app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: every_kind_of_job
+    as_role("visitor")
+
+    response = client.get("/data/jobs?active=nosuchmethod")
+
+    assert response.status_code == 200
 
 
 @pytest.mark.parametrize("category,expected", [
