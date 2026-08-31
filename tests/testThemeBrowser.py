@@ -82,7 +82,12 @@ PAGES = [
 #:
 #: A picker row is the one exception to that exception. Its tint is a *state*, not a
 #: computed score, so it belongs to the palette - and while the pickers wrote the
-#: state into the style attribute, this skip is what hid four unreadable pages.
+#: state into the style attribute, this skip is what hid it. Of the four picker pages
+#: added below, only /analyze/compare failed the sweep before the fix - it auto-selects
+#: a row, so it was the one carrying a light inline surface on load. The other three
+#: needed a click, which the sweep does not do; the per-picker tests below are what
+#: cover those. Post-fix the narrowing is defensive: the rows carry no inline style at
+#: all now, so the skip cannot fire for them either way.
 FIND_LIGHT_SURFACES = """
 ([threshold, selectable]) => {
   const channel = (value) => {
@@ -322,7 +327,7 @@ ROW_PAINT = """
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
-@pytest.mark.parametrize("path,rows", PICKERS, ids=lambda value: value.strip("/tr.").replace("/", "-"))
+@pytest.mark.parametrize("path,rows", PICKERS, ids=lambda value: value.replace("tr.", "").strip("/").replace("/", "-"))
 def test_a_clicked_picker_row_stays_readable(themed_page, live_server, theme, path, rows):
     """The pickers used to paint a clicked row by writing a literal into its style
     attribute, so on a dark page a selected row came out near-white under light text
