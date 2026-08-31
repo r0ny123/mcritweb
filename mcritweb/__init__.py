@@ -138,6 +138,16 @@ def create_app(test_config=None, instance_path=None):
     def join_hint_strings(list_of_strings):
         return "\n".join(sorted(list_of_strings))
 
+    # Job.parameters and everything beside it - arguments, sample_ids, family_id - are
+    # rebuilt from payload["params"] on every access and raise for a payload that
+    # cannot be parsed, so `job_row` cannot describe such a job at all. It has to ask
+    # before it tries, because a template has no try/except: without this, one bad job
+    # takes down whichever listing shows it rather than just its own row.
+    @app.template_global()
+    def job_payload_is_readable(job):
+        from mcritweb.views.data import job_parameters_or_none
+        return job_parameters_or_none(job) is not None
+
     # the user manual. Public, and deliberately not under /admin: it was the only
     # route in that blueprint without an admin gate, which made the prefix a lie.
     # Rendered from docs/manual/README.md, which is the only copy - see issue #91.

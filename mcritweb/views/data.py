@@ -711,10 +711,16 @@ def job_parameters_or_none(job):
     None means "could not be read", which is distinct from the "" that Job.parameters
     legitimately answers for a record carrying no params at all - `parameters or ""`
     cannot tell a corrupt job from an empty one.
+
+    Those three are the whole list of what an unreadable payload can raise here, and
+    catching only them is deliberate: a bare `except Exception` would turn a future bug
+    in `Job` into every job page calmly reporting a corrupt payload, which is both wrong
+    and unreportable.
     """
     try:
         return job.parameters
-    except Exception:
+    except (ValueError, TypeError, AttributeError):
+        # ValueError covers json.JSONDecodeError, which subclasses it
         current_app.logger.exception("Could not read parameters for job %s", getattr(job, "job_id", "?"))
         return None
 
@@ -728,6 +734,18 @@ def job_parameters_or_blank(job):
     term either, so leaving it out is also the right answer.
     """
     return job_parameters_or_none(job) or ""
+
+
+def readable_jobs(jobs):
+    """The jobs in `jobs` whose payload can be read.
+
+    A page that lists jobs looks up the samples and families they name, and everything
+    that names one - `sample_ids`, `family_id`, `arguments` - is rebuilt from the same
+    `payload["params"]` that `parameters` is, so a single unreadable job in the list
+    takes down the page it appears on rather than its own row. Skip those here;
+    `job_description` renders what is left of them.
+    """
+    return [job for job in jobs or [] if job_parameters_or_none(job) is not None]
 
 
 @bp.route('/jobs')
@@ -845,14 +863,14 @@ def jobs():
         jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, ascending=ascending)
     samples_by_id = {}
     families_by_id = {}
-    if jobs:
-        for job in jobs:
-            if job.sample_ids is not None:
-                for sample_id in [sid for sid in job.sample_ids if sid not in samples_by_id]:
-                    samples_by_id[sample_id] = client.getSampleById(sample_id)
-        for job in jobs:
-            if job.family_id is not None:
-                families_by_id[job.family_id] = client.getFamily(job.family_id)
+    described_jobs = readable_jobs(jobs)
+    for job in described_jobs:
+        if job.sample_ids is not None:
+            for sample_id in [sid for sid in job.sample_ids if sid not in samples_by_id]:
+                samples_by_id[sample_id] = client.getSampleById(sample_id)
+    for job in described_jobs:
+        if job.family_id is not None:
+            families_by_id[job.family_id] = client.getFamily(job.family_id)
     return render_template('jobs.html', families=families_by_id, samples=samples_by_id, active=active_category, state=state_category, ascending=ascending, order_toggle=order_toggle, jobs=jobs, menu_configuration=menu_configuration, p=pagination, query=query, match_count=len(matches) if query else None)
 
 
@@ -883,9 +901,12 @@ def job_by_id(job_id):
         return render_template("job_invalid.html", job_id=job_id)
 
     # Before anything reads the parameters, because everything below does and the
-    # overview template does too: its h1 and the job_column_table macro both print
-    # them, so there is no rendering this job's page without them. This is where a
-    # great many redirects land - every job submitter, and any route that refuses a
+    # overview template does too - its h1 and the job_column_table macro both print
+    # them. Rendering the overview anyway would fail two ways depending on the shape:
+    # a JSONDecodeError or TypeError out of Jinja for some, and for the ones that
+    # raise AttributeError a blank name, which Jinja's getattr swallows into a page
+    # indistinguishable from a job that simply has no parameters. This is also where
+    # a great many redirects land - every job submitter, and any route that refuses a
     # job and sends the caller back to it - and a refusal that lands on a 500 has not
     # refused anything, because the flash it set is never rendered.
     parameters = job_parameters_or_none(job_info)
@@ -905,14 +926,18 @@ def job_by_id(job_id):
     child_jobs = sorted([client.getJobData(id) for id in job_info.all_dependencies], key=lambda x: x.number)
     samples_by_id = {}
     families_by_id = {}
-    if child_jobs:
-        for job in child_jobs:
-            if job.sample_ids is not None:
-                for sample_id in [sid for sid in job.sample_ids if sid not in samples_by_id]:
-                    samples_by_id[sample_id] = client.getSampleById(sample_id)
-        for job in child_jobs:
-            if job.family_id is not None:
-                families_by_id[job.family_id] = client.getFamily(job.family_id)
+    # A child whose own payload cannot be read must not take its parent's page down:
+    # the lookups below read that payload, and so does the row macro. Both degrade to
+    # the one row rather than the page - a cross compare's children are the jobs it did
+    # the work in, so dropping one would misreport what it ran.
+    described_children = readable_jobs(child_jobs)
+    for job in described_children:
+        if job.sample_ids is not None:
+            for sample_id in [sid for sid in job.sample_ids if sid not in samples_by_id]:
+                samples_by_id[sample_id] = client.getSampleById(sample_id)
+    for job in described_children:
+        if job.family_id is not None:
+            families_by_id[job.family_id] = client.getFamily(job.family_id)
     return render_template('job_overview.html', families=families_by_id, samples=samples_by_id, job_info=job_info, auto_refresh=auto_refresh, child_jobs=child_jobs)
 
 

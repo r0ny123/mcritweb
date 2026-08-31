@@ -13,7 +13,15 @@
 
 {% macro job_description(job, families_by_id, samples_by_id) %}
 
-{% if job.method == "getMatchesForSample" %}
+{# Every branch below reads the job's payload, so this has to come first: for a job
+   whose payload cannot be parsed there is nothing to describe, and reaching for it
+   would take down the whole listing rather than this one row. The rest of the row -
+   number, timestamps, progress, the job id it links to - does not touch the payload
+   and still renders. #}
+{% if not job_payload_is_readable(job) %}
+  <span class="text-muted" title="This job's stored request cannot be parsed.">{{ job.method or "Job" }} | payload unreadable</span>
+
+{% elif job.method == "getMatchesForSample" %}
   {% set sample_entry = samples_by_id.get(job.sample_id) %}
   Match 1vN | 
   {% if sample_entry %}
