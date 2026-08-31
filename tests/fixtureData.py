@@ -45,6 +45,11 @@ def job_id_of(report):
     return load(f"{report}.job")["_id"]["$oid"]
 
 
+#: The sample the captured 1-vs-N report (`matches_for_sample`) was produced for, and
+#: the sample the reference functions belong to.
+MATCHED_SAMPLE_ID = 0
+
+
 # --- the search/cursor protocol ------------------------------------------------
 #
 # Modelled on its observable contract, not its encoding. mcrit's cursor is a
@@ -219,6 +224,44 @@ class CorpusMcritClient:
     def isFunctionId(self, function_id, *args, **kwargs):
         self._record("isFunctionId", function_id, *args, **kwargs)
         return int(function_id) in self._functions
+
+    def getMatchesForPicHash(self, pichash, summary=False, *args, **kwargs):
+        """Every function carrying this pichash, as (family_id, sample_id, function_id).
+
+        `summary=True` is what `explore.function_by_id` asks for and
+        `column_table.html` renders: how many distinct families, samples and functions
+        the hash occurs in. Counted over the corpus, so it only knows about the
+        functions the fixtures captured.
+        """
+        self._record("getMatchesForPicHash", pichash, *args, summary=summary, **kwargs)
+        matches = {
+            (entry.family_id, entry.sample_id, entry.function_id)
+            for entry in self._functions.values() if entry.pichash == pichash
+        }
+        if summary:
+            return {
+                "families": len({match[0] for match in matches}),
+                "samples": len({match[1] for match in matches}),
+                "functions": len({match[2] for match in matches}),
+            }
+        return matches
+
+    # --- job submission ----------------------------------------------------------
+
+    def requestMatchesForSample(self, sample_id, *args, **kwargs):
+        """mcrit deduplicates by descriptor and answers the job it already has.
+
+        The corpus holds exactly one captured 1-vs-N job, for the sample its reference
+        functions belong to, so that is the only submission this can answer. Anything
+        else is a gap in the fixtures rather than a job, and says so.
+        """
+        self._record("requestMatchesForSample", sample_id, *args, **kwargs)
+        if int(sample_id) != MATCHED_SAMPLE_ID:
+            raise NotImplementedError(
+                f"The corpus has no captured 1-vs-N job for sample {sample_id}, only for "
+                f"sample {MATCHED_SAMPLE_ID}. Capture one with tests/fixtures/regenerate.py."
+            )
+        return job_id_of("matches_for_sample")
 
     # --- jobs and results --------------------------------------------------------
 
