@@ -36,10 +36,15 @@
                                 if (request !== pending) {
                                     return;
                                 }
-                                const names = data.family_names || [];
-                                completer.setData(names.map(function (name) {
-                                    return {label: name, value: name};
-                                }));
+                                // The items come out of `explore.family_names`, which
+                                // builds them with the same `autocomplete_items` the
+                                // shipped-with-the-page call site uses as a filter -
+                                // autocomplete.js renders a suggestion through
+                                // innerHTML and into a data-label attribute, so a
+                                // family name is markup there, not text (issue #68).
+                                // Building {label, value} here instead would be a
+                                // second, unescaped producer.
+                                completer.setData(data.autocomplete_items || []);
                             })
                             // an aborted request, an expired session answering with the
                             // login page, an unreachable backend: no suggestions, and the

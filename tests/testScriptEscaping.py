@@ -20,6 +20,7 @@ import os
 import re
 
 import pytest
+from markupsafe import escape
 from mcrit.storage.FamilyEntry import FamilyEntry
 
 LOG = logging.getLogger(__name__)
@@ -180,11 +181,13 @@ def test_a_family_name_stays_a_string_in_the_type_ahead_response(client, as_role
 
     A JSON body is not a script context and is not served as one, so what this pins is
     that the endpoint stays JSON and the name stays a string *value* in it - never
-    concatenated into a document. Note what it does not cover: the widget that receives
-    it, `Autocomplete.createItem` in `static/autocomplete.js`, builds its dropdown by
-    interpolating the label into an HTML string. That injection point predates #77 and
-    is unchanged by it - the names reached exactly the same call when they were embedded
-    in the page - but it is not made safe by anything here.
+    concatenated into a document.
+
+    The sink beyond it - `Autocomplete.createItem` in `static/autocomplete.js` builds
+    its dropdown by interpolating the label into an HTML string - is not shut by
+    anything in this file. It is shut by the endpoint HTML-escaping what it answers
+    with, which is issue #68 and is pinned in tests/testAutocompleteEscaping.py; that
+    is why the value read back here is the escaped name.
     """
     family_id, family_entry = next(iter(fake_mcrit._families.items()))
     fake_mcrit._families[family_id] = FamilyEntry.fromDict(
@@ -196,4 +199,6 @@ def test_a_family_name_stays_a_string_in_the_type_ahead_response(client, as_role
 
     assert response.status_code == 200
     assert response.mimetype == "application/json"
-    assert response.json["family_names"] == [BREAKOUT_NAME]
+    assert response.json["autocomplete_items"] == [
+        {"label": str(escape(BREAKOUT_NAME)), "value": str(escape(BREAKOUT_NAME))}
+    ]
