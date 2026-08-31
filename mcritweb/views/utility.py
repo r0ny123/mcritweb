@@ -99,6 +99,37 @@ def get_user_column_setup(table_type:str):
     ucs_dict = user_column_settings.toUserColumnSettings()
     return ucs_dict[table_type]["active"]
 
+#: A backend-issued job id, as it is allowed to appear in a path. MongoQueue answers a
+#: 24-character ObjectId and LocalQueue a uuid4, so both hex and hyphens are normal;
+#: nothing else is, and in particular no separator and no dot, so a job id coming back
+#: off the wire or in from a URL cannot walk out of the uploads folder.
+QUERY_UPLOAD_JOB_ID = re.compile(r"^[A-Za-z0-9-]{1,64}\Z")
+
+
+def query_upload_path(app, job_id):
+    """Where `analyze.query` keeps the file one query job was run for, or None.
+
+    The single definition of that name, because two sides depend on it agreeing: the
+    query route writes the file, and promoting a query to a sample (issue #9) reads it
+    back to resubmit the same bytes. It is keyed by job id because that is what both
+    of them have and neither of them can choose - the id is issued by the backend when
+    the job is queued, after the upload has been accepted.
+
+    It used to be keyed by a sha256 instead, and that is the bug this replaces: for an
+    .smda upload the hash was read out of the uploaded report's own `sha256` field, so
+    any visitor could name the file after another user's query and overwrite it. A
+    digest of the uploaded bytes fixes that half, but leaves the read side unable to
+    find anything - a query report records the sample's declared hash, not a hash of
+    the bytes that were posted, so there is no path from a job to that name.
+
+    Returns None for anything that is not a usable job id, so the caller decides what
+    an unpromotable job should say rather than this raising.
+    """
+    if not isinstance(job_id, str) or not QUERY_UPLOAD_JOB_ID.match(job_id):
+        return None
+    return os.sep.join([app.instance_path, "temp", "uploads", job_id])
+
+
 def ensure_local_data_paths(app, clear_data=False):
     # nuke both cache and temp folders
     nuke_paths = [
