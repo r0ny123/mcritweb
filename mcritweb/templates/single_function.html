@@ -27,7 +27,60 @@ Function: {{ function_id }}
 <span><h1>Function: {{ function_id }}</h1></span>
 <span style="float:right"><a href="#function_xcfg">go to cfg</a></span>
     {% if entry is not none %}
-      {{ function_column_table(("Function Info", entry, sample_entry, pichash_match_summary)) }}
+      {# the sections are independent on purpose: no data-bs-parent, so opening the
+         API list does not fold the overview away again (issue #34) #}
+      <div class="accordion mb-3" id="function_sections">
+        <div class="accordion-item">
+          <h2 class="accordion-header" id="function_info_heading">
+            <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#function_info_section" aria-expanded="true" aria-controls="function_info_section">
+              Function Info
+            </button>
+          </h2>
+          <div id="function_info_section" class="accordion-collapse collapse show" aria-labelledby="function_info_heading">
+            <div class="accordion-body">
+              {{ function_column_table(("Function Info", entry, sample_entry, pichash_match_summary)) }}
+            </div>
+          </div>
+        </div>
+        <div class="accordion-item">
+          <h2 class="accordion-header" id="api_usage_heading">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#api_usage_section" aria-expanded="false" aria-controls="api_usage_section">
+              API Usage{% if api_usage %} ({{ api_usage|length }}){% endif %}
+            </button>
+          </h2>
+          <div id="api_usage_section" class="accordion-collapse collapse" aria-labelledby="api_usage_heading">
+            <div class="accordion-body">
+              {# explore.function_by_id is the only route that renders this page, and it
+                 always passes api_usage: None for "unknown", a possibly empty list of
+                 (name, call sites) otherwise. Guarding against the kwarg being absent
+                 would dress a programming error up as a fact about the function. #}
+              {% if api_usage is none %}
+                <p>This function is stored with no control flow information, so its API calls are unknown.</p>
+              {% elif not api_usage %}
+                <p>This function does not reference any imported APIs.</p>
+              {% else %}
+                <table class="table table-hover table-sm">
+                  <thead class="thead-light">
+                    <tr>
+                      <th scope="col">API</th>
+                      <th style="text-align: right;" scope="col">Call Sites</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for api_name, num_call_sites in api_usage %}
+                      <tr>
+                        {# text-break: an import name comes out of the analysed binary and can be arbitrarily long #}
+                        <td valign="middle" class="font-monospace text-break">{{ api_name }}</td>
+                        <td align="right" valign="middle" class="font-monospace">{{ num_call_sites }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
 
       <script type="text/javascript">
       window.onload = function() {
