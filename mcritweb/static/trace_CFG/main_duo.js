@@ -163,6 +163,76 @@
 
   var zoom = null;
 
+  // mcritweb: issue #74 - synchronised panning/zooming of the two CFG panes.
+  // Each pane registers its own zoom behaviour, its fit-to-view scale and the extent
+  // of its graph here, keyed by graph_id ("a" / "b").
+  var graphPanes = {};
+  // Driving the other pane dispatches a zoom event there, whose handler would
+  // otherwise drive this one straight back: guard against the ping-pong.
+  var isSyncingGraphPanes = false;
+  var isGraphSyncEnabled = true;
+
+  function isUsableExtent(value){
+    return typeof value === "number" && isFinite(value) && value > 0;
+  }
+
+  // mcritweb: issue #74
+  // Mirror one pane's view onto the other. The two compared functions differ in block
+  // count and extent, so each pane gets its own fit-to-view scale (initialScale) and a
+  // shared *absolute* transform would push the smaller graph off screen. What is
+  // mirrored is therefore the view *relative* to each pane's own fit: the same zoom
+  // factor away from fitted, and the same pan as a fraction of that pane's own graph
+  // extent. Two identical graphs fit alike, so this reduces to an exact 1:1 mirror -
+  // the common case on a comparison page.
+  //
+  // Worth being precise about *which* point the two panes agree on, because it is not
+  // the obvious one. The arithmetic below holds t/(s*W) equal across the panes, which
+  // is the graph-space coordinate at screen x = 0 - so it is the viewport's top-left
+  // corner that shows the same relative part of each function, not its centre. The two
+  // coincide exactly when the panes' fitted extents match (k = 1), which is the case
+  // for identical graphs and per-axis whenever both panes are limited by the same
+  // axis. They diverge when one pane is width-fitted and the other height-fitted.
+  // Measured on four function pairs in both orderings, wheel and drag: the visible
+  // fractions track each other throughout and there is no case where the passive pane
+  // goes off screen while the active one stays usable. Anchoring the centre instead
+  // would be a defensible change; it is not what this does.
+  function syncGraphPanes(source_id, translate, scale){
+    if(isSyncingGraphPanes || !isGraphSyncEnabled){
+      return;
+    }
+    var source = graphPanes[source_id];
+    var target = graphPanes[source_id === "a" ? "b" : "a"];
+    // The panes load over separate requests; the second registers only once rendered.
+    if(!source || !target){
+      return;
+    }
+    // Defensive, and deliberately not motivated by a case anyone has produced. A
+    // function stored without an xcfg does not reach here at all: `fetchDotGraph`
+    // raises before it answers, so `showGraph` never runs and the pane never
+    // registers. (With issue #67's one-node placeholder it does render, and its
+    // fitted scale is finite - measured 0.7752817603312121.) The guard stays because
+    // a degenerate extent would be silently mirrored as NaN into a pane the user was
+    // looking at, which is worse than doing nothing.
+    if(!isUsableExtent(source.baseScale) || !isUsableExtent(target.baseScale)
+      || !isUsableExtent(source.width) || !isUsableExtent(target.width)
+      || !isUsableExtent(source.height) || !isUsableExtent(target.height)
+      || !translate || !isFinite(scale) || !isFinite(translate[0]) || !isFinite(translate[1])){
+      return;
+    }
+    var targetScale = (scale / source.baseScale) * target.baseScale;
+    var targetX = (translate[0] / (source.baseScale * source.width)) * target.baseScale * target.width;
+    var targetY = (translate[1] / (source.baseScale * source.height)) * target.baseScale * target.height;
+    if(!isFinite(targetScale) || !isFinite(targetX) || !isFinite(targetY)){
+      return;
+    }
+    isSyncingGraphPanes = true;
+    try {
+      target.zoom.translate([targetX, targetY]).scale(targetScale).event(target.svg);
+    } finally {
+      isSyncingGraphPanes = false;
+    }
+  }
+
   dotFile = null;
   loopsObj = null;
  
@@ -2251,16 +2321,46 @@ function highlightUERs(UERtype){
     zoom = d3.behavior.zoom().on("zoom", function() {
       inner.attr("transform", "translate(" + d3.event.translate + ")" +
                                   "scale(" + d3.event.scale + ")");
+      // mcritweb: issue #74 - carry this view over to the other pane
+      syncGraphPanes(graph_id, d3.event.translate, d3.event.scale);
     });
     
     svg.call(zoom).on("dblclick.zoom", null);
-       
 
-	zoom
-      // .translate([0 , 20])
-      .scale(initialScale)
-      .event(svg);
-  
+    // mcritweb: issue #74 - register before the initial fit below dispatches its own
+    // zoom event. `zoom` is reassigned per pane, so keep this pane's own behaviour.
+    graphPanes[graph_id] = {
+      zoom: zoom,
+      svg: svg,
+      baseScale: initialScale,
+      width: graph_svg_width,
+      height: graph_svg_height
+    };
+
+    // mcritweb: issue #74 - the initial fit is not a user gesture, so do not let it
+    // drag a pane the user has already moved back to its own fitted view
+    isSyncingGraphPanes = true;
+    try {
+      zoom
+        // .translate([0 , 20])
+        .scale(initialScale)
+        .event(svg);
+    } finally {
+      isSyncingGraphPanes = false;
+    }
+
+    // mcritweb: issue #74 - the two panes are fetched independently, so one finishes
+    // rendering after the other. If the user moved the first pane while the second was
+    // still loading, the fit above leaves the second at its *own* fitted view and the
+    // checked "Synchronize Graphs" panes disagree until the next gesture. Adopt the
+    // pane that is already registered instead. When it is still at its own fit - the
+    // usual case - the mirror is relative to each pane's fit, so this resolves to
+    // exactly the fitted view just set, and nothing moves.
+    var other = graphPanes[graph_id === "a" ? "b" : "a"];
+    if(other){
+      syncGraphPanes(graph_id === "a" ? "b" : "a", other.zoom.translate(), other.zoom.scale());
+    }
+
   var nodes = svg.selectAll("g.node.enter");
   var brush = svg.append("g")
       .attr("class", "brush");
@@ -2274,6 +2374,16 @@ function highlightUERs(UERtype){
 
   d3.select("#enableTooltip").on("change", function(){
     isTooltipEnabled = this.checked;
+  });
+
+  // mcritweb: issue #74
+  var graphSyncToggle = d3.select("#enableGraphSync");
+  // some browsers restore a checkbox across a reload, so read it rather than assume it
+  if(!graphSyncToggle.empty()){
+    isGraphSyncEnabled = graphSyncToggle.property("checked");
+  }
+  graphSyncToggle.on("change", function(){
+    isGraphSyncEnabled = this.checked;
   });
 
   d3.select("#enableNodeDrag").on("change", function(){
