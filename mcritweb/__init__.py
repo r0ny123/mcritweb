@@ -59,7 +59,13 @@ def create_app(test_config=None, instance_path=None):
     from .secret_key import INSECURE_DEFAULT, load_or_create_secret_key
     from .views import administration, analyze, api, authentication, data, explore
     from .views.client import get_client
-    from .views.utility import ensure_local_data_paths, forget_server_probe, get_mcritweb_version_from_setup
+    from .views.utility import (
+        describable_jobs,
+        ensure_local_data_paths,
+        forget_server_probe,
+        get_mcritweb_version_from_setup,
+        job_is_describable,
+    )
 
     # create and configure the app
     # instance_path is overridable so tests get their own cache/temp/uploads tree
@@ -247,6 +253,13 @@ def create_app(test_config=None, instance_path=None):
     def join_hint_strings(list_of_strings):
         return "\n".join(sorted(list_of_strings))
 
+    # Nothing job_row prints about a job is stored: parameters, arguments, sample_ids,
+    # family_id, sample_id, sha256 and the rest are all rebuilt from the payload on
+    # access and raise for one it cannot be rebuilt from. The macro has to ask before
+    # it tries, because a template has no try/except: without this, one bad job takes
+    # down whichever listing shows it rather than just its own row.
+    app.add_template_global(job_is_describable)
+
     # the user manual. Public, and deliberately not under /admin: it was the only
     # route in that blueprint without an admin gate, which made the prefix a lie.
     # Rendered from docs/manual/README.md, which is the only copy - see issue #91.
@@ -277,14 +290,17 @@ def create_app(test_config=None, instance_path=None):
             samples_by_id = {}
             families_by_id = {}
             latest_samples = []
-            if jobs:
-                for job in jobs:
-                    if job.sample_ids is not None:
-                        for sample_id in [sid for sid in job.sample_ids if sid not in samples_by_id]:
-                            samples_by_id[sample_id] = client.getSampleById(sample_id)
-                for job in jobs:
-                    if job.family_id is not None:
-                        families_by_id[job.family_id] = client.getFamily(job.family_id)
+            # One job among the five newest finished matches that cannot supply these
+            # took the index down for every logged-in user - this is the page they all
+            # land on. The row macro still lists it; only the lookups skip it.
+            described_jobs = describable_jobs(jobs)
+            for job in described_jobs:
+                if job.sample_ids is not None:
+                    for sample_id in [sid for sid in job.sample_ids if sid not in samples_by_id]:
+                        samples_by_id[sample_id] = client.getSampleById(sample_id)
+            for job in described_jobs:
+                if job.family_id is not None:
+                    families_by_id[job.family_id] = client.getFamily(job.family_id)
             
             sample_results = client.search_samples("", is_ascending=False, cursor=None, sort_by="sample_id", limit=5)
             if sample_results:

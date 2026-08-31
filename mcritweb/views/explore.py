@@ -11,7 +11,7 @@ import mcritweb.views.cfg_explorer_detector as cfg_explorer_detector
 from mcritweb.views.authentication import contributor_required, visitor_required
 from mcritweb.views.client import get_client
 from mcritweb.views.cursor_pagination import CursorPagination
-from mcritweb.views.utility import get_user_column_setup, mcrit_server_required
+from mcritweb.views.utility import describable_jobs, get_user_column_setup, mcrit_server_required
 
 bp = Blueprint('explore', __name__, url_prefix='/explore')
 
@@ -256,7 +256,7 @@ def samples():
             samples.append(SampleEntry.fromDict(sample_dict))
 
     jobs = client.getQueueData()
-    job_collection = JobCollection(jobs)
+    job_collection = JobCollection(describable_jobs(jobs))
     job_collection.filterToSampleIds([s.sample_id for s in samples])
 
     all_families = client.getFamilies()
@@ -316,7 +316,7 @@ def family_by_id(family_id):
         family_names = [family_entry.family_name for family_entry in all_families.values()]
 
         jobs = client.getQueueData()
-        job_collection = JobCollection(jobs)
+        job_collection = JobCollection(describable_jobs(jobs))
         job_collection.filterToSampleIds([s.sample_id for s in samples])
         user_column_setup = get_user_column_setup("samples_table")
         return render_template("single_family.html", family=family_info, samples=samples, family_names=family_names, job_collection=job_collection, pagination=pagination, query=original_query, user_column_setup=user_column_setup)
@@ -344,13 +344,14 @@ def sample_by_id(sample_id):
             flash_search_failed(query, "functions")
         else:
             jobs = client.getQueueData(filter=sample_id)
-            job_collection = JobCollection(jobs)
+            job_collection = JobCollection(describable_jobs(jobs))
             job_collection.filterToSampleIds([sample_id])
             for function_dict in results['search_results'].values():
                 functions.append(FunctionEntry.fromDict(function_dict))
         all_families = client.getFamilies()
         family_names = [family_entry.family_name for family_entry in all_families.values()]
         samples_by_id = {}
+        # already filtered to what can be described, when the collection was built
         for job in job_collection.getJobs():
             if job.sample_ids is not None:
                 for sample_id in [sid for sid in job.sample_ids if sid not in samples_by_id]:
