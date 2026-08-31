@@ -13,6 +13,7 @@ what stopped the tokenised stylesheet from being a dark mode in the first place.
 
 import logging
 import os
+import pathlib
 import re
 import unittest
 
@@ -199,6 +200,9 @@ def style_texts(source):
         yield match.group(1)
 
 
+STYLESHEET = pathlib.Path(__file__).resolve().parent.parent / "mcritweb" / "static" / "style.css"
+
+
 def literal_colours(style_text):
     """Tokens in a colour-valued declaration that are neither var() nor a keyword."""
     findings = []
@@ -242,6 +246,97 @@ def test_no_template_spells_out_a_colour(path):
         f"{os.path.relpath(path, TEMPLATE_ROOT)} paints a colour the theme cannot reach: "
         f"{findings}. Name it in static/style.css and use var(--name) here."
     )
+
+#: CSS named colours this stylesheet has actually used. Deliberately not the full
+#: 148-name list: a name that has never appeared here is likelier to be a keyword such
+#: as `currentColor` or `transparent` than a colour somebody hard-coded.
+NAMED_COLOURS = {
+    "slategray", "slategrey", "yellowgreen", "white", "black", "red", "green", "blue",
+    "gray", "grey", "silver", "orange", "whitesmoke", "lightgray", "lightgrey",
+}
+
+#: Functional notations, matched on a whitespace-stripped copy of the line.
+COLOUR_FUNCTIONS = ("rgb(", "rgba(", "hsl(", "hsla(")
+
+HEX_COLOUR = re.compile("#[0-9a-f]{3,8}")
+WORD = re.compile("[a-z-]+")
+
+
+def spells_out_a_colour(line):
+    """Whether a stylesheet line names a colour instead of using a var().
+
+    Written without a single backslash escape, and matched by set membership rather
+    than by word boundaries, because that is what the first version got wrong: its
+    boundary escapes were written into the file as literal backspace bytes, so the
+    pattern silently matched nothing and the ratchet passed against the very defect it
+    was added for. A check that cannot fail is not evidence.
+    """
+    lowered = line.lower()
+    if HEX_COLOUR.search(lowered):
+        return True
+    compact = "".join(lowered.split())
+    if any(function in compact for function in COLOUR_FUNCTIONS):
+        return True
+    return any(word in NAMED_COLOURS for word in WORD.findall(lowered))
+
+
+def rules_outside_the_palette(css):
+    """Every line of the stylesheet that is not inside a `:root` block.
+
+    The palette blocks are where colours are supposed to be spelled out; everywhere else
+    is a rule, and a rule that names a colour has decided what theme it is painting.
+    """
+    depth, in_palette, outside = 0, False, []
+    for number, line in enumerate(css.splitlines(), start=1):
+        if depth == 0 and ":root" in line:
+            in_palette = True
+        if not in_palette:
+            outside.append((number, line))
+        depth += line.count("{") - line.count("}")
+        if in_palette and depth == 0:
+            in_palette = False
+    return outside
+
+
+def test_the_helper_recognises_a_spelled_out_colour():
+    """The ratchet below is only worth having if this is right, and the first version
+    of it was not - so the discriminator gets its own test rather than being trusted."""
+    for names_one in ("  color: slategray;", "  background-color: rgb(240, 240, 240);",
+                      "  border: 1px solid #495057;", "  color: RGBA(0,0,0,.5);"):
+        assert spells_out_a_colour(names_one), names_one
+    for names_none in ("  color: var(--muted-text);", "  background: var(--surface-muted);",
+                      "  border-color: transparent;", "  margin-top: 1.25rem;",
+                      "  content: 'rendering diagram';"):
+        assert not spells_out_a_colour(names_none), names_none
+
+
+def test_the_stylesheet_itself_spells_out_no_colour_outside_the_palette():
+    """The same rule as the template ratchet above, applied to the file that declares
+    the palette.
+
+    `test_no_template_spells_out_a_colour` walks `templates/` only, so a literal in
+    `static/style.css` was never in scope - and the 60-branch merge put two there, on
+    `.mcrit-diagram`, carried in from the parent that predated tokenisation. They painted
+    the diagram placeholder as a light-grey box with slategray text on a dark page, and
+    made the file's own comment ("not one rule below `:root` knows which theme it is
+    painting") untrue.
+
+    This does not reuse `literal_colours`: that helper reads inline style attributes,
+    where it never meets `!important` or a spaced `rgb(240, 240, 240)`, and reports both
+    as literals.
+    """
+    findings = [
+        f"style.css:{number}: {line.strip()}"
+        for number, line in rules_outside_the_palette(STYLESHEET.read_text())
+        if spells_out_a_colour(line)
+    ]
+
+    assert not findings, (
+        "static/style.css names a colour outside the palette: "
+        + "; ".join(findings)
+        + ". Declare it in a :root block and use var(--name) in the rule.")
+
+
 
 
 if __name__ == "__main__":
