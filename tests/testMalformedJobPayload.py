@@ -9,27 +9,35 @@ property raises JSONDecodeError, AttributeError or TypeError. `arguments`, `samp
 and `family_id` are rebuilt from the same place and raise with it, so almost everything
 a job page shows about a job past its method name is unavailable at once.
 
-Two pages have to survive that.
+A job's own page has to survive that. `data.job_by_id` dereferenced
+`job_info.parameters` unconditionally, in `if 'addBinarySample' in job_info.parameters`,
+so a job whose own payload was unreadable turned its own page into a 500. That page is
+where a great many redirects land - every job submitter, and any route that refuses a
+job and sends the caller back to it - which makes it the wrong page to have no answer
+for a job the backend hands out happily. It answers with `job_corrupted.html`, the
+sibling of the `result_corrupted.html` that `data.result` already answers its own
+unreadable reports with.
 
-`data.job_by_id` dereferenced `job_info.parameters` unconditionally, in
-`if 'addBinarySample' in job_info.parameters`, so a job whose own payload was unreadable
-turned its own page into a 500. That page is where a great many redirects land - every
-job submitter, and any route that refuses a job and sends the caller back to it - which
-makes it the wrong page to have no answer for a job the backend hands out happily. It
-answers with `job_corrupted.html`, the sibling of the `result_corrupted.html` that
-`data.result` already answers its own unreadable reports with.
+So does every page that *lists* jobs, and there are six: the job queue, a job's
+dependencies, the home page's five newest matches, the sample listing, a family, and a
+sample. There one bad job must not take down a page that is about the other jobs, so it
+degrades to its own row. It has to degrade in two places at once - the sample and family
+lookups in the view, and the `job_description` macro - because both read the payload.
 
-A job page also lists other jobs: its dependencies on `job_overview.html`, the queue on
-`jobs.html`. There one unreadable job must not take down the page it appears on, which
-is about the other jobs - so the row is rendered as unreadable and its neighbours are
-unaffected. That degrades in two places, because both the `sample_ids`/`family_id`
-lookups in the view and the `job_description` macro read the same payload.
+Being readable is not one question but several, which is the trap here. `Job.parameters`
+answers happily for `params = "{}"` while `sample_ids` raises IndexError off
+`int(self.arguments[0])`, and for `params = '{"0": "abc"}'` it answers
+`getMatchesForSample(abc)` while `sample_ids` raises ValueError off `int("abc")`. A
+guard that asks only whether `parameters` reads back therefore passes both straight
+through to the lookup that breaks. The predicate has to be every field the listing
+touches, which is what `job_is_describable` asks.
 """
 
 import logging
 import unittest
 
 import pytest
+from fixtureData import job_id_of
 from mcrit.queue.LocalQueue import Job
 
 LOG = logging.getLogger(__name__)
@@ -47,6 +55,18 @@ MALFORMED_PARAMS = {
     "json array": '[1, "sample.exe"]',      # AttributeError  - a list has no .items()
     "not a string": {"0": 1},               # TypeError       - json.loads wants a str
 }
+
+
+#: Payloads whose `parameters` reads back perfectly well, and whose sample and family
+#: ids still cannot be recovered - `Job.sample_ids`, `family_id` and `sample_id` all go
+#: through `int(self.arguments[0])`, which has failure modes `parameters` does not.
+UNDESCRIBABLE_PARAMS = {
+    "no arguments": "{}",                   # IndexError - arguments[0] of an empty list
+    "sample id is not a number": '{"0": "abc"}',   # ValueError - int("abc")
+}
+
+#: Everything a listing has to survive, by either route.
+UNLISTABLE_PARAMS = dict(MALFORMED_PARAMS, **UNDESCRIBABLE_PARAMS)
 
 
 def job_document(job_id, params, method="getMatchesForSample", number=1,
@@ -216,6 +236,21 @@ def test_a_readable_job_still_renders_its_overview(client, malformed_job):
     assert "getMatchesForSample(1, readable.exe)" in page
 
 
+@pytest.mark.parametrize("shape", sorted(UNDESCRIBABLE_PARAMS))
+def test_a_job_whose_name_reads_back_gets_its_own_page(client, malformed_job, shape):
+    """Deliberately narrower than the listing guard, because the two pages need
+    different things. A job's own page prints `parameters` and nothing else off the
+    payload - `job_column_table` shows the task, the id and the timestamps - so a job
+    whose arguments are gone still has a page worth rendering, and calling it corrupted
+    would be throwing away a name it can perfectly well state."""
+    malformed_job(UNDESCRIBABLE_PARAMS[shape])
+
+    page = client.get(f"/data/jobs/{JOB_ID}").get_data(as_text=True)
+
+    assert "is corrupted" not in page
+    assert "getMatchesForSample(" in page
+
+
 def test_a_job_with_no_parameters_at_all_is_not_called_corrupted(client, backend):
     """`Job.parameters` answers "" - without raising - for a record carrying no `params`
     key, so an empty name is a legitimate answer and not a symptom. Telling those two
@@ -229,25 +264,29 @@ def test_a_job_with_no_parameters_at_all_is_not_called_corrupted(client, backend
     assert "is corrupted" not in page
 
 
-def test_an_unexpected_error_is_not_reported_as_a_corrupt_payload(client, backend):
-    """The recovery catches what mcrit can raise out of this payload - a JSONDecodeError
-    (a ValueError), an AttributeError, a TypeError - and nothing else. A bare
-    `except Exception` would turn a future bug in `Job` into a page calmly reporting
-    that everybody's jobs are corrupt, which is both wrong and unreportable."""
-    backend([job_document(JOB_ID, "{}")])
+class JobWithABrokenProperty(Job):
+    """A Job whose `parameters` fails for a reason that is not a bad payload."""
 
-    class BrokenJob:
-        job_id = JOB_ID
+    @property
+    def parameters(self):
+        raise KeyError("number")
 
-        @property
-        def parameters(self):
-            raise KeyError("number")
 
-    with client.application.test_request_context():
-        from mcritweb.views.data import job_parameters_or_none
+def test_an_unexpected_error_is_not_reported_as_a_corrupt_payload(client, app, as_role):
+    """The recovery catches what mcrit can raise out of an unreadable payload and
+    nothing else. A bare `except Exception` would turn a future bug in `Job` into every
+    job page calmly reporting a corrupt payload, which is both wrong and unreportable -
+    so the route has to let this one out. TESTING propagates it rather than serving a
+    500, which is why this asserts on the exception and not on a status code."""
+    class BrokenBackend(JobsBackend):
+        def getJobData(self, job_id, *args, **kwargs):
+            return JobWithABrokenProperty(job_document(JOB_ID, "{}"), None)
 
-        with pytest.raises(KeyError):
-            job_parameters_or_none(BrokenJob())
+    app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: BrokenBackend([])
+    as_role("visitor")
+
+    with pytest.raises(KeyError):
+        client.get(f"/data/jobs/{JOB_ID}")
 
 
 # --- other jobs listed on a job page -------------------------------------------
@@ -287,7 +326,7 @@ def test_the_unreadable_child_is_shown_rather_than_hidden(client, parent_with_ba
 
     page = client.get(f"/data/jobs/{JOB_ID}").get_data(as_text=True)
 
-    assert "payload unreadable" in page
+    assert "details unavailable" in page
     assert CHILD_ID in page
 
 
@@ -314,24 +353,167 @@ def test_a_readable_child_is_still_described(client, backend):
 
     page = client.get(f"/data/jobs/{JOB_ID}").get_data(as_text=True)
 
-    assert "payload unreadable" not in page
+    assert "details unavailable" not in page
     assert "Match 1vN" in page
 
 
-def test_the_browse_list_survives_an_unreadable_job(client, backend):
+@pytest.mark.parametrize("shape", sorted(UNLISTABLE_PARAMS))
+def test_the_browse_list_survives_a_job_it_cannot_describe(client, backend, shape):
     """The same two breakages, on the page that lists the queue. This is the page the
     job search was already made safe for by filtering unreadable jobs out of a search;
     browsing shows them, so browsing has to render them."""
     backend([
         job_document(JOB_ID, '{"0": 7}', method="getMatchesForSample", number=1),
-        job_document(CHILD_ID, "{not json", method="getMatchesForSample", number=2),
+        job_document(CHILD_ID, UNLISTABLE_PARAMS[shape], method="getMatchesForSample", number=2),
     ])
 
     response = client.get("/data/jobs?active=getMatchesForSample")
 
-    assert response.status_code == 200
-    assert "payload unreadable" in response.get_data(as_text=True)
+    assert response.status_code == 200, f"{shape} still breaks the job listing"
+    assert "details unavailable" in response.get_data(as_text=True)
     assert "Match 1vN" in response.get_data(as_text=True), "its neighbour is unaffected"
+
+
+@pytest.mark.parametrize("shape", sorted(UNLISTABLE_PARAMS))
+def test_a_parent_survives_a_child_it_cannot_describe(client, parent_with_bad_child, shape):
+    """The `{}` and `"abc"` shapes are the ones a `parameters`-only guard waves through:
+    it reads them back as `getMatchesForSample()` and `getMatchesForSample(abc)`, and
+    then `sample_ids` raises IndexError and ValueError on the very next line."""
+    parent_with_bad_child(child_params=UNLISTABLE_PARAMS[shape])
+
+    response = client.get(f"/data/jobs/{JOB_ID}")
+
+    assert response.status_code == 200, f"{shape} still breaks the parent page"
+    assert "details unavailable" in response.get_data(as_text=True)
+
+
+# --- the other four pages that list jobs ---------------------------------------
+#
+# A job listing is not confined to the jobs blueprint. The home page shows the five
+# newest finished matches, and every sample-bearing page in `explore` builds a
+# JobCollection over the *whole* queue to count a sample's jobs - so one bad job in
+# the queue reaches all of them, and `/` reaches every logged-in user.
+
+
+@pytest.fixture
+def corpus_with_a_bad_job(app, as_role, corpus_mcrit):
+    """The captured corpus, plus one job in the queue that cannot be described."""
+    def _corpus_with_a_bad_job(params, role="visitor"):
+        corpus_mcrit._queue.append(job_document(JOB_ID, params, number=999))
+        app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: corpus_mcrit
+        as_role(role)
+        return corpus_mcrit
+    return _corpus_with_a_bad_job
+
+
+#: Named so a failure says which page broke rather than which url.
+CORPUS_PAGES = ("the home page", "the sample listing", "a family", "a sample")
+
+
+def corpus_page_url(corpus, page):
+    """Where each of CORPUS_PAGES lives, against the captured corpus."""
+    return {
+        "the home page": "/",
+        "the sample listing": "/explore/samples",
+        "a family": "/explore/families/{}".format(sorted(corpus._families)[0]),
+        "a sample": "/explore/samples/{}".format(sorted(corpus._samples)[0]),
+    }[page]
+
+
+@pytest.mark.parametrize("shape", sorted(UNLISTABLE_PARAMS))
+@pytest.mark.parametrize("page", CORPUS_PAGES)
+def test_the_other_job_listings_survive_a_job_they_cannot_describe(client, corpus_with_a_bad_job, page, shape):
+    """`/` is the one that matters most: it is the page every logged-in user lands on,
+    and one bad job among the five newest finished matches took it down for all of them.
+    The three explore pages reach the whole queue through
+    `JobCollection.filterToSampleIds`, which reads `job.sample_id` off every job in it."""
+    corpus = corpus_with_a_bad_job(UNLISTABLE_PARAMS[shape])
+
+    response = client.get(corpus_page_url(corpus, page))
+
+    assert response.status_code == 200, f"{shape} still breaks {page}"
+
+
+def test_the_other_job_listings_still_show_their_healthy_jobs(client, corpus_with_a_bad_job):
+    """The guard drops the bad job from the lookups, not the good ones from the page."""
+    corpus = corpus_with_a_bad_job("{not json")
+
+    before = len(corpus._queue)
+    page = client.get(corpus_page_url(corpus, "a sample")).get_data(as_text=True)
+
+    assert before > 1, "the corpus queue has real jobs to lose"
+    assert "Match 1vN" in page
+
+
+def test_the_readability_check_is_asked_once_per_job_per_request(client, app, as_role):
+    """Nothing about a job is stored, so every one of these questions costs a
+    `json.loads`, and both the view's lookups and the row macro ask them about the same
+    jobs. Without the per-request memo a 25-row page pays for the whole probe twice per
+    row. This pins that, because the cost is invisible until a queue page gets slow."""
+    class CountingJob(Job):
+        reads = 0
+
+        @property
+        def parameters(self):
+            CountingJob.reads += 1
+            return Job.parameters.fget(self)
+
+    class CountingBackend(JobsBackend):
+        def getQueueData(self, *args, **kwargs):
+            return [CountingJob(job_document(JOB_ID, '{"0": 7}'), None)]
+
+    app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: CountingBackend([])
+    as_role("visitor")
+
+    client.get("/data/jobs?active=getMatchesForSample")
+
+    assert CountingJob.reads == 1, "the readability check is being redone per call site"
+
+
+# --- the sibling page this one was modelled on ---------------------------------
+
+
+class TestTheCorruptedResultPage:
+    """`result_corrupted.html` carries the same delete button as `job_corrupted.html`,
+    reached the same way by the same roles, so it needs the same gate. It was ungated
+    while its sibling was not, which is the worse of the two states: the pair is cited
+    as a pair, so an inconsistency between them reads as a deliberate distinction.
+
+    Reached here the way issue #96 found it - a function the job matched is gone from
+    the backend, so the report cannot be rebuilt.
+    """
+
+    @pytest.fixture
+    def fake_mcrit(self, corpus_mcrit):
+        return corpus_mcrit
+
+    def corrupted_result(self, client, fake_mcrit):
+        job_id = job_id_of("matches_for_sample_vs")
+        assert client.get(f"/data/result/{job_id}").status_code == 200, "intact report does not render"
+        requested = [
+            function_id
+            for name, args, _ in fake_mcrit.calls
+            if name == "getFunctionsByIds"
+            for function_id in args[0]
+        ]
+        assert requested, "this path no longer looks up matched functions"
+        fake_mcrit._functions.pop(int(requested[0]))
+        response = client.get(f"/data/result/{job_id}")
+        assert b"are corrupted" in response.data, "this is not the corrupted page"
+        return response.get_data(as_text=True)
+
+    def test_a_contributor_is_offered_the_delete(self, client, as_role, fake_mcrit):
+        as_role("contributor")
+
+        assert "/delete" in self.corrupted_result(client, fake_mcrit)
+
+    def test_a_visitor_is_not(self, client, as_role, fake_mcrit):
+        """data.result is visitor_required and delete_job_by_id is
+        contributor_required, so the button answered 403 for exactly the callers most
+        likely to meet this page."""
+        as_role("visitor")
+
+        assert "/delete" not in self.corrupted_result(client, fake_mcrit)
 
 
 if __name__ == "__main__":
