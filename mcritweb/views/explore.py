@@ -10,6 +10,7 @@ from mcrit.storage.FunctionEntry import FunctionEntry
 from mcrit.storage.SampleEntry import SampleEntry
 
 import mcritweb.views.cfg_explorer_detector as cfg_explorer_detector
+from mcritweb.autocomplete import RESPONSE_KEY, autocomplete_items
 from mcritweb.backend_errors import require_result
 from mcritweb.views.authentication import contributor_required, visitor_required
 from mcritweb.views.client import get_client
@@ -304,8 +305,14 @@ def family_names():
     client = get_client()
     results = client.search_families(query, limit=FAMILY_NAME_SUGGESTIONS)
     if results is None:
-        return {"family_names": []}
-    return {"family_names": [FamilyEntry.fromDict(entry).family_name for entry in results['search_results'].values()]}
+        return {RESPONSE_KEY: []}
+    # escaped here, not in the browser: `static/autocomplete.js` writes a suggestion
+    # into innerHTML and into a data-label attribute, so a family name is markup once
+    # it reaches the widget (issue #68). The template call site that still ships its
+    # list with the page applies the same function through the `autocomplete_items`
+    # filter; this is the other producer, and it has to escape identically.
+    names = [FamilyEntry.fromDict(entry).family_name for entry in results['search_results'].values()]
+    return {RESPONSE_KEY: autocomplete_items(names)}
 
 
 @bp.route('/families')

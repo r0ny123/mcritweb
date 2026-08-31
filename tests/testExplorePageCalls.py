@@ -26,6 +26,7 @@ import logging
 import re
 
 import pytest
+from markupsafe import escape
 from mcrit.queue.LocalQueue import Job
 
 from mcritweb.views.explore import (
@@ -401,8 +402,13 @@ def test_the_type_ahead_answers_a_bounded_number_of_names(client, as_role, fake_
 
     assert response.status_code == 200
     assert 0 < len(matching) <= FAMILY_NAME_SUGGESTIONS, "the prefix no longer picks a testable slice of the corpus"
-    assert set(response.json) == {"family_names"}
-    assert sorted(response.json["family_names"]) == sorted(matching)
+    # ready-made {label, value} pairs, HTML-escaped: `static/autocomplete.js` renders a
+    # suggestion through innerHTML, so the escaping is the endpoint's job (issue #68),
+    # and the key is what tests/testAutocompleteEscaping.py's ratchet recognises
+    assert set(response.json) == {"autocomplete_items"}
+    items = response.json["autocomplete_items"]
+    assert sorted(item["label"] for item in items) == sorted(str(escape(name)) for name in matching)
+    assert all(item["label"] == item["value"] for item in items)
     assert [kwargs.get("limit") for _args, kwargs in calls_to(fake_mcrit, "search_families")] == [10]
 
 
@@ -415,7 +421,7 @@ def test_the_type_ahead_survives_a_backend_that_cannot_answer(client, as_role, f
     response = client.get("/explore/familyNames?q=cit")
 
     assert response.status_code == 200
-    assert response.json == {"family_names": []}
+    assert response.json == {"autocomplete_items": []}
 
 
 # --- the unified search does not run the slow collection unasked ------------------
