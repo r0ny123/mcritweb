@@ -41,7 +41,7 @@ EMPTY_CATEGORIES = ["modifyFamily", "rebuildIndex", "recalculatePicHashes",
 def test_a_category_with_no_jobs_renders_instead_of_crashing(client, as_role, category):
     as_role("visitor")
 
-    response = client.get(f"/data/jobs?active={category}")
+    response = client.get(f"/data/jobs?active={category}", follow_redirects=True)
 
     assert response.status_code == 200, f"?active={category} is a 500"
 
@@ -51,7 +51,7 @@ def test_a_category_with_no_jobs_says_it_is_empty(client, as_role):
     rather than showing the previous tab's rows or a blank."""
     as_role("visitor")
 
-    page = client.get("/data/jobs?active=rebuildIndex").get_data(as_text=True)
+    page = client.get("/data/jobs?active=rebuildIndex", follow_redirects=True).get_data(as_text=True)
 
     assert "rebuildIndex" in page
 
@@ -61,7 +61,7 @@ def test_the_menu_really_does_link_to_an_empty_category(client, as_role):
     reachable, bookmarkable and crawlable whatever the disabled styling suggests."""
     as_role("visitor")
 
-    page = client.get("/data/jobs").get_data(as_text=True)
+    page = client.get("/data/jobs", follow_redirects=True).get_data(as_text=True)
 
     assert "/data/jobs?active=rebuildIndex" in page
 
@@ -81,7 +81,7 @@ def test_a_real_category_is_still_shown(client, as_role):
     """The guard must not reject the categories that do work."""
     as_role("visitor")
 
-    page = client.get("/data/jobs?active=getMatchesForSample").get_data(as_text=True)
+    page = client.get("/data/jobs?active=getMatchesForSample", follow_redirects=True).get_data(as_text=True)
 
     assert "is not a job type" not in page
     assert "getMatchesForSample" in page
@@ -91,7 +91,7 @@ def test_every_category_the_menu_offers_is_accepted(client, as_role):
     """A ratchet against the guard and the menu drifting apart: rejecting a category the
     page itself links to would turn this fix into a different bug."""
     as_role("visitor")
-    page = client.get("/data/jobs").get_data(as_text=True)
+    page = client.get("/data/jobs", follow_redirects=True).get_data(as_text=True)
 
     import re
     linked = set(re.findall(r"/data/jobs\?active=([A-Za-z]+)", page))

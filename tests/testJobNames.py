@@ -185,7 +185,7 @@ def test_the_job_list_calls_it_the_same_thing(client, as_role, report, expected)
     """The list is where these names came from, so this is really a check that the
     extraction did not change its wording."""
     as_role("visitor")
-    response = client.get("/data/jobs")
+    response = client.get("/data/jobs", follow_redirects=True)
     assert response.status_code == 200
     assert expected in response.data
 

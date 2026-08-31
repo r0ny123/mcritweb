@@ -316,7 +316,7 @@ def test_each_job_category_says_what_it_is_missing(client, as_role, app, every_k
     app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: every_kind_of_job
     as_role("visitor")
 
-    response = client.get(f"/data/jobs?active={category}")
+    response = client.get(f"/data/jobs?active={category}", follow_redirects=True)
     page = response.get_data(as_text=True)
 
     assert response.status_code == 200
@@ -337,7 +337,7 @@ def test_a_category_the_backend_has_never_run_is_not_a_server_error(client, as_r
     app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: every_kind_of_job
     as_role("visitor")
 
-    response = client.get("/data/jobs?active=nosuchmethod")
+    response = client.get("/data/jobs?active=nosuchmethod", follow_redirects=True)
 
     assert response.status_code == 200
 
@@ -353,7 +353,7 @@ def test_the_wording_names_the_kind_of_job(client, as_role, app, empty_mcrit, ca
     app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: empty_mcrit
     as_role("visitor")
 
-    page = client.get(f"/data/jobs?active={category}").get_data(as_text=True)
+    page = client.get(f"/data/jobs?active={category}", follow_redirects=True).get_data(as_text=True)
 
     assert expected in page
     assert GENERIC_JOB_PROMPT not in page
@@ -364,7 +364,7 @@ def test_a_state_filter_reports_the_state(client, as_role, app, empty_mcrit):
     app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: empty_mcrit
     as_role("visitor")
 
-    page = client.get("/data/jobs?state=failed").get_data(as_text=True)
+    page = client.get("/data/jobs?state=failed", follow_redirects=True).get_data(as_text=True)
 
     assert "No jobs are in state &#34;failed&#34;." in page
 
@@ -375,7 +375,7 @@ def test_a_category_with_nowhere_to_start_one_offers_no_link(client, as_role, ap
     app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: empty_mcrit
     as_role("visitor")
 
-    page = client.get("/data/jobs?active=getUniqueBlocks").get_data(as_text=True)
+    page = client.get("/data/jobs?active=getUniqueBlocks", follow_redirects=True).get_data(as_text=True)
 
     assert "They are started from a family or sample row." in page
 
