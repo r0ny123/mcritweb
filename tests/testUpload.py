@@ -14,20 +14,30 @@ answered by the suite rather than by hand.
 import io
 import json
 import logging
+import random
 
 import pytest
+from conftest import FAKE_MINHASH_HASH, FAKE_SHINGLER_HASH
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
 logging.disable(logging.CRITICAL)
 
-#: The smallest thing shaped like an MCRIT export. The fake backend only counts the
-#: three collections, so nothing here needs to be a real sample.
+#: The smallest thing shaped like an MCRIT export: the keys `MinHashIndex.addImportData`
+#: reads before it can count anything, carrying this instance's own config hashes. Nothing
+#: here needs to be a real sample, but the *shape* does have to be real - the index indexes
+#: into all of these unguarded, so a fixture missing one models a 500, not an import.
+SHA256 = "ab" * 32
 EXPORT = {
-    "config": {"version": "1.5.3"},
-    "families": {"1": {"family_name": "test.family"}},
-    "samples": {"1": {"sample_id": 1, "family_id": 1}},
-    "functions": {"1": {"function_id": 1, "sample_id": 1}},
+    "config": {
+        "version": "1.5.3",
+        "shingler": FAKE_SHINGLER_HASH,
+        "minhash": FAKE_MINHASH_HASH,
+    },
+    "content": {"is_compressed": False, "num_samples": 1, "num_functions": 1, "num_families": 1},
+    "family_mapping": {"1": "test.family"},
+    "sample_entries": {SHA256: {"sample_id": 1, "family_id": 1}},
+    "function_entries": {SHA256: {"1": {"function_id": 1, "sample_id": 1}}},
 }
 
 
@@ -114,15 +124,21 @@ def test_an_unusable_upload_is_reported_rather_than_a_500(client, as_role, paylo
 #: against its own and bare-`return`s when either differs, so the client hands the view a
 #: `None` report - the same falsy value an empty session yields, which is how a perfectly
 #: good file came to be reported as malformed JSON.
-INCOMPATIBLE_EXPORT = dict(EXPORT, config={
-    "version": "1.5.3",
-    "shingler": "shingler-hash-of-some-other-instance",
-    "minhash": "minhash-hash-of-some-other-instance",
-})
+INCOMPATIBLE_EXPORT = dict(EXPORT, config=dict(
+    EXPORT["config"],
+    shingler="shingler-hash-of-some-other-instance",
+    minhash="minhash-hash-of-some-other-instance",
+))
 
 #: The other half of the same refusal: an export from before the version floor. This one
 #: mcritweb can attribute exactly, because the check is on a field the file carries.
-OUTDATED_EXPORT = dict(EXPORT, config={"version": "0.0.0"})
+OUTDATED_EXPORT = dict(EXPORT, config=dict(EXPORT["config"], version="0.0.0"))
+
+#: A JSON object with a config this instance would accept, and nothing else. It clears all
+#: three config checks and then KeyErrors inside `MinHashIndex.addImportData`, which is a
+#: 500 - and `handle_response` reports a 500 as the same `None` a refusal produces. The
+#: shingler provably matched, so a shingler mismatch is the one thing it cannot be.
+NOT_AN_EXPORT = {"config": EXPORT["config"], "some_other_json": [1, 2, 3]}
 
 
 def test_a_file_that_is_not_mcrit_data_is_refused_as_such(client, as_role):
@@ -180,6 +196,58 @@ def test_a_bare_visit_to_the_completion_page_says_nothing_was_imported(client, a
     assert "Import completed" not in page
     assert "valid MCRIT data in JSON format" not in page, "an empty session blamed a file"
     assert "nothing was imported" in page.lower()
+
+
+#: Said as fact, this is the claim the view is not entitled to make: `None` from the client
+#: is also what a 401, a 500 and an unreachable database look like, and `handle_response`
+#: flattens all of them to the same value. Naming it as the likeliest cause is fine; stating
+#: it happened is a second wrong answer replacing the first one.
+ASSERTED_AS_FACT = "the file is valid MCRIT data, but it was created by"
+
+
+def test_a_backend_error_is_not_reported_as_a_config_mismatch(client, as_role, fake_mcrit):
+    """A rejected apitoken returns 401, which `handle_response` has no branch for, so the
+    view gets the same `None` a config refusal gives it. Blaming the shingler here is a
+    false statement about a file that would have imported fine."""
+    as_role("contributor")
+    fake_mcrit.refuses_authentication = True
+
+    body = upload(client, EXPORT).get_data(as_text=True)
+    assert ASSERTED_AS_FACT not in body, "a backend failure was reported as a config mismatch"
+    assert "likeliest" in body, "an undistinguishable cause was stated without hedging"
+    assert "log" in body, "the reader was not pointed at where the reason actually is"
+
+
+def test_a_json_object_that_is_not_an_export_is_not_blamed_on_the_shingler(client, as_role):
+    """The config checks pass - that is the point - and the index then KeyErrors on
+    `content`. Whatever this file's problem is, the shingler hash matched on the way past."""
+    as_role("contributor")
+
+    body = upload(client, NOT_AN_EXPORT).get_data(as_text=True)
+    assert ASSERTED_AS_FACT not in body, "a 500 was reported as a config mismatch"
+    assert "likeliest" in body
+    assert "log" in body
+
+
+#: 12 kB of hash-shaped, high-entropy hex. A repetitive string is not a reproduction here:
+#: Flask signs the session with itsdangerous, whose URL-safe serializer zlib-compresses the
+#: payload, so `"f" * 12000` arrives as a few hundred bytes and the cookie never overflows.
+#: A real `config.shingler` is a hash, and a hash does not compress.
+HUGE_HASH = random.Random(0).randbytes(6000).hex()
+
+
+def test_a_huge_config_value_cannot_blow_up_the_session_cookie(client, as_role, recwarn):
+    """The reason quotes the upload back at the user and is then stored in the session,
+    which Flask signs into one cookie. Werkzeug's limit is 4093 bytes and a browser drops
+    an oversized cookie silently - taking the login, the flash and the CSRF token with it,
+    so the redirect to the completion page would land on the login form."""
+    as_role("contributor")
+    huge = dict(EXPORT, config=dict(EXPORT["config"], shingler=HUGE_HASH))
+
+    response = upload(client, huge)
+    oversized = [w for w in recwarn.list if "cookie is too large" in str(w.message)]
+    assert not oversized, f"the refusal logged the user out: {oversized[0].message}"
+    assert len(response.get_data()) < 2048, "the 400 echoed the upload back at the browser"
 
 
 # --- the sample dropzone: binary payloads, and the fields that ride with them ------
