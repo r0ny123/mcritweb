@@ -691,22 +691,43 @@ def linkhunt_for_sample_or_query(job_info, matching_result: MatchingResult):
 # Listing Job information
 ################################################################
 
+#: Shown on job_corrupted.html. The job document is the backend's, so there is nothing
+#: to do about it here beyond naming it and offering to delete it.
+UNREADABLE_PAYLOAD_REASON = (
+    "The parameters this job was submitted with cannot be read back from its stored "
+    "payload, so there is nothing to show for it and no request to repeat."
+)
+
+
+def job_parameters_or_none(job):
+    """`job.parameters`, or None for a job whose payload cannot be read.
+
+    Job.parameters is rebuilt on every access rather than stored: it calls json.loads on
+    payload["params"] and then .items() on the result, so a document whose params is
+    malformed, `null`, a JSON array, or not a string at all raises JSONDecodeError,
+    AttributeError or TypeError. This is the one place that recovery happens, so a
+    caller gets to decide what to do about it instead of each site guessing.
+
+    None means "could not be read", which is distinct from the "" that Job.parameters
+    legitimately answers for a record carrying no params at all - `parameters or ""`
+    cannot tell a corrupt job from an empty one.
+    """
+    try:
+        return job.parameters
+    except Exception:
+        current_app.logger.exception("Could not read parameters for job %s", getattr(job, "job_id", "?"))
+        return None
+
+
 def job_parameters_or_blank(job):
     """`job.parameters`, or "" for a job whose payload cannot be read.
 
-    Job.parameters does not return None - it returns "" or raises. It calls json.loads
-    on payload["params"] and then .items() on the result, so a document whose params is
-    malformed, `null`, or a JSON array raises JSONDecodeError, AttributeError or
-    TypeError. One such job used to break the single page of the browse view that
-    showed it; filtering the whole category for a search would let it break every page
-    of the search instead. A job whose parameters cannot be read cannot contain the
-    search term either, so leaving it out is also the right answer.
+    One such job used to break the single page of the browse view that showed it;
+    filtering the whole category for a search would let it break every page of the
+    search instead. A job whose parameters cannot be read cannot contain the search
+    term either, so leaving it out is also the right answer.
     """
-    try:
-        return job.parameters or ""
-    except Exception:
-        current_app.logger.exception("Could not read parameters for job %s", getattr(job, "job_id", "?"))
-        return ""
+    return job_parameters_or_none(job) or ""
 
 
 @bp.route('/jobs')
@@ -861,13 +882,25 @@ def job_by_id(job_id):
     if job_info is None:
         return render_template("job_invalid.html", job_id=job_id)
 
+    # Before anything reads the parameters, because everything below does and the
+    # overview template does too: its h1 and the job_column_table macro both print
+    # them, so there is no rendering this job's page without them. This is where a
+    # great many redirects land - every job submitter, and any route that refuses a
+    # job and sends the caller back to it - and a refusal that lands on a 500 has not
+    # refused anything, because the flash it set is never rendered.
+    parameters = job_parameters_or_none(job_info)
+    if parameters is None:
+        return render_template("job_corrupted.html", job_info=job_info, reason=UNREADABLE_PAYLOAD_REASON)
+
     if job_info.finished_at is not None:
         if auto_forward:
-            if 'addBinarySample' in job_info.parameters:
+            # not forwarded for an unreadable job: data.result dispatches on the same
+            # parameters, so it would only move the failure one page on
+            if 'addBinarySample' in parameters:
                 suppress_processing_message = True
                 flash('Sample submitted successfully!', category='success')
             return redirect(url_for('data.result', job_id=job_id))
-    if 'addBinarySample' in job_info.parameters and not suppress_processing_message and auto_refresh:
+    if 'addBinarySample' in parameters and not suppress_processing_message and auto_refresh:
         flash('We received your sample, currently processing!', category='info')
     child_jobs = sorted([client.getJobData(id) for id in job_info.all_dependencies], key=lambda x: x.number)
     samples_by_id = {}
