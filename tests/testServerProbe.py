@@ -21,7 +21,8 @@ from mcritweb.views import utility
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
-logging.disable(logging.CRITICAL)
+# deliberately not logging.disable() - this module asserts on log records, and a
+# module-level disable is a global side effect on every other test module too.
 
 
 class CountingProbe:
@@ -238,6 +239,119 @@ def test_creating_an_app_forgets_any_earlier_answer(tmp_path):
     )
 
     assert utility._probe_cache is None
+
+
+
+# --- a TTL that is not a number ----------------------------------------------
+
+@pytest.mark.parametrize("bad_ttl", ["", "off", "5 seconds", None, object(),
+                                     -1, "-5", float("inf"), float("nan"), True])
+def test_an_unusable_ttl_costs_the_cache_and_not_the_application(app, client, as_role, bad_ttl, caplog):
+    """A string TTL used to make all 36 decorated routes report an outage that wasn't.
+
+    `MCRIT_SERVER_PROBE_TTL = "5"` is an easy thing to write: a config file is
+    hand-written, and `os.environ.get` hands back a `str` whatever the value looks
+    like. Evaluated inside the decorator's try block, `ttl > 0` raises TypeError, the
+    broad `except Exception` reads that as the backend being unreachable, and every
+    gated page redirects with "No connection to the MCRIT server" - against a backend
+    that answers perfectly, with nothing in the log to say why.
+
+    The page must render, and the operator must be told which key is wrong.
+    """
+    probe = CountingProbe()
+    app.config["MCRIT_SERVER_PROBE"] = probe
+    app.config["MCRIT_SERVER_PROBE_TTL"] = bad_ttl
+    as_role("visitor")
+
+    with caplog.at_level(logging.WARNING):
+        response = client.get("/explore/families")
+
+    assert response.status_code == 200, "a healthy backend was reported as unreachable"
+    assert probe.calls == 1, "the probe still ran - the gate is not switched off"
+    assert any("MCRIT_SERVER_PROBE_TTL" in record.getMessage() for record in caplog.records),         "a bad value must name its own key in the log, not fail silently"
+
+
+def test_an_unusable_ttl_falls_back_to_probing_every_request(app, client, as_role):
+    """Degrading to 0 is the pre-#89 behaviour: correct, just uncached. The one thing
+    it must not do is keep serving a stale answer from an interval nobody can read."""
+    probe = CountingProbe()
+    app.config["MCRIT_SERVER_PROBE"] = probe
+    app.config["MCRIT_SERVER_PROBE_TTL"] = "not a number"
+    as_role("visitor")
+
+    for _ in range(3):
+        assert client.get("/explore/families").status_code == 200
+
+    assert probe.calls == 3
+
+
+def test_a_negative_ttl_does_not_cache_forever():
+    """`ttl > 0` is false for a negative number, so the old code happened to survive
+    this one - but only by accident, and `probe_server` is called elsewhere. Pinned
+    because a negative TTL reads as "never expire" if anyone rewrites the comparison."""
+    probe = CountingProbe()
+
+    for _ in range(3):
+        assert utility.probe_server(probe, -1, "http://backend") is True
+
+    assert probe.calls == 3
+
+
+def test_an_infinite_ttl_would_pin_an_outage_for_the_life_of_the_process():
+    """Why `inf` is refused by the config reader rather than merely being useless.
+
+    `probe_server` caches a transport failure and replays it by re-raising - the
+    behaviour the cache exists for. At an infinite TTL the entry never expires, so one
+    blip would answer "No connection to the MCRIT server" on all 36 routes until the
+    worker restarts. This pins what the raw function does with it; refusing the value
+    upstream is what stops it ever being called this way.
+    """
+    probe = CountingProbe(answer=requests.exceptions.ConnectTimeout("blip"))
+
+    for _ in range(4):
+        with pytest.raises(requests.exceptions.ConnectTimeout):
+            utility.probe_server(probe, float("inf"), "http://backend")
+
+    assert probe.calls == 1, "one blip, replayed forever - which is why inf is refused"
+
+
+def test_a_quoted_number_is_honoured_as_the_number(app):
+    """`MCRIT_SERVER_PROBE_TTL = "5"` in config.py is a typo, but an unambiguous one.
+
+    The defect being fixed is that a healthy backend gets reported as unreachable, not
+    that the value was quoted - so the quoted form is read as the number it plainly is,
+    and only a value that is not a usable number of seconds costs the cache.
+    """
+    with app.app_context():
+        for good, expected in (("5", 5), (60, 60), (0, 0), ("2.5", 2.5)):
+            app.config["MCRIT_SERVER_PROBE_TTL"] = good
+            assert utility.probe_ttl_from_config() == expected
+
+        for bad in ("off", -1, float("inf"), float("nan"), True, None, object()):
+            app.config["MCRIT_SERVER_PROBE_TTL"] = bad
+            assert utility.probe_ttl_from_config() == 0, "%r was treated as usable" % (bad,)
+
+
+def test_a_bad_value_is_reported_once_and_not_once_per_request(app, client, as_role, caplog):
+    """36 decorated routes means an unconditional warning is an unbounded stream on the
+    hot path. One line per distinct bad value; correcting it, or breaking it a second
+    different way, is still reported."""
+    app.config["MCRIT_SERVER_PROBE"] = CountingProbe()
+    app.config["MCRIT_SERVER_PROBE_TTL"] = "off"
+    as_role("visitor")
+
+    with caplog.at_level(logging.WARNING):
+        utility._ttl_warned_about = utility._UNSET
+        for _ in range(4):
+            client.get("/explore/families")
+        complaints = [r for r in caplog.records if "MCRIT_SERVER_PROBE_TTL" in r.getMessage()]
+        assert len(complaints) == 1, "four requests, one log line"
+
+        caplog.clear()
+        app.config["MCRIT_SERVER_PROBE_TTL"] = "also wrong"
+        client.get("/explore/families")
+        complaints = [r for r in caplog.records if "MCRIT_SERVER_PROBE_TTL" in r.getMessage()]
+        assert len(complaints) == 1, "a second, different mistake is still reported"
 
 
 if __name__ == "__main__":
