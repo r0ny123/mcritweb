@@ -64,7 +64,9 @@ def badges(response):
     """sample_id -> the number in its job badge, for every row that has one."""
     found = {}
     for match in JOB_BADGE.finditer(response.get_data(as_text=True)):
-        if "color:green" in match.group(0):
+        # the flask icon is green when the sample has jobs; issue #70 moved that
+        # green out of the markup and into the palette, so the token is what marks it
+        if "color:var(--status-yes)" in match.group(0):
             found[int(match.group(1))] = int(re.search(r"&nbsp;(\d+)", match.group(0)).group(1))
     return found
 

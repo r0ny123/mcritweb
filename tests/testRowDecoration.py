@@ -135,7 +135,9 @@ def test_a_tint_reaches_the_row_it_names(app, fake_mcrit, macro):
 
     rendered = render_table(app, macro, rows, row_decorations=decorations)
 
-    assert rendered.count('style="background-color: yellowgreen;"') == 1
+    # a class, not a colour: issue #70 tokenised the palette, and `tr.row-selected`
+    # in style.css is what carries this shade in each theme
+    assert rendered.count(' row-selected"') == 1
 
 
 @pytest.mark.parametrize("macro", sorted(DECORATED_TABLES))
@@ -236,7 +238,7 @@ def test_cross_compare_tints_a_selected_row(client, as_role, fake_mcrit):
 
     page = client.get(f"/analyze/cross_compare?samples={sample.sample_id}").get_data(as_text=True)
 
-    assert '<tr style="background-color: yellowgreen;" class="parent">' in page
+    assert '<tr class="parent row-selected">' in page
 
 
 def test_cross_compare_tints_a_row_clicked_but_not_yet_added(client, as_role, fake_mcrit):
@@ -245,20 +247,25 @@ def test_cross_compare_tints_a_row_clicked_but_not_yet_added(client, as_role, fa
 
     page = client.get(f"/analyze/cross_compare?cache={sample.sample_id}").get_data(as_text=True)
 
-    assert '<tr style="background-color: rgb(240, 240, 240);" class="parent">' in page
+    assert '<tr class="parent row-pending">' in page
 
 
 def test_a_selected_row_that_is_also_cached_stays_green(client, as_role, fake_mcrit):
     """Both attributes used to be written into the same tag; the browser took the
-    first, which was the green one. One decoration wins now, and it is the same one."""
+    first, which was the green one. One decoration wins now, and it is the same one.
+
+    The page's own click handler reads this state back with
+    `classList.contains("row-selected")`, so the two states have to be classes and
+    have to be mutually exclusive - two of them on one row and a click would both
+    refuse to toggle and try to."""
     as_role("visitor")
     sample = next(iter(fake_mcrit._samples.values()))
 
     page = client.get(
         f"/analyze/cross_compare?samples={sample.sample_id}&cache={sample.sample_id}").get_data(as_text=True)
 
-    assert '<tr style="background-color: yellowgreen;" class="parent">' in page
-    assert not any("rgb(240, 240, 240)" in tag for tag in row_tags(page))
+    assert '<tr class="parent row-selected">' in page
+    assert not any("row-pending" in tag for tag in row_tags(page))
 
 
 if __name__ == "__main__":
