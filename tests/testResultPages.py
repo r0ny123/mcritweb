@@ -17,6 +17,7 @@ import unittest
 import pytest
 from fixtureData import CorpusMcritClient, job_id_of, load
 from mcrit.storage.FunctionEntry import FunctionEntry
+from mcrit.storage.MatchingResult import MatchingResult
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
@@ -137,17 +138,38 @@ def matched_sample_ids(report):
     return [sample["sample_id"] for sample in load(f"{report}.result")["matches"]["samples"]]
 
 
-def read_function_table(html):
-    """(count the widget was built from, first row shown, last row shown, rows drawn).
+def matched_family_ids(report):
+    """Every family a report matched, i.e. every `?famid=` its own page links to."""
+    return sorted({sample["family_id"] for sample in load(f"{report}.result")["matches"]["samples"]})
 
-    The first three come from the header line above the table, which is written from
-    the Pagination object; the fourth is what the table body actually rendered.
+
+def report_totals(report):
+    """A report's own function totals, in both units the result pages count in.
+
+    Read off the untouched report rather than off a page, so the pages are being
+    checked against the data and not against each other.
+    """
+    matching_result = MatchingResult.fromDict(load(f"{report}.result"))
+    return {
+        # every (function, matched function) pair the report holds
+        "matches": matching_result.num_original_function_matches,
+        # every function of the reference sample that matched anything at all
+        "functions": len(matching_result.getAggregatedFunctionMatches(unfiltered=True)),
+    }
+
+
+def read_function_table(html):
+    """What the function match table says about itself.
+
+    (selection, first row shown, last row shown, filtered-out count, rows drawn) -
+    the first four off the header line above the table, which is written from the
+    Pagination object, and the last from the table body itself.
     """
     body = html.split('id="function-matches"', 1)[1]
-    header = re.search(r"selection: (\d+), showing: (\d+) - (\d+)", body)
+    header = re.search(r"selection: (\d+), showing: (\d+) - (\d+) \(filtered: (-?\d+)\)", body)
     rows = re.search(r"<tbody>(.*?)</tbody>", body, re.S)
     assert header is not None and rows is not None, "the function match table did not render"
-    return int(header.group(1)), int(header.group(2)), int(header.group(3)), rows.group(1).count("<tr ")
+    return (*(int(group) for group in header.groups()), rows.group(1).count("<tr "))
 
 
 @pytest.mark.parametrize("report", ["matches_for_sample", "matches_for_query", "matches_for_sample_vs"])
@@ -169,12 +191,15 @@ def test_sample_filtered_page_paginates_the_rows_it_shows(client, as_role, widen
 
     disagreements = []
     for sample_id in matched_sample_ids(report):
-        page = 1
-        while page <= 50:
+        # walk to the widget's own last page. The bound is a runaway guard, not an
+        # expected exit - falling out of it means the count ran away from the rows,
+        # which is the failure this test is here for, so it is an error and not a
+        # quiet end to the loop
+        for page in range(1, 51):
             response = client.get(f"/data/result/{job_id}?samid={sample_id}&funp={page}&funl=250")
             assert response.status_code == 200
             assert b"are corrupted" not in response.data, f"{report} samid={sample_id} did not render"
-            count, first, last, drawn = read_function_table(response.data.decode())
+            count, first, last, _filtered, drawn = read_function_table(response.data.decode())
             if drawn != last - first + 1:
                 disagreements.append(
                     f"{report} samid={sample_id} funp={page}: widget says {count} in total and "
@@ -182,9 +207,59 @@ def test_sample_filtered_page_paginates_the_rows_it_shows(client, as_role, widen
                 )
             if last >= count:
                 break
-            page += 1
+        else:
+            raise AssertionError(f"{report} samid={sample_id}: the widget never reached its last page")
 
     assert not disagreements, "pagination and table disagree:\n  " + "\n  ".join(disagreements)
+
+
+#: Which of a report's totals each function match table is counted in. The `filtered:`
+#: figure beside a table is the rest of the report, so it only means anything when it
+#: is the table's own total minus the table's own selection - and a page that changes
+#: what one of its rows is has to change its entry here with it.
+FUNCTION_TABLE_UNIT = {
+    # one row per matched function of the reference sample, aggregated over every
+    # sample it matched
+    "": "functions",
+    "famid": "functions",
+    # one row per function match: this table has an Offset B and a Function B, which
+    # only an individual match has
+    "samid": "matches",
+}
+
+
+@pytest.mark.parametrize("report", ["matches_for_sample", "matches_for_query"])
+def test_the_filtered_figure_accounts_for_the_rest_of_the_report(client, as_role, widened_corpus_mcrit, app, report):
+    """`selection` and `filtered` have to add up to the report, on every result page.
+
+    Both are printed on one line as if they were two halves of one total, so they have
+    to be counted the same way. Subtracting an aggregated selection from a raw match
+    total is not a smaller number, it is a different question - it made the unfiltered
+    page report a four-figure `filtered:` with no filter applied at all.
+    """
+    app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: widened_corpus_mcrit
+    as_role("visitor")
+    job_id = job_id_of(report)
+    totals = report_totals(report)
+
+    pages = [("", "")]
+    pages += [(f"&famid={family_id}", "famid") for family_id in matched_family_ids(report)]
+    pages += [(f"&samid={sample_id}", "samid") for sample_id in matched_sample_ids(report)]
+
+    wrong = []
+    for query, kind in pages:
+        response = client.get(f"/data/result/{job_id}?funp=1{query}")
+        assert response.status_code == 200
+        assert b"are corrupted" not in response.data, f"{report} {query} did not render"
+        selection, _first, _last, filtered, _drawn = read_function_table(response.data.decode())
+        total = totals[FUNCTION_TABLE_UNIT[kind]]
+        if selection + filtered != total:
+            wrong.append(
+                f"{report} {query or '(unfiltered)'}: selection {selection} + filtered {filtered} "
+                f"= {selection + filtered}, report holds {total}"
+            )
+
+    assert not wrong, "the filtered figure does not account for the report:\n  " + "\n  ".join(wrong)
 
 
 def test_a_job_id_nobody_knows_is_reported_not_crashed(client, as_role):
