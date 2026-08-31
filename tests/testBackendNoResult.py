@@ -206,18 +206,34 @@ def test_deleting_a_whole_queue_state_still_works_without_a_job_of_its_own(clien
 
 
 @pytest.mark.parametrize(
-    "fake_mcrit", [("getFamilies", None), ("getQueueData", None)],
-    indirect=True, ids=["getFamilies", "getQueueData"],
+    "fake_mcrit", [("getFamilies", None)], indirect=True, ids=["getFamilies"],
 )
 def test_the_listing_pages_are_left_to_the_branch_that_rewrites_them(client, as_role, fake_mcrit):
-    """Not a fix, a marker. `/explore/samples` still breaks on both of these, and the
-    audit says so: issue #77 replaces every one of those calls in the same functions,
-    so patching them here would be a merge conflict rather than a fix. When #77 lands,
+    """Not a fix, a marker. `/explore/samples` still breaks on this one, and the audit
+    says so: issue #77 replaces every one of those calls in the same functions, so
+    patching them here would be a merge conflict rather than a fix. When #77 lands,
     this test is what says whether it closed them."""
     as_role("visitor")
 
     with pytest.raises((AttributeError, TypeError)):
         client.get("/explore/samples")
+
+
+@pytest.mark.parametrize(
+    "fake_mcrit", [("getQueueData", None)], indirect=True, ids=["getQueueData"],
+)
+def test_the_sample_listing_already_survives_a_queue_it_cannot_read(client, as_role, fake_mcrit):
+    """The other half of the marker above, closed from a different direction.
+
+    `explore.samples` now wraps the queue in `describable_jobs`, which issue #51 added
+    so one unreadable job cannot take a listing down - and it iterates `jobs or []`, so
+    a queue the backend did not answer for is an empty one rather than a TypeError.
+    Recorded as behaviour rather than left in the marker, because a test asserting this
+    page raises would now be asserting the opposite of what it does.
+    """
+    as_role("visitor")
+
+    assert client.get("/explore/samples").status_code == 200
 
 
 # --- the API is a different shape and does not need this -------------------------
