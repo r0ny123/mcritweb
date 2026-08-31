@@ -494,7 +494,12 @@ def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult
         if not assign_matched_offsets(client, matching_result.filtered_function_matches):
             return render_template("result_corrupted.html", reason=MISSING_ENTRIES_REASON, job_info=job_info)
         sample_pagination = Pagination(request, 1, limit=10, query_param="samp", limit_param="sampl")
-        function_pagination = Pagination(request, len(matching_result.getAggregatedFunctionMatches()), limit=100, query_param="funp", limit_param="funl")
+        # result_compare_sample.html draws one row per function match (it has an Offset B and a
+        # Function B column, which only an individual match has), so it slices getFunctionsSlice
+        # and this has to count the same list. Aggregating collapses the several functions of
+        # this sample that one query function can match, and paginating over that count left the
+        # tail of the table on no page at all.
+        function_pagination = Pagination(request, matching_result.num_function_matches, limit=100, query_param="funp", limit_param="funl")
         return render_template("result_compare_sample.html", samid=filtered_sample_id, job_info=job_info, samp=sample_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_sample) 
     # filter for function - treat family/sample part as if there was no filter
     elif filtered_function_id is not None and filtered_function_id in matching_result.function_id_to_family_ids_matched:
