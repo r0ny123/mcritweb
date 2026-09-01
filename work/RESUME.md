@@ -18,73 +18,55 @@ a lost machine or a wiped temp directory does not touch any of it.
 
 **The audit the campaign was for is finished.** Nothing below is needed to call it done.
 
-## The one thing that was in flight
+## The one thing that was in flight, and how it ended
 
 A rebuild of the integration branch across **68 branches** - the 60 originals (which now
 carry their fixes) plus the 8 new master-based ones. It is a *verification artifact*: it
 proves the set still integrates. No landed branch or PR depends on it.
 
-State when this was written:
+**Finished.** `origin/integration/all-68` @ `d830417`.
 
-- **58 of 68 merged.** Saved as `origin/integration/all-68-wip` @ `44a16bd`.
-- It was mid-merge on `fix/70-tokenise-the-palette` with 19 unmerged paths. **That merge
-  is not in the saved commit** - it was uncommitted working-tree state and is gone.
-- Resolution notes: `scratchpad/int3-notes.md`, ~746 lines. **Scratchpad only.** If the
-  temp directory is gone, so are the notes; the merge commits themselves carry the
-  resolutions, so this costs the reasoning, not the work.
+- All 68 merged: 23 cleanly, 45 with conflicts. Recomputed with
+  `git merge-base --is-ancestor` rather than by counting merge commits (a fast-forward
+  leaves none, and that undercount already happened once here), against a control branch -
+  `agent/add-deepwiki-badge` - which correctly reads as *not* merged, so the check can fail.
+- `ruff check .` clean. Suite **4 failed, 1884 passed** - exactly the 4 known Windows
+  failures (`testSecretKey.py::test_the_key_file_is_not_readable_by_others` and 3 in
+  `testUserFilters.py`). Master's baseline is 4 failed, 235 passed.
+- Resolution notes: `work/int3-notes.md`, 999 lines, committed. The earlier copy lived in
+  the scratchpad only, which is a temp directory and does not survive.
+- `origin/integration/all-68-wip` @ `7f6bfd1` is the 58-of-68 intermediate. Superseded;
+  kept only because deleting a shared ref is not this campaign's call.
 
-### Which 10 remain
+### What the pass caught that a green suite would not have
 
-    fix/70-tokenise-the-palette
-    fix/60-pagination-spinner
-    fix/jobs-500-when-the-queue-cannot-be-read
-    fix/pagination-reserved-query-args
-    fix/submit-metadata-into-the-query-string
-    fix/sample-filtered-result-pagination-count
-    fix/stop-printing-match-reports
-    fix/state-the-real-python-floor
-    fix/import-rejected-is-not-malformed
-    fix/autocomplete-escapes-suggestions
+The reason this artifact exists is that the defects it hunts do not fail tests. Two did
+show up:
 
-Do not trust a remembered count. Recompute it, and make sure the check can fail:
+- **The duplicated missing-dependency warning came back.** Last round I fixed it *on the
+  integration branch* and tightened its test there too. An integration branch is rebuilt
+  from its sources, so both evaporated and the defect returned with nothing left to catch
+  it. The count assertion now lives on `fix/job-overview-500-on-deleted-dependency`, which
+  owns the template, and merging that branch is what surfaced the duplicate.
+  **A fix that exists only on the integration branch has a half-life of one rebuild.**
+- **#7's rounding, silently reverted by #50 again** - #50 rewrites the result tables as
+  macros written against master. Verified by hand: zero truncating `%3d` on a score, six
+  `%3.0f`, divisors threaded through `famlib_row`, no raw `binweight` divisor.
 
-```
-git worktree add <dir> origin/integration/all-68-wip
-# for each name N in merge_order_v3.txt:
-git merge-base --is-ancestor origin/$N HEAD    # rc 0 = already in
-# control: origin/agent/add-deepwiki-badge must NOT read as merged
-```
+Also mutation-checked directly: dropping `r"(?:-(?P<theme>dark))?"` from the diagram
+filename grammar fails 16 tests. Brace balance 56/56 in `style.css`, both `.mcrit-diagram`
+colours tokenised, no duplicate badge columns, `compare_function` guarded.
 
-Counting merge commits gives the wrong answer - a fast-forward leaves none. That
-undercount already happened once here.
+### If it ever needs rebuilding again
 
-The order lives in `scratchpad/merge_order_v3.txt` (68 lines). If that is gone, it is the
-60 lines of `merge_order.txt` with the numeric prefixes stripped, then the 8 above in the
-order listed. Reconstructable from `git branch -r` in any case.
-
-## Finishing it
-
-1. Worktree from `origin/integration/all-68-wip`, merge the remaining 10 in order.
-2. Expect heavy conflicts: these touch files the other 58 have already rewritten.
-3. `ruff check .` clean, and the suite showing **exactly** the 4 known Windows failures
-   (`testSecretKey.py::test_the_key_file_is_not_readable_by_others` and 3 in
-   `testUserFilters.py`). Anything else is a real failure.
-4. Push as `integration/all-68`.
-
-### Do not stop at a green suite
-
-The defect this pass exists to catch produced a completely green suite last time: #50
-replaced the result tables with macros written against master and silently reverted #7's
-rounding, and the tests moved with the macros so nothing failed. Compare the rendered
-result tables cell by cell against the individual branches.
-
-Other classes that have actually bitten here: two branches implementing the same visible
-thing without conflicting; a stray `@bp.route` dragged in on a conflict tail; a filename
-regex meeting a filename change; a "keep both sides" resolution rendering a block twice; a
-constant defined twice; ADR files renumbered but their references not; and a dropped `}`
-in `style.css` that reparented every rule after it into the dark-theme block. Several
-branches now ship tests that pin these across branches - if one fails after a merge it is
-working. Fix the tree, not the test.
+Worktree from `origin/master`, merge `work/merge_order_v3.txt` in order, expect heavy
+conflicts, then check the four items above plus the classes in `work/int3-notes.md`:
+two branches implementing the same visible thing without conflicting; a stray `@bp.route`
+dragged in on a conflict tail; a filename regex meeting a filename change; a "keep both
+sides" resolution rendering a block twice; a constant defined twice; ADR files renumbered
+but their references not; and a dropped `}` in `style.css` that reparents every rule after
+it into the dark-theme block. Several branches now ship tests that pin these across
+branches - if one fails after a merge it is working. **Fix the tree, not the test.**
 
 ## Still owed by the user
 
