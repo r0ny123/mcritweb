@@ -3,7 +3,8 @@ init:
 # ruff is not in requirements.txt - CI installs it pinned, see .github/workflows/test.yml
 lint:
 	python3 -m ruff check .
-# pytest and pytest-cov arrive with mcrit, so requirements.txt covers both
+# pytest is not in requirements.txt - it stopped arriving with mcrit in 1.8, so install
+# it alongside ruff (pytest-cov for the coverage target), as CI does
 test:
 	python3 -m pytest
 test-coverage:
