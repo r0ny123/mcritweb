@@ -89,14 +89,15 @@ def _adhoc_picblock_pairs(function_a, function_b, smda_function_a, smda_function
     return _pair_by_hash(_adhoc_picblock_hashes(smda_function_a, sample_a), _adhoc_picblock_hashes(smda_function_b, sample_b))
 
 
+def _escaped_sequence(block):
+    """The block's instructions with addresses and immediates escaped away."""
+    return [IntelInstructionEscaper.escapeMnemonic(instruction.mnemonic) + " " + IntelInstructionEscaper.escapeOperands(instruction) for instruction in block.getInstructions()]
+
+
 def _escaped_hashes(smda_function):
     hashes = []
     for block in smda_function.getBlocks():
-        escaped_ins_seq = []
-        for instruction in block.getInstructions():
-            escaped_ins = IntelInstructionEscaper.escapeMnemonic(instruction.mnemonic) + " " + IntelInstructionEscaper.escapeOperands(instruction)
-            escaped_ins_seq.append(escaped_ins)
-        merged = ";".join(escaped_ins_seq)
+        merged = ";".join(_escaped_sequence(block))
         hashes.append({"offset": block.offset, "hash": _hash_sequence(merged.encode("ascii"))})
     return hashes
 
@@ -155,28 +156,52 @@ def _levenshtein_pairs(smda_function_a, smda_function_b, unmatched_nodes):
     return pairs
 
 
-def _apply_layer(node_colors, node_matches, pairs, color_of):
-    """Colour both ends of every pair and replace their recorded matches.
+def _apply_layer(node_colors, node_layers, layer_pairs, layer_index, pairs, color_of):
+    """Colour both ends of every pair and record which layer coloured them.
 
-    A block matched again by a later layer takes that layer's colour, so its match
-    list is replaced rather than extended - the list describes the colour shown.
+    A block matched again by a later layer takes that layer's colour, so the pairs
+    of an earlier layer stop describing it; `_collect_matches` keeps only the pairs
+    whose ends both wear the colour of that pair's layer.
     """
-    touched = {"a": set(), "b": set()}
     for pair in pairs:
         offset_a, offset_b = pair[0], pair[1]
         color = color_of(pair)
         for side, offset in (("a", offset_a), ("b", offset_b)):
             key = node_id(offset)
             node_colors[side][key] = color
-            if key not in touched[side]:
-                node_matches[side][key] = []
-                touched[side].add(key)
-        node_matches["a"][node_id(offset_a)].append(node_id(offset_b))
-        node_matches["b"][node_id(offset_b)].append(node_id(offset_a))
+            node_layers[side][key] = layer_index
+        layer_pairs.append((layer_index, node_id(offset_a), node_id(offset_b)))
+
+
+def _collect_matches(node_layers, layer_pairs):
+    """{"a": {node_id: [node_ids of B]}, "b": {...}}, symmetric by construction."""
+    node_matches = {"a": {}, "b": {}}
+    for layer_index, key_a, key_b in layer_pairs:
+        if node_layers["a"].get(key_a) != layer_index or node_layers["b"].get(key_b) != layer_index:
+            continue
+        node_matches["a"].setdefault(key_a, []).append(key_b)
+        node_matches["b"].setdefault(key_b, []).append(key_a)
+    return node_matches
+
+
+def _drop_orphans(node_colors, node_layers, layer_pairs):
+    """Uncolour blocks whose layer no longer has a surviving pair for them.
+
+    A later layer can re-match one end of an earlier pair only; the other end would
+    then wear a match colour with nothing to point at. It goes back to unmatched, so
+    the edit-distance layer gets a chance at it and the page never shows a matched
+    colour without a partner.
+    """
+    node_matches = _collect_matches(node_layers, layer_pairs)
+    for side in ("a", "b"):
+        for key in list(node_layers[side]):
+            if key not in node_matches[side]:
+                del node_layers[side][key]
+                node_colors[side][key] = COLOR_UNMATCHED
 
 
 def _one_to_one_pairs(node_matches):
-    """Reduce the many-to-many matches to one partner per block, lowest addresses first.
+    """Reduce the many-to-many matches to one partner per block.
 
     Identical small blocks (a lone `ret`, say) match each other in every combination,
     but a combined graph needs each block drawn once - so every block is paired with
@@ -184,7 +209,9 @@ def _one_to_one_pairs(node_matches):
     """
     used_b = set()
     pairs = []
-    for key_a in sorted(node_matches["a"], key=lambda key: int(key[6:], 16)):
+    # blocks with the fewest candidates first, so a block with a single partner is
+    # not robbed of it by an earlier block that had a choice
+    for key_a in sorted(node_matches["a"], key=lambda key: (len(node_matches["a"][key]), int(key[6:], 16))):
         for key_b in sorted(node_matches["a"][key_a], key=lambda key: int(key[6:], 16)):
             if key_b not in used_b:
                 used_b.add(key_b)
@@ -193,49 +220,65 @@ def _one_to_one_pairs(node_matches):
     return pairs
 
 
-def get_function_diff(function_id_a, function_id_b):
+def empty_function_diff(function_entry=None, other_function_entry=None):
+    return {"node_colors": {"a": {}, "b": {}}, "node_matches": {"a": {}, "b": {}}, "pairs": [], "functions": (function_entry, other_function_entry), "smda_functions": None}
+
+
+def get_function_diff(function_id_a, function_id_b, function_entry=None, other_function_entry=None):
     """Compare two stored functions block by block.
+
+    Entries already fetched with their xcfg can be passed in, which spares the two
+    backend round-trips; otherwise they are fetched here.
 
     Returns a dict with
       node_colors   {"a": {node_id: colour}, "b": {...}}, one entry per block
       node_matches  {"a": {node_id: [node_ids of B]}, "b": {...}}, only matched blocks
       pairs         [(offset_a, offset_b), ...], a one-to-one selection of the above
-      functions     (function_entry_a, function_entry_b), fetched with their xcfg
+      functions     (function_entry_a, function_entry_b)
+      smda_functions (SmdaFunction a, SmdaFunction b), or None when there was nothing to compare
+
+    A backend that dropped the disassembly (STORAGE_DROP_DISASSEMBLY) answers with an
+    empty xcfg (`None` means it was not requested, `{}` that it is gone), and the
+    diff is then empty rather than a server error.
     """
     client = get_client()
-    function_entry = client.getFunctionById(function_id_a, with_xcfg=True)
-    other_function_entry = client.getFunctionById(function_id_b, with_xcfg=True)
+    if function_entry is None or not function_entry.xcfg:
+        function_entry = client.getFunctionById(function_id_a, with_xcfg=True)
+    if other_function_entry is None or not other_function_entry.xcfg:
+        other_function_entry = client.getFunctionById(function_id_b, with_xcfg=True)
+    if function_entry is None or other_function_entry is None or not function_entry.xcfg or not other_function_entry.xcfg:
+        return empty_function_diff(function_entry, other_function_entry)
     smda_function_a = function_entry.toSmdaFunction()
     smda_function_b = other_function_entry.toSmdaFunction()
     node_colors = {"a": {}, "b": {}}
-    node_matches = {"a": {}, "b": {}}
+    node_layers = {"a": {}, "b": {}}
+    layer_pairs = []
     # no match / base color: bleak red
     for block in smda_function_a.getBlocks():
         node_colors["a"][node_id(block.offset)] = COLOR_UNMATCHED
     for block in smda_function_b.getBlocks():
         node_colors["b"][node_id(block.offset)] = COLOR_UNMATCHED
     # escaped blocks matches
-    _apply_layer(node_colors, node_matches, _escaped_pairs(smda_function_a, smda_function_b), lambda pair: COLOR_ESCAPED_MATCH)
+    _apply_layer(node_colors, node_layers, layer_pairs, 1, _escaped_pairs(smda_function_a, smda_function_b), lambda pair: COLOR_ESCAPED_MATCH)
     # ad-hoc picblock match (small BB): bleak teal
-    _apply_layer(node_colors, node_matches, _adhoc_picblock_pairs(function_entry, other_function_entry, smda_function_a, smda_function_b), lambda pair: COLOR_ADHOC_PICBLOCK_MATCH)
+    _apply_layer(node_colors, node_layers, layer_pairs, 2, _adhoc_picblock_pairs(function_entry, other_function_entry, smda_function_a, smda_function_b), lambda pair: COLOR_ADHOC_PICBLOCK_MATCH)
     # override "full" picblocks with 4+ addresses
-    _apply_layer(node_colors, node_matches, _stored_picblock_pairs(function_entry, other_function_entry), lambda pair: COLOR_FULL_PICBLOCK_MATCH)
+    _apply_layer(node_colors, node_layers, layer_pairs, 3, _stored_picblock_pairs(function_entry, other_function_entry), lambda pair: COLOR_FULL_PICBLOCK_MATCH)
+    _drop_orphans(node_colors, node_layers, layer_pairs)
     # compare everything not colored by now using our adapted Levenshtein
     unmatched_nodes = {
         "a": [int(k[6:], 16) for k, v in node_colors["a"].items() if v == COLOR_UNMATCHED],
         "b": [int(k[6:], 16) for k, v in node_colors["b"].items() if v == COLOR_UNMATCHED],
     }
-    _apply_layer(node_colors, node_matches, _levenshtein_pairs(smda_function_a, smda_function_b, unmatched_nodes), lambda pair: LEVENSHTEIN_COLORS[pair[2]])
+    _apply_layer(node_colors, node_layers, layer_pairs, 4, _levenshtein_pairs(smda_function_a, smda_function_b, unmatched_nodes), lambda pair: LEVENSHTEIN_COLORS[pair[2]])
+    node_matches = _collect_matches(node_layers, layer_pairs)
     return {
         "node_colors": node_colors,
         "node_matches": node_matches,
         "pairs": _one_to_one_pairs(node_matches),
         "functions": (function_entry, other_function_entry),
+        "smda_functions": (smda_function_a, smda_function_b),
     }
-
-
-def get_matches_node_colors(function_id_a, function_id_b):
-    return get_function_diff(function_id_a, function_id_b)["node_colors"]
 
 
 def _dot_escape(text):
@@ -264,8 +307,8 @@ def build_combined_dot_graph(smda_function_a, smda_function_b, pairs, node_color
     A matched pair of blocks becomes a single node carrying A's id and colour, its
     label headed by both offsets and followed by A's instructions; where the two
     blocks differ, B's instructions travel in the node's `comment` so the page can
-    show them on demand. Blocks only in A keep A's id and the unmatched colour;
-    blocks only in B get a `NodeB` id and their own colour. Edges are the union of
+    show them on demand. Blocks without a partner in `pairs` keep A's id and get
+    the unmatched colour; blocks only in B get a `NodeB` id and their own colour. Edges are the union of
     both control flows, coloured by which side has them.
     """
     a_to_b = {offset_a: offset_b for offset_a, offset_b in pairs}
@@ -283,15 +326,21 @@ def build_combined_dot_graph(smda_function_a, smda_function_b, pairs, node_color
     dot_graph += f'  label="Combined CFG for 0x{smda_function_a.offset:x} and 0x{smda_function_b.offset:x}";\n'
     for block in smda_function_a.getBlocks():
         lines = _block_lines(smda_function_a, block)
-        color = node_colors["a"].get(node_id(block.offset), COLOR_UNMATCHED)
         comment = ""
         if block.offset in a_to_b:
             offset_b = a_to_b[block.offset]
+            block_b = blocks_b[offset_b]
+            color = node_colors["a"].get(node_id(block.offset), COLOR_UNMATCHED)
             lines = [f"A 0x{block.offset:x} | B 0x{offset_b:x}"] + lines
-            lines_b = _block_lines(smda_function_b, blocks_b[offset_b])
-            if lines_b != _block_lines(smda_function_a, block):
-                comment = _dot_label(lines_b)
+            # B's code travels along only where it differs from A's - compared with
+            # addresses and immediates escaped, since those differ between any two
+            # binaries without making the code different
+            if _escaped_sequence(block_b) != _escaped_sequence(block):
+                comment = _dot_label(_block_lines(smda_function_b, block_b))
         else:
+            # a block that matched several candidates but lost them all in the
+            # one-to-one reduction is drawn as A-only, in the A-only colour
+            color = COLOR_UNMATCHED
             lines = [f"A 0x{block.offset:x} only"] + lines
         dot_graph += f'  {node_id(block.offset)} [shape=record,side="{"ab" if block.offset in a_to_b else "a"}",fillcolor="{color}",comment="{comment}",label="{_dot_label(lines)}"];\n'
     for block in smda_function_b.getBlocks():
@@ -321,5 +370,7 @@ def build_combined_dot_graph(smda_function_a, smda_function_b, pairs, node_color
 
 def get_combined_dot_graph(function_id_a, function_id_b):
     diff = get_function_diff(function_id_a, function_id_b)
-    function_entry, other_function_entry = diff["functions"]
-    return build_combined_dot_graph(function_entry.toSmdaFunction(), other_function_entry.toSmdaFunction(), diff["pairs"], diff["node_colors"])
+    if diff["smda_functions"] is None:
+        return ""
+    smda_function_a, smda_function_b = diff["smda_functions"]
+    return build_combined_dot_graph(smda_function_a, smda_function_b, diff["pairs"], diff["node_colors"])

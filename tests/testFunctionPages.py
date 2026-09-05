@@ -49,9 +49,11 @@ def test_the_function_page_renders_its_sections(client, as_role):
     response = client.get(f"/explore/functions/{MULTI_BLOCK_FUNCTION}")
     assert response.status_code == 200
     page = response.data.decode()
-    for heading in ("Function Info", "MinHash &amp; Shingles", "Basic Blocks &amp; PicBlockHashes", "API Usage", "Control Flow Graph"):
+    for heading in ("Function Info", "MinHash &amp; Shingles", "Basic Blocks &amp; PicBlockHashes", "Control Flow Graph"):
         assert heading in page, f"section {heading!r} missing"
     assert 'class="accordion' in page
+    # the API usage is behind a button, not in the flow of the page
+    assert 'id="apiUsageModal"' in page
 
 
 def test_the_function_page_offers_the_analyze_actions(client, as_role, fake_mcrit):
@@ -195,6 +197,77 @@ def test_the_single_graph_route_still_serves_dot(client, as_role):
     assert response.status_code == 200
     assert response.data.startswith(b'digraph "CFG')
 
+
+
+# --- the guarantees the review asked for ---------------------------------------------
+
+def test_a_matched_colour_always_has_a_partner(app):
+    """A block wearing a match colour is in node_matches; nothing is coloured as
+    matched while pointing at nothing (a later layer may re-match only one end of
+    an earlier pair)."""
+    from mcritweb.views.functiondiff import COLOR_UNMATCHED
+    diff = diff_of(app, *DIFFERENT_PAIR)
+    for side in ("a", "b"):
+        for node, color in diff["node_colors"][side].items():
+            if color != COLOR_UNMATCHED:
+                assert node in diff["node_matches"][side], f"{side}:{node} is coloured {color} but has no partner"
+            else:
+                assert node not in diff["node_matches"][side]
+
+
+def test_the_combined_graph_carries_b_code_only_where_it_differs(app):
+    """Identical functions live at different addresses, and addresses alone must not
+    count as a difference - otherwise every block would claim one."""
+    from mcritweb.views.functiondiff import get_combined_dot_graph
+    with app.test_request_context("/"):
+        dot = get_combined_dot_graph(*IDENTICAL_PAIR)
+    assert re.search(r'comment="[^"]+"', dot) is None
+
+
+def test_an_a_block_without_a_partner_is_drawn_a_only_in_red(app, fake_mcrit):
+    from mcritweb.views.functiondiff import COLOR_UNMATCHED, build_combined_dot_graph, get_function_diff
+    with app.test_request_context("/"):
+        diff = get_function_diff(*DIFFERENT_PAIR)
+    smda_a, smda_b = diff["smda_functions"]
+    # take the pairing away from the first block: it must then be red and "only"
+    first_offset = smda_a.getBlocks()[0].offset
+    pairs = [pair for pair in diff["pairs"] if pair[0] != first_offset]
+    dot = build_combined_dot_graph(smda_a, smda_b, pairs, diff["node_colors"])
+    line = next(line for line in dot.splitlines() if line.startswith(f"  Node0x{first_offset:x} ["))
+    assert f'fillcolor="{COLOR_UNMATCHED}"' in line
+    assert f"A 0x{first_offset:x} only" in line
+
+
+class _DroppedDisassemblyClient:
+    """A backend with STORAGE_DROP_DISASSEMBLY: entries come back with xcfg == {}."""
+
+    def __init__(self, corpus):
+        self._corpus = corpus
+
+    def getFunctionById(self, function_id, *args, **kwargs):
+        entry = self._corpus.getFunctionById(function_id, *args, **kwargs)
+        if entry is not None:
+            entry.xcfg = {}
+        return entry
+
+    def __getattr__(self, name):
+        return getattr(self._corpus, name)
+
+
+def test_dropped_disassembly_yields_an_empty_diff_not_a_server_error(app, fake_mcrit):
+    from mcritweb.views.functiondiff import get_combined_dot_graph, get_function_diff
+    app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: _DroppedDisassemblyClient(fake_mcrit)
+    with app.test_request_context("/"):
+        diff = get_function_diff(*DIFFERENT_PAIR)
+        assert diff["pairs"] == [] and diff["node_matches"] == {"a": {}, "b": {}}
+        assert get_combined_dot_graph(*DIFFERENT_PAIR) == ""
+
+
+def test_the_comparison_page_survives_dropped_disassembly(client, as_role, app, fake_mcrit):
+    as_role("visitor")
+    app.config["MCRIT_CLIENT_FACTORY"] = lambda **kwargs: _DroppedDisassemblyClient(fake_mcrit)
+    response = client.get(f"/data/matches/function/{DIFFERENT_PAIR[0]}/{DIFFERENT_PAIR[1]}")
+    assert response.status_code == 200
 
 if __name__ == "__main__":
     unittest.main()

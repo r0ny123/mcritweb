@@ -312,10 +312,8 @@ def fetchDotGraph(function_id):
 @visitor_required
 @mcrit_server_required
 def fetchCombinedDotGraph(function_id_a, function_id_b):
-    client = get_client()
-    if client.isFunctionId(function_id_a) and client.isFunctionId(function_id_b):
-        return get_combined_dot_graph(function_id_a, function_id_b)
-    return ""
+    # an unknown function, or one without disassembly, yields an empty graph
+    return get_combined_dot_graph(function_id_a, function_id_b)
 
 # helper for @bp.route('/functions/<int:function_id>')
 @bp.route('/findLoops/', methods=['GET', 'POST'])

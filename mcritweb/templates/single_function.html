@@ -1,6 +1,6 @@
 {% from 'table/links.html' import format_pichash, format_offset, format_family_name_tuple, format_family_id, format_sample_id, format_function_id, format_sha_short_clipboard, clipboard_btn %}
 {% from 'table/column_table.html' import function_column_table %}
-{% from 'table/function_details.html' import api_usage, minhash_shingles, picblock_table %}
+{% from 'table/function_details.html' import api_usage_modal, api_usage_button, minhash_shingles, picblock_table %}
 {% extends 'base.html' %}
 {% block style %}
 <!--
@@ -36,7 +36,7 @@ Function: {{ function_id }}
         <div class="modal-body">
           <label for="other_function_id" class="col-form-label">Function ID to compare against</label>
           <input type="number" class="form-control" id="other_function_id" name="other_function_id" placeholder="e.g. 4711" required autofocus>
-          <div class="form-text">Renders both control flow graphs side by side, blocks coloured by how well they matched. Any stored function can be compared, it does not have to be a match.</div>
+          <div class="form-text">Any stored function can be compared, it does not have to be a match.</div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -46,6 +46,13 @@ Function: {{ function_id }}
     </div>
   </div>
 </div>
+{{ api_usage_modal("apiUsageModal", "API usage for function %d" % function_id, [
+    ("This function", "/functions/%d" % function_id),
+    ("With its control flow graph", "/functions/%d?with_xcfg=true" % function_id),
+    ("PicHash occurrences (summary)", "/query/pichash/%016x/summary" % entry.pichash),
+    ("PicHash occurrences (all)", "/query/pichash/%016x" % entry.pichash),
+    ("Its sample", "/samples/%d" % entry.sample_id),
+  ], "function_entry = client.getFunctionById(%d, with_xcfg=True)\nprint(client.getMatchesForPicHash(function_entry.pichash, summary=True))" % function_id) }}
 <script>
   $(document).ready(function(){
     $("#compare_function_form").submit(function(eventObj) {
@@ -88,6 +95,7 @@ Function: {{ function_id }}
       {% if sample_entry.family_id is not none %}
       <a class="btn btn-outline-dark btn-sm" id="function_{{ function_id }}_family" href="{{ url_for('explore.family_by_id', family_id=sample_entry.family_id) }}" role="button" title="Go to family {{ sample_entry.family }}"><i class="fa-solid fa-bug"></i></a>
       {% endif %}
+      {{ api_usage_button("apiUsageModal") }}
       <a class="btn btn-outline-dark btn-sm" href="#function_xcfg" role="button" title="Go to the control flow graph"><i class="fa-solid fa-diagram-project"></i></a>
     </div>
   </div>
@@ -131,29 +139,6 @@ Function: {{ function_id }}
       <div id="collapse-blocks" class="accordion-collapse collapse" aria-labelledby="heading-blocks">
         <div class="accordion-body">
           {{ picblock_table(entry) }}
-        </div>
-      </div>
-    </div>
-
-    <div class="accordion-item">
-      <h2 class="accordion-header" id="heading-api-usage" style="margin:0">
-        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse-api-usage" aria-expanded="false" aria-controls="collapse-api-usage">
-          API Usage
-        </button>
-      </h2>
-      <div id="collapse-api-usage" class="accordion-collapse collapse" aria-labelledby="heading-api-usage">
-        <div class="accordion-body">
-          {% call api_usage([
-            ("This function", "/functions/%d" % function_id),
-            ("With its control flow graph (xcfg)", "/functions/%d?with_xcfg=true" % function_id),
-            ("Where its PicHash occurs (summary)", "/query/pichash/%016x/summary" % entry.pichash),
-            ("Where its PicHash occurs (all matches)", "/query/pichash/%016x" % entry.pichash),
-            ("Its sample", "/samples/%d" % entry.sample_id),
-          ]) %}
-function_entry = client.getFunctionById({{ function_id }}, with_xcfg=True)
-print(function_entry)
-print(client.getMatchesForPicHash(function_entry.pichash, summary=True))
-          {% endcall %}
         </div>
       </div>
     </div>

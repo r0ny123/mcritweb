@@ -10,18 +10,14 @@
   views/api.py dispatches, i.e. the backend's own path. The token is never rendered
   here - the placeholder points at the settings page where the user's own is.
 #}
-{% macro api_usage(calls) %}
+{% macro api_usage(calls, python_snippet) %}
   {# url_for needs a path to build the route; the placeholder and its slash are cut off again #}
   {% set api_base = url_for('api.api_router', api_path='x', _external=True)[:-2] %}
-  <p class="mb-2">
-    The same data is available through the API passthrough, authenticated with the API token shown on your
-    <a href="{{ url_for('authentication.settings') }}">settings page</a>.
-    Paths are those of the MCRIT backend, forwarded as-is.
+  <p class="mb-2" style="font-size: 0.9em;">
+    Authenticate with the API token from your <a href="{{ url_for('authentication.settings') }}">settings page</a>.
+    Paths are those of the MCRIT backend, forwarded by the passthrough as-is.
   </p>
-  <table class="table table-sm">
-    <thead class="thead-light">
-      <tr><th scope="col">Purpose</th><th scope="col">Request</th></tr>
-    </thead>
+  <table class="table table-sm mb-2">
     <tbody>
     {% for description, api_path in calls %}
       <tr>
@@ -34,12 +30,35 @@
     {% endfor %}
     </tbody>
   </table>
-  <p class="mb-1">Or with the <code>mcrit</code> Python package, which speaks the same paths:</p>
 <pre class="mb-0"><code>from mcrit.client.McritClient import McritClient
 
 client = McritClient(mcrit_server="{{ api_base }}", apitoken="&lt;your API token&gt;")
+{{ python_snippet | trim }}</code></pre>
+{% endmacro %}
 
-{{ caller() | trim }}</code></pre>
+
+{#
+  The API usage behind an icon button, so the page itself stays uncluttered:
+  a modal that opens from a `fa-code` button in the page's button group.
+#}
+{% macro api_usage_modal(modal_id, title, calls, python_snippet) %}
+<div class="modal fade" id="{{ modal_id }}" tabindex="-1" aria-labelledby="{{ modal_id }}Label" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="{{ modal_id }}Label">{{ title }}</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        {{ api_usage(calls, python_snippet) }}
+      </div>
+    </div>
+  </div>
+</div>
+{% endmacro %}
+
+{% macro api_usage_button(modal_id) %}
+  <a class="btn btn-outline-dark btn-sm" role="button" data-bs-toggle="modal" data-bs-target="#{{ modal_id }}" title="API usage"><i class="fa-solid fa-code"></i></a>
 {% endmacro %}
 
 
@@ -70,16 +89,15 @@ client = McritClient(mcrit_server="{{ api_base }}", apitoken="&lt;your API token
 {% macro minhash_shingles(function_entry) %}
   {% if function_entry.minhash|length > 0 %}
     {% set num_slots = function_entry.minhash|length // 4 %}
-    <p>
+    <p class="mb-1">
       <i style="color:green;" class="fa-solid fa-square-check"></i>
-      MinHash available: a signature of {{ num_slots }} x 32 bit ({{ function_entry.minhash|length }} bytes), each slot the minimum hash over the function's shingles.
+      MinHash available, {{ num_slots }} x 32 bit:
     </p>
     <div class="font-monospace" style="word-break: break-all; font-size: 0.85em;">{{ function_entry.minhash.hex() }} {{ clipboard_btn(function_entry.minhash.hex()) }}</div>
     {% set composition = function_entry.minhash_shingle_composition or {} %}
     {% if composition %}
       <h6 class="mt-3">Shingle composition</h6>
-      <p style="font-size: 0.9em;">Which shingler produced the winning shingle per signature slot, and how many shingles each shingler extracted from this function.</p>
-      <table class="table table-sm" style="width: auto;">
+      <table class="table table-sm mb-0" style="width: auto;">
         <thead class="thead-light">
           <tr><th scope="col">Shingler</th><th scope="col" style="text-align: right;">Signature slots</th><th scope="col" style="text-align: right;">Shingles extracted</th></tr>
         </thead>
@@ -99,13 +117,12 @@ client = McritClient(mcrit_server="{{ api_base }}", apitoken="&lt;your API token
         </tbody>
       </table>
     {% else %}
-      <p class="mt-3 mb-0" style="color: grey;">No shingle composition was recorded for this function - the backend only tracks it with <code>MINHASH_TRACK_SHINGLES</code> enabled.</p>
+      <p class="mt-2 mb-0" style="color: grey; font-size: 0.9em;">No shingle composition recorded (the backend tracks it only with <code>MINHASH_TRACK_SHINGLES</code>).</p>
     {% endif %}
   {% else %}
     <p class="mb-0">
       <i style="color:darkred;" class="fa-solid fa-times-circle"></i>
-      No MinHash: the function is either below the backend's size threshold for minhashing, or the MinHash job for its sample has not run yet.
-      Only PicHash matching applies to it.
+      No MinHash - the function is below the size threshold for minhashing, or the MinHash job has not run yet. Only PicHash matching applies.
     </p>
   {% endif %}
 {% endmacro %}
@@ -114,8 +131,7 @@ client = McritClient(mcrit_server="{{ api_base }}", apitoken="&lt;your API token
 {# the PicBlockHashes the backend indexed for a function, i.e. its larger basic blocks #}
 {% macro picblock_table(function_entry) %}
   {% if function_entry.picblockhashes %}
-    <p style="font-size: 0.9em;">Blocks below the backend's size threshold carry no PicBlockHash and are not listed. The graph below shows how often each block occurs across the database.</p>
-    <table class="table table-sm table-hover" style="width: auto;">
+    <table class="table table-sm table-hover mb-0" style="width: auto;">
       <thead class="thead-light">
         <tr>
           <th scope="col">Offset</th>
@@ -136,6 +152,6 @@ client = McritClient(mcrit_server="{{ api_base }}", apitoken="&lt;your API token
       </tbody>
     </table>
   {% else %}
-    <p class="mb-0">No PicBlockHashes are stored for this function - none of its blocks reaches the backend's size threshold.</p>
+    <p class="mb-0">No PicBlockHashes stored - none of the blocks reaches the size threshold.</p>
   {% endif %}
 {% endmacro %}

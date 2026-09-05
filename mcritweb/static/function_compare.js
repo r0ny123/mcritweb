@@ -51,23 +51,44 @@ var FunctionCompare = (function () {
     if (!entry) {
       return;
     }
+    entry.lastScale = entry.zoom.scale();
+    entry.lastTranslate = entry.zoom.translate().slice();
+    // The combined view hides the side-by-side panes; a graph fitted while hidden
+    // measures a zero-sized pane and ends up with a negative scale. So the switch
+    // is offered only once both graphs are on screen.
+    if (graph_zooms.a && graph_zooms.b) {
+      var combinedToggle = document.getElementById("viewCombined");
+      if (combinedToggle) {
+        combinedToggle.disabled = false;
+      }
+    }
     // Replace the zoom listener main_duo.js installed with one that also drives
-    // the other graph. Both graphs are fitted to their panes independently, so the
-    // mirrored scale is relative to each graph's own initial scale; the pan is
-    // mirrored in screen pixels, which is what a user dragging expects.
+    // the other graph. What is mirrored is the *change*: the scale factor and the
+    // pan in screen pixels. Both graphs are fitted to their panes independently and
+    // a click may have centred one of them elsewhere, so absolute values would snap
+    // the other graph back on the next wheel turn.
     entry.zoom.on("zoom", function () {
-      applyTransform(entry, d3.event.translate, d3.event.scale);
+      var scale = d3.event.scale;
+      var translate = d3.event.translate.slice();
+      applyTransform(entry, translate, scale);
+      var scaleFactor = scale / entry.lastScale;
+      var delta = [translate[0] - entry.lastTranslate[0], translate[1] - entry.lastTranslate[1]];
+      entry.lastScale = scale;
+      entry.lastTranslate = translate;
       if (!isSyncEnabled || isMirroring) {
         return;
       }
       var other = graph_zooms[OTHER[graph_id]];
-      if (!other) {
+      if (!other || other.lastScale === undefined) {
         return;
       }
       isMirroring = true;
-      var scale = d3.event.scale / entry.initialScale * other.initialScale;
-      other.zoom.scale(scale).translate(d3.event.translate.slice());
-      applyTransform(other, d3.event.translate, scale);
+      var otherScale = other.lastScale * scaleFactor;
+      var otherTranslate = [other.lastTranslate[0] + delta[0], other.lastTranslate[1] + delta[1]];
+      other.zoom.scale(otherScale).translate(otherTranslate);
+      other.lastScale = otherScale;
+      other.lastTranslate = otherTranslate;
+      applyTransform(other, otherTranslate, otherScale);
       isMirroring = false;
     });
     installLinkedHighlighting(graph_id);
@@ -121,10 +142,9 @@ var FunctionCompare = (function () {
     var scale = entry.zoom.scale();
     var bounds = entry.svg.node().getBoundingClientRect();
     var translate = [bounds.width / 2 - position[0] * scale, bounds.height / 2 - position[1] * scale];
-    isMirroring = true;
     entry.zoom.translate(translate);
+    entry.lastTranslate = translate.slice();
     applyTransform(entry, translate, scale);
-    isMirroring = false;
   }
 
   // --- combined view ----------------------------------------------------------------
