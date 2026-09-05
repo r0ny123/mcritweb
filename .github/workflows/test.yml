@@ -58,6 +58,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          # pytest used to arrive as a dependency of mcrit; since mcrit 1.8 it is
+          # only in mcrit's dev extras, so the runner has to install it itself
+          python -m pip install pytest
           python -m pip install -e . --no-deps
 
       - name: Run unit tests
