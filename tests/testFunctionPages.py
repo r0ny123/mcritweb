@@ -269,5 +269,30 @@ def test_the_comparison_page_survives_dropped_disassembly(client, as_role, app, 
     response = client.get(f"/data/matches/function/{DIFFERENT_PAIR[0]}/{DIFFERENT_PAIR[1]}")
     assert response.status_code == 200
 
+def test_a_large_bucket_of_identical_blocks_is_not_a_cartesian_product():
+    """1000 identical blocks on either side must not become a million pairs, and
+    every block must still have a partner (pure-python helper, no app needed)."""
+    from mcritweb.views.functiondiff import RANK_WINDOW, _pair_by_hash
+    hashes_a = [{"offset": 0x1000 + 16 * i, "hash": 0xABCD} for i in range(1000)]
+    hashes_b = [{"offset": 0x9000 + 16 * i, "hash": 0xABCD} for i in range(1000)]
+    pairs = _pair_by_hash(hashes_a, hashes_b)
+    assert len(pairs) <= (2 * RANK_WINDOW + 1) * 2000
+    assert {a for a, _ in pairs} == {entry["offset"] for entry in hashes_a}
+    assert {b for _, b in pairs} == {entry["offset"] for entry in hashes_b}
+    # blocks at the same rank find each other
+    assert (0x1000 + 16 * 500, 0x9000 + 16 * 500) in pairs
+    # a small bucket is still paired completely
+    small = _pair_by_hash(hashes_a[:3], hashes_b[:5])
+    assert len(small) == 15
+
+
+def test_the_combined_graph_route_validates_the_ids(client, as_role, fake_mcrit):
+    as_role("visitor")
+    fake_mcrit.calls.clear()
+    response = client.get("/explore/fetchCombinedDotGraph/98/987654321")
+    assert response.status_code == 200 and response.data == b""
+    assert not any(name == "getFunctionById" for name, _, _ in fake_mcrit.calls)
+
+
 if __name__ == "__main__":
     unittest.main()

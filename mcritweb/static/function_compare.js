@@ -84,7 +84,25 @@ var FunctionCompare = (function () {
       }
       isMirroring = true;
       var otherScale = other.lastScale * scaleFactor;
-      var otherTranslate = [other.lastTranslate[0] + delta[0], other.lastTranslate[1] + delta[1]];
+      var otherTranslate;
+      if (Math.abs(scaleFactor - 1) < 1e-9) {
+        // a pan: the same pixel offset on both sides
+        otherTranslate = [other.lastTranslate[0] + delta[0], other.lastTranslate[1] + delta[1]];
+      } else {
+        // a zoom keeps one screen point fixed; recover it from this graph's before
+        // and after (t' = p - (p - t) * k) and zoom the other graph around the same
+        // point from *its own* translate, so graphs that were offset against each
+        // other (after a click-to-centre, say) stay offset rather than drifting
+        var lastTranslate = [translate[0] - delta[0], translate[1] - delta[1]];
+        var fixedPoint = [
+          (translate[0] - scaleFactor * lastTranslate[0]) / (1 - scaleFactor),
+          (translate[1] - scaleFactor * lastTranslate[1]) / (1 - scaleFactor),
+        ];
+        otherTranslate = [
+          fixedPoint[0] - (fixedPoint[0] - other.lastTranslate[0]) * scaleFactor,
+          fixedPoint[1] - (fixedPoint[1] - other.lastTranslate[1]) * scaleFactor,
+        ];
+      }
       other.zoom.scale(otherScale).translate(otherTranslate);
       other.lastScale = otherScale;
       other.lastTranslate = otherTranslate;

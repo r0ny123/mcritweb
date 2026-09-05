@@ -55,15 +55,49 @@ def _hash_sequence(sequence):
     return struct.unpack("Q", hashlib.sha256(sequence).digest()[:8])[0]
 
 
+#: a hash shared by more blocks than this on both sides is no longer paired as a
+#: full product but by rank, see _pair_by_hash
+MAX_FULL_PRODUCT = 64
+#: how many rank neighbours a block in a large bucket is paired with, either way
+RANK_WINDOW = 4
+
+
 def _pair_by_hash(hashes_a, hashes_b):
-    """Every (offset_a, offset_b) whose block hashes are equal - many-to-many."""
+    """Every (offset_a, offset_b) whose block hashes are equal - many-to-many.
+
+    Small buckets are paired completely. A hash that many blocks on both sides
+    share (a lone `ret`, an obfuscator's filler) would otherwise expand into a
+    Cartesian product that dominates request time and page size, so a large bucket
+    pairs each block with its rank neighbours in address order instead - every
+    block still gets partners, and identical blocks at corresponding positions
+    find each other.
+    """
+    by_hash_a = {}
+    for entry in hashes_a:
+        by_hash_a.setdefault(entry["hash"], []).append(entry["offset"])
     by_hash_b = {}
     for entry in hashes_b:
         by_hash_b.setdefault(entry["hash"], []).append(entry["offset"])
     pairs = []
-    for entry in hashes_a:
-        for offset_b in by_hash_b.get(entry["hash"], []):
-            pairs.append((entry["offset"], offset_b))
+    for block_hash, offsets_a in by_hash_a.items():
+        offsets_b = by_hash_b.get(block_hash)
+        if not offsets_b:
+            continue
+        offsets_a = sorted(offsets_a)
+        offsets_b = sorted(offsets_b)
+        if len(offsets_a) * len(offsets_b) <= MAX_FULL_PRODUCT:
+            pairs.extend((offset_a, offset_b) for offset_a in offsets_a for offset_b in offsets_b)
+            continue
+        bucket = set()
+        for index_a, offset_a in enumerate(offsets_a):
+            index_b = round(index_a * (len(offsets_b) - 1) / max(len(offsets_a) - 1, 1))
+            for offset_b in offsets_b[max(0, index_b - RANK_WINDOW):index_b + RANK_WINDOW + 1]:
+                bucket.add((offset_a, offset_b))
+        for index_b, offset_b in enumerate(offsets_b):
+            index_a = round(index_b * (len(offsets_a) - 1) / max(len(offsets_b) - 1, 1))
+            for offset_a in offsets_a[max(0, index_a - RANK_WINDOW):index_a + RANK_WINDOW + 1]:
+                bucket.add((offset_a, offset_b))
+        pairs.extend(sorted(bucket))
     return pairs
 
 
