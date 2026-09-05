@@ -1,0 +1,141 @@
+{#
+  Pieces shared by the function page (explore.function_by_id) and the function
+  comparison page (data.match_functions). Issues #34 and #74.
+#}
+{% from 'table/links.html' import clipboard_btn %}
+
+{#
+  How to fetch the same data through the /api passthrough. `calls` is a list of
+  (description, api_path) tuples; the path is the one the passthrough router in
+  views/api.py dispatches, i.e. the backend's own path. The token is never rendered
+  here - the placeholder points at the settings page where the user's own is.
+#}
+{% macro api_usage(calls) %}
+  {# url_for needs a path to build the route; the placeholder and its slash are cut off again #}
+  {% set api_base = url_for('api.api_router', api_path='x', _external=True)[:-2] %}
+  <p class="mb-2">
+    The same data is available through the API passthrough, authenticated with the API token shown on your
+    <a href="{{ url_for('authentication.settings') }}">settings page</a>.
+    Paths are those of the MCRIT backend, forwarded as-is.
+  </p>
+  <table class="table table-sm">
+    <thead class="thead-light">
+      <tr><th scope="col">Purpose</th><th scope="col">Request</th></tr>
+    </thead>
+    <tbody>
+    {% for description, api_path in calls %}
+      <tr>
+        <td valign="middle" style="white-space: nowrap;">{{ description }}</td>
+        <td valign="middle">
+          <code>curl -H "apitoken: &lt;your API token&gt;" {{ api_base }}{{ api_path }}</code>
+          {{ clipboard_btn('curl -H "apitoken: <your API token>" ' + api_base + api_path) }}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="mb-1">Or with the <code>mcrit</code> Python package, which speaks the same paths:</p>
+<pre class="mb-0"><code>from mcrit.client.McritClient import McritClient
+
+client = McritClient(mcrit_server="{{ api_base }}", apitoken="&lt;your API token&gt;")
+
+{{ caller() | trim }}</code></pre>
+{% endmacro %}
+
+
+{# the colour key of the block matching in views/functiondiff.py #}
+{% macro cfg_legend(combined=False) %}
+  <span class="cfg-legend" style="font-size: 0.85em;">
+    <span class="swatch" style="background:#00DDFF"></span>PicBlockHash (indexed)
+    <span class="swatch" style="background:#C0F4FF"></span>PicBlockHash (ad-hoc)
+    <span class="swatch" style="background:#00ff00"></span>escaped instructions
+    <span class="swatch" style="background:#40ff40"></span><span class="swatch" style="background:#c0ff80; margin-left:0"></span><span class="swatch" style="background:#FFFF40; margin-left:0"></span><span class="swatch" style="background:#FFCC40; margin-left:0"></span>edit distance 0-3
+    <span class="swatch" style="background:#FFA0A0"></span>{% if combined %}only in A{% else %}unmatched{% endif %}
+    {% if combined %}
+    <span class="swatch" style="background:#D0B0FF"></span>only in B
+    <span class="edge-swatch" style="border-color:#000"></span>edge in both
+    <span class="edge-swatch" style="border-color:#d62728; border-top-style: dashed;"></span>edge only in A
+    <span class="edge-swatch" style="border-color:#7b2cbf; border-top-style: dashed;"></span>edge only in B
+    {% endif %}
+  </span>
+{% endmacro %}
+
+
+{#
+  The MinHash of a function and what went into it. The backend records which
+  shingler won how many of the signature's slots only when MINHASH_TRACK_SHINGLES is
+  on, so the composition is often empty; the signature itself is always there once
+  the MinHash job has run.
+#}
+{% macro minhash_shingles(function_entry) %}
+  {% if function_entry.minhash|length > 0 %}
+    {% set num_slots = function_entry.minhash|length // 4 %}
+    <p>
+      <i style="color:green;" class="fa-solid fa-square-check"></i>
+      MinHash available: a signature of {{ num_slots }} x 32 bit ({{ function_entry.minhash|length }} bytes), each slot the minimum hash over the function's shingles.
+    </p>
+    <div class="font-monospace" style="word-break: break-all; font-size: 0.85em;">{{ function_entry.minhash.hex() }} {{ clipboard_btn(function_entry.minhash.hex()) }}</div>
+    {% set composition = function_entry.minhash_shingle_composition or {} %}
+    {% if composition %}
+      <h6 class="mt-3">Shingle composition</h6>
+      <p style="font-size: 0.9em;">Which shingler produced the winning shingle per signature slot, and how many shingles each shingler extracted from this function.</p>
+      <table class="table table-sm" style="width: auto;">
+        <thead class="thead-light">
+          <tr><th scope="col">Shingler</th><th scope="col" style="text-align: right;">Signature slots</th><th scope="col" style="text-align: right;">Shingles extracted</th></tr>
+        </thead>
+        <tbody>
+        {% for shingler_name, entry in composition.items()|sort %}
+          <tr>
+            <td>{{ shingler_name }}</td>
+            {% if entry is mapping %}
+              <td style="text-align: right;">{{ entry.get("count", "-") }}</td>
+              <td style="text-align: right;">{{ entry.get("size", "-") }}</td>
+            {% else %}
+              <td style="text-align: right;">{{ entry }}</td>
+              <td style="text-align: right;">-</td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="mt-3 mb-0" style="color: grey;">No shingle composition was recorded for this function - the backend only tracks it with <code>MINHASH_TRACK_SHINGLES</code> enabled.</p>
+    {% endif %}
+  {% else %}
+    <p class="mb-0">
+      <i style="color:darkred;" class="fa-solid fa-times-circle"></i>
+      No MinHash: the function is either below the backend's size threshold for minhashing, or the MinHash job for its sample has not run yet.
+      Only PicHash matching applies to it.
+    </p>
+  {% endif %}
+{% endmacro %}
+
+
+{# the PicBlockHashes the backend indexed for a function, i.e. its larger basic blocks #}
+{% macro picblock_table(function_entry) %}
+  {% if function_entry.picblockhashes %}
+    <p style="font-size: 0.9em;">Blocks below the backend's size threshold carry no PicBlockHash and are not listed. The graph below shows how often each block occurs across the database.</p>
+    <table class="table table-sm table-hover" style="width: auto;">
+      <thead class="thead-light">
+        <tr>
+          <th scope="col">Offset</th>
+          <th scope="col" style="text-align: right;">Instructions</th>
+          <th scope="col" style="text-align: right;">Bytes</th>
+          <th scope="col">PicBlockHash</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for picblock in function_entry.picblockhashes|sort(attribute="offset") %}
+        <tr>
+          <td class="font-monospace">0x{{ "%x"|format(picblock.offset) }}</td>
+          <td style="text-align: right;">{{ picblock.length }}</td>
+          <td style="text-align: right;">{{ picblock.size }}</td>
+          <td class="font-monospace">0x{{ "%016x"|format(picblock.hash) }} {{ clipboard_btn("0x%016x"|format(picblock.hash)) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="mb-0">No PicBlockHashes are stored for this function - none of its blocks reaches the backend's size threshold.</p>
+  {% endif %}
+{% endmacro %}

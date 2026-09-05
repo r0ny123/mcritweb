@@ -102,6 +102,16 @@ This sub view provides more information about the function, including a renderin
 
 ![An example row for function details](images/function_details.png "An example row for function details")
 
+The page is organized in collapsible sections:
+
+* **Function Info**: sample and family, offset, name and labels, size, PicHash with how many families/samples/functions share it, and whether a MinHash has been calculated for the function.
+* **MinHash & Shingles**: the MinHash signature itself and, if the backend tracks it (`MINHASH_TRACK_SHINGLES`), which shingler produced how many of its slots.
+* **Basic Blocks & PicBlockHashes**: the basic blocks the backend indexed with their PicBlockHash.
+* **API Usage**: the requests that fetch the same data through the API passthrough, ready to paste with your own API token (see [User Settings](#user-settings)).
+* **Control Flow Graph**: the CFG, with the occurrence of every basic block across the database listed next to it.
+
+The buttons in the top right corner lead to the function's sample and family and open the analyze menu, which starts a 1vsN, 1vs1 or cross compare job for the sample, searches for all functions sharing the PicHash, or compares this function with any other stored function by its function_id.
+
 
 #### Statistics
 
@@ -250,6 +260,12 @@ This also allows to select a match, for which a BinDiff-like function comparison
 ![An example for function CFG comparison](images/function_match_cfg.png "An example for function CFG comparison")
 
 Here, blue indicates PIC matches (solid blue is indexed, light blue ad-hoc matched), green indicates a full match, yellow orange a partial match and red diversion that was too strong to be matched.
+
+The two graphs are panned and zoomed together while *Sync graphs* is ticked, so that corresponding regions stay next to each other.
+Hovering a basic block outlines the blocks it was matched to on the other side, and clicking it centers the other graph on its first match.
+
+*Combined* switches to a single graph in the manner of BinDiff, in which matched blocks are drawn once with the code of function A (the code of function B is shown while hovering a block where it differs), blocks that exist only in A are red and blocks that exist only in B are purple.
+Edges are black where both functions have them, and dashed red or purple where only A or only B has them.
 
 #### LinkHunt
 
