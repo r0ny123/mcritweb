@@ -37,8 +37,12 @@ This repository owns **no analysis data of its own**. Families, samples, functio
 The README states Python 3.8+; the reference deployment (`docker-mcrit`) runs **Python 3.12**. Target 3.11/3.12 for anything new.
 
 ```bash
-pip install -r requirements.txt
+make init   # requirements.txt, plus pytest/pytest-cov/ruff at the versions CI pins
 ```
+
+`pytest`, `pytest-cov` and `ruff` are not runtime dependencies, so they are not in
+`requirements.txt`; `mcrit` declares the first two under its `dev` extra, so they do
+not arrive with it either.
 
 A running MCRIT backend (server + worker + MongoDB) is required for essentially every page beyond login/register. Without it, `mcrit_server_required` flashes an error and redirects to the index.
 
@@ -68,7 +72,7 @@ Optional: set `PROFILER=True` in `instance/config.py` while `FLASK_DEBUG=1` to e
 
 **The domain vocabulary lives in [`CONTEXT.md`](CONTEXT.md)** — Family, Sample, Function, Query, Job, MinHash, PicHash, Band, Library, the three tokens, roles and operation mode. Read it before naming anything. What follows is the mechanism behind those terms, not their definitions.
 
-- **Role enforcement** — decorators in `authentication.py`: `login_required`, `visitor_required`, `contributor_required`, `admin_required`, plus `token_required` (API) and `multi_user`. `mcrit_server_required` (in `utility.py`) checks backend reachability. Apply the **narrowest** role a route needs, and place the role decorator **before** `mcrit_server_required` so authorization is settled without a backend round-trip.
+- **Role enforcement** — decorators in `authentication.py`: `login_required`, `visitor_required`, `contributor_required`, `admin_required`, plus `token_required` (API) and `multi_user`. `mcrit_server_required` (in `utility.py`) checks backend reachability. Apply the **narrowest** role a route needs, and place the role decorator **before** `mcrit_server_required` so authorization is settled without a backend round-trip. Its probe is cached for `MCRIT_SERVER_PROBE_TTL` seconds; why it is cached rather than removed, and what would have to change before it could be, is [ADR-0003](docs/adr/0012-keep-the-backend-reachability-probe.md).
 - **`@bp.route` goes on top, always.** Decorators apply bottom-up, so `bp.route` runs first and registers whatever function is beneath it. An auth decorator written *above* `@bp.route` wraps a name Flask never sees and enforces nothing, while reading exactly like protection — it has happened twice in this codebase. `testRoutePolicy.py` fails on any new occurrence.
   ```python
   @bp.route('/settings')   # first line, outermost
