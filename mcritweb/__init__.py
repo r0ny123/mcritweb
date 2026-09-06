@@ -17,6 +17,7 @@ def create_app(test_config=None, instance_path=None):
     from .secret_key import INSECURE_DEFAULT, load_or_create_secret_key
     from .views import administration, analyze, api, authentication, data, explore
     from .views.client import get_client
+    from .views.matching_statistics import matching_statistics
     from .views.utility import ensure_local_data_paths, get_mcritweb_version_from_setup
 
     # create and configure the app
@@ -137,6 +138,11 @@ def create_app(test_config=None, instance_path=None):
     @app.template_global()
     def join_hint_strings(list_of_strings):
         return "\n".join(sorted(list_of_strings))
+
+    # the backend's match_aggregation describes the whole job and is never revised by
+    # filtering, so a result page narrowed to one family or sample has to recompute it
+    # over the matches it is showing - see the module docstring and issue #38
+    app.add_template_global(matching_statistics, "matching_statistics")
 
     # the user manual. Public, and deliberately not under /admin: it was the only
     # route in that blueprint without an admin gate, which made the prefix a lie.
