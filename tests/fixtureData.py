@@ -151,6 +151,10 @@ class CorpusMcritClient:
         self._functions.update({int(k): FunctionEntry.fromDict(v) for k, v in load("functions_matched").items()})
         self._jobs = {job_id_of(report): (load(f"{report}.job"), load(f"{report}.result")) for report in REPORTS}
         self._queue = load("queue")
+        # the queue holds every job, the report pool only the five with a captured
+        # result - a real backend answers getJobData for both, and the cross compare
+        # page asks it for each of its five children
+        self._queue_by_id = {job["_id"]["$oid"]: job for job in self._queue}
 
     def _record(self, name, *args, **kwargs):
         self.calls.append((name, args, kwargs))
@@ -225,7 +229,10 @@ class CorpusMcritClient:
     def getJobData(self, job_id, *args, **kwargs):
         self._record("getJobData", job_id, *args, **kwargs)
         entry = self._jobs.get(job_id)
-        return Job(entry[0], None) if entry else None
+        if entry:
+            return Job(entry[0], None)
+        job = self._queue_by_id.get(job_id)
+        return Job(job, None) if job else None
 
     def getResultForJob(self, job_id, *args, **kwargs):
         self._record("getResultForJob", job_id, *args, **kwargs)

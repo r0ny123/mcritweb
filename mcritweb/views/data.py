@@ -691,6 +691,104 @@ def linkhunt_for_sample_or_query(job_info, matching_result: MatchingResult):
 # Listing Job information
 ################################################################
 
+# Job.duration is finished_at - started_at of a single job. A job that waits on
+# dependencies - a cross compare waits on one child per sample - does not start until
+# the last child is done, so its own duration covers only the assembly of the result
+# and reads as ~0 however long the matching took (issue #46). created_at ->
+# finished_at brackets the children too, and both are already on the job document, so
+# it costs no additional backend call. Until the job finishes the far end of that
+# span is the clock, which is the only reason `utc_now` below exists.
+JOB_TIMESTAMP_FMT = "%Y-%m-%d-%H:%M:%S"
+
+
+def utc_now():
+    """The wall clock a still-running job's total is measured against.
+
+    Job timestamps arrive in UTC and are rendered as they arrive, so the comparison
+    has to be UTC too - the rest of the app already reads the clock this way (db.py,
+    authentication.py). Whole seconds, like every other timestamp that goes into the
+    subtraction. Its own function so a test can freeze it: this is the only thing
+    about these rows that is not deterministic.
+    """
+    return datetime.utcnow().replace(microsecond=0)
+
+
+def dependency_progress(child_jobs):
+    """How far a job waiting on dependencies actually is, or None if that is unknowable.
+
+    `Job.progress` is the parent's own counter, and a parent does not start until its
+    last child is done - so for the whole time the children run it reads 0, which is the
+    other half of what issue #46 calls meaningless. The children each carry a real
+    progress, and the page that shows this has already fetched them, so averaging costs
+    no additional backend call.
+
+    A finished child counts as done whatever its counter says: a worker that finishes
+    without ticking progress to 1.0 would otherwise hold the parent below 100% forever.
+    A child that has been deleted is skipped rather than counted as 0 - it is not
+    "no progress", it is "no longer knowable", and counting it as zero would make the
+    bar go backwards when a dependency is cleaned up.
+    """
+    known = [job for job in (child_jobs or []) if job is not None]
+    if not known:
+        return None
+    total = 0.0
+    for job in known:
+        total += 1.0 if job.finished_at else min(max(job.progress or 0, 0.0), 1.0)
+    return total / len(known)
+
+
+def job_timestamp_as_datetime(value):
+    """One of Job's timestamps as a datetime, or None if it is unreadable.
+
+    Job.created_at / .finished_at normalize the {"$date": ...} the REST API sends into
+    an ISO string, but hand back whatever the queue stored otherwise - a datetime, for
+    an in-process LocalQueue. Both shapes come back at whole-second resolution: the
+    string one has to be, since parsing it drops the sub-second part, and a total of
+    `0:01:29.510000` beside a `0:00:00` duration reads as a different kind of number.
+    """
+    if isinstance(value, datetime):
+        return value.replace(microsecond=0)
+    if isinstance(value, str):
+        try:
+            return datetime.strptime(value[:10] + "-" + value[11:19], JOB_TIMESTAMP_FMT)
+        except ValueError:
+            return None
+    return None
+
+
+@bp.app_template_filter('total_duration')
+def total_duration(job_info):
+    """How long a job that waited on dependencies has taken end to end, or None when
+    that is not a number this job can produce.
+
+    A job still waiting on its dependencies is measured against the clock. That is
+    the state issue #46 is really about - while the children run, the parent has no
+    duration and a progress of 0, so the page a reader watches refresh says nothing
+    at all about how long the work has been going.
+    """
+    try:
+        if not job_info.all_dependencies:
+            return None
+        created_at = job_timestamp_as_datetime(job_info.created_at)
+        if job_info.finished_at is None:
+            # a failed or terminated job never gets a finished_at, so counting it
+            # against the clock would keep growing for as long as the document lives
+            finished_at = None if job_info.is_failed or job_info.is_terminated else utc_now()
+        else:
+            finished_at = job_timestamp_as_datetime(job_info.finished_at)
+    except KeyError:
+        # a job document written before one of these fields existed does not carry it
+        return None
+    if created_at is None or finished_at is None:
+        return None
+    if (created_at.tzinfo is None) != (finished_at.tzinfo is None):
+        # one aware, one naive - subtracting them raises, and there is nothing
+        # meaningful to show either way
+        return None
+    duration = finished_at - created_at
+    return duration if duration.total_seconds() >= 0 else None
+
+
 @bp.route('/jobs',methods=('GET', 'POST'))
 @visitor_required
 @mcrit_server_required
@@ -825,7 +923,7 @@ def job_by_id(job_id):
         for job in child_jobs:
             if job.family_id is not None:
                 families_by_id[job.family_id] = client.getFamily(job.family_id)
-    return render_template('job_overview.html', families=families_by_id, samples=samples_by_id, job_info=job_info, auto_refresh=auto_refresh, child_jobs=child_jobs)
+    return render_template('job_overview.html', families=families_by_id, samples=samples_by_id, job_info=job_info, auto_refresh=auto_refresh, child_jobs=child_jobs, child_progress=dependency_progress(child_jobs))
 
 
 @bp.route('/jobs/<job_id>/delete', methods=('POST',))
