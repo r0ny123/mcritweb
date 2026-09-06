@@ -200,3 +200,50 @@ def test_the_full_task_string_is_still_on_the_page(client, as_role):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- the Task line of a job's page (issue #40) --------------------------------------
+#
+# `Job.parameters` flattens the positional arguments and the named options into one
+# anonymous call, `getMatchesForMappedBinary(None, 31850496, 2)`, and that is what the
+# job overview and the query result page printed as the task. `job_task` reads the
+# queue's record itself and says what the job was run on, in the words its page uses.
+
+from mcritweb.jobnames import job_task  # noqa: E402
+
+
+def fixture_job(report):
+    return Job(json.loads((pathlib.Path(__file__).parent / "fixtures" / f"{report}.job.json").read_text()), None)
+
+
+class JobTaskTest(unittest.TestCase):
+    def test_a_query_job_names_the_binary_and_its_base_address(self):
+        job = fixture_job("matches_for_query")
+        self.assertEqual("getMatchesForMappedBinary(None, 31850496, 2)", job.parameters)
+        self.assertEqual(f"Match Binary (mapped) | {job.sha256[:8]} | mapped at 0x1e60000 | MinHash matching: Standard", job_task(job))
+
+    def test_the_matching_jobs_name_their_samples(self):
+        self.assertEqual("Match 1vN | sample 0 | MinHash matching: Standard", job_task(fixture_job("matches_for_sample")))
+        self.assertEqual("Match 1v1 | sample 1 vs. sample 3 | MinHash matching: Standard", job_task(fixture_job("matches_for_sample_vs")))
+        self.assertEqual("UniqueBlocks | samples 0, 1, 2 | family: 1", job_task(fixture_job("unique_blocks")))
+        cross = job_task(fixture_job("cross_compare"))
+        self.assertTrue(cross.startswith("CrossCompare | "), cross)
+        self.assertRegex(cross, r"CrossCompare \| \d+ samples")
+
+    def test_options_read_by_their_names_and_flags_only_when_set(self):
+        job = Job({"payload": {"method": "getMatchesForSample", "params": json.dumps({"0": 4, "force_recalculation": True, "minhash_threshold": 70, "sample_group_only": False})}}, None)
+        self.assertEqual("Match 1vN | sample 4 | forced recalculation | MinHash threshold: 70", job_task(job))
+
+    def test_an_unknown_or_unreadable_job_still_gets_its_name(self):
+        self.assertEqual("Recalculate PicHashes", job_task(Job({"payload": {"method": "recalculatePicHashes", "params": "{}"}}, None)))
+        self.assertEqual("someNewMethod", job_task(Job({"payload": {"method": "someNewMethod", "params": "not json"}}, None)))
+        self.assertEqual("Unknown job", job_task(Job({}, None)))
+
+
+def test_the_job_page_prints_the_readable_task(client, as_role):
+    as_role("visitor")
+    page = client.get(f"/data/jobs/{job_id_of('matches_for_query')}").get_data(as_text=True)
+    assert "Match Binary (mapped) |" in page
+    assert "mapped at 0x1e60000" in page
+    assert 'title="getMatchesForMappedBinary(None, 31850496, 2)"' in page
+    assert ">getMatchesForMappedBinary(None, 31850496, 2)<" not in page
