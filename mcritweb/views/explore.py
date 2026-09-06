@@ -76,7 +76,7 @@ def families():
     query = request.args.get('query', "")
     client = get_client()
     families = []
-    pagination = CursorPagination(request, default_sort="family_id", limit=25)
+    pagination = CursorPagination(request, default_sort="family_id", limit=25, sort_memory="family")
     results = client.search_families(query, **pagination.getSearchParams(), limit=pagination.limit)
     pagination.read_cursor_from_result(results)
     if results is None:
@@ -156,7 +156,7 @@ def samples():
     query = request.args.get('query', "")
     client = get_client()
     samples = []
-    pagination = CursorPagination(request, default_sort="sample_id", limit=25)
+    pagination = CursorPagination(request, default_sort="sample_id", limit=25, sort_memory="sample")
     results = client.search_samples(query, **pagination.getSearchParams(), limit=pagination.limit)
     pagination.read_cursor_from_result(results)
     if results is None:
@@ -185,7 +185,7 @@ def functions():
     query = request.args.get('query', "")
     client = get_client()
     functions = []
-    pagination = CursorPagination(request, default_sort="function_id", limit=25)
+    pagination = CursorPagination(request, default_sort="function_id", limit=25, sort_memory="function")
     results = client.search_functions(query, **pagination.getSearchParams(), limit=pagination.limit)
     pagination.read_cursor_from_result(results)
     if results is None:
@@ -212,7 +212,7 @@ def family_by_id(family_id):
         query = f"family_id:{family_id} {original_query}"
         client = get_client()
         samples = []
-        pagination = CursorPagination(request, default_sort="sample_id", limit=25)
+        pagination = CursorPagination(request, default_sort="sample_id", limit=25, sort_memory="sample")
         results = client.search_samples(query, **pagination.getSearchParams(), limit=pagination.limit)
         pagination.read_cursor_from_result(results)
         if results is None:
@@ -245,7 +245,7 @@ def sample_by_id(sample_id):
         original_query = request.args.get('query', "")
         query = f"sample_id:{sample_id} {original_query}"
         functions = []
-        pagination = CursorPagination(request, default_sort="function_id", limit=100)
+        pagination = CursorPagination(request, default_sort="function_id", limit=100, sort_memory="function")
         results = client.search_functions(query, **pagination.getSearchParams(), limit=pagination.limit)
         pagination.read_cursor_from_result(results)
         if results is None:
@@ -361,7 +361,7 @@ def search():
     families = []
     family_pagination = None
     if 'family' in types:
-        family_pagination = CursorPagination(request, query_param_prefix="family", default_sort="family_id", limit=25)
+        family_pagination = CursorPagination(request, query_param_prefix="family", default_sort="family_id", limit=25, sort_memory="family")
         results = client.search_families(query, **family_pagination.getSearchParams(), limit=family_pagination.limit)
         family_pagination.read_cursor_from_result(results)
         if results is None:
@@ -378,7 +378,7 @@ def search():
     samples = {}
     sample_pagination = None
     if 'sample' in types:
-        sample_pagination = CursorPagination(request, query_param_prefix="sample", default_sort="sample_id", limit=25)
+        sample_pagination = CursorPagination(request, query_param_prefix="sample", default_sort="sample_id", limit=25, sort_memory="sample")
         results = client.search_samples(query, **sample_pagination.getSearchParams(), limit=sample_pagination.limit)
         sample_pagination.read_cursor_from_result(results)
         if results is None:
@@ -403,7 +403,7 @@ def search():
     functions = []
     function_pagination = None
     if 'function' in types:
-        function_pagination = CursorPagination(request, query_param_prefix="function", default_sort="function_id", limit=25)
+        function_pagination = CursorPagination(request, query_param_prefix="function", default_sort="function_id", limit=25, sort_memory="function")
         results = client.search_functions(query, **function_pagination.getSearchParams(), limit=function_pagination.limit)
         function_pagination.read_cursor_from_result(results)
         if results is None:
