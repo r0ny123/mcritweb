@@ -37,8 +37,12 @@ This repository owns **no analysis data of its own**. Families, samples, functio
 The README states Python 3.8+; the reference deployment (`docker-mcrit`) runs **Python 3.12**. Target 3.11/3.12 for anything new.
 
 ```bash
-pip install -r requirements.txt
+make init   # requirements.txt, plus pytest/pytest-cov/ruff at the versions CI pins
 ```
+
+`pytest`, `pytest-cov` and `ruff` are not runtime dependencies, so they are not in
+`requirements.txt`; `mcrit` declares the first two under its `dev` extra, so they do
+not arrive with it either.
 
 A running MCRIT backend (server + worker + MongoDB) is required for essentially every page beyond login/register. Without it, `mcrit_server_required` flashes an error and redirects to the index.
 
@@ -76,7 +80,7 @@ Optional: set `PROFILER=True` in `instance/config.py` while `FLASK_DEBUG=1` to e
   def settings():
   ```
 - **Where the settings live** — operation mode, both server-side tokens and the backend URL are columns on the single-row `server` table; per-user tokens are `user.apitoken`. `multi_user` blocks registration in single-user mode.
-- **Two paginations** — `CursorPagination` (cursor-based, for backend `search_*` endpoints; supports prefixes so several tables can paginate on one page) and `Pagination` (offset-based, for slicing in-memory result lists). Use `CursorPagination` for anything backed by a backend search.
+- **Two paginations** — `CursorPagination` (cursor-based, for backend `search_*` endpoints; supports prefixes so several tables can paginate on one page) and `Pagination` (offset-based, for slicing in-memory result lists). Use `CursorPagination` for anything backed by a backend search. Both answer `sort_by` / `is_ascending` / `get_sort_link`, which is all the `sortable_header_col` widget in `table/pagination_widget.html` needs, so a sortable header works the same either way. A `CursorPagination` sends its order to the backend; a `Pagination` sorts the list in the view **before** slicing the page out of it (`views/result_sorting.py`) — sorting after the slice orders one page and leaves the list unsorted.
 - **User column settings** — `UserColumnSettings` lets each user pick and order the columns of seven tables. Positions are integers, `-1` meaning "not active".
 - **User filters** — `UserFilters` stores the defaults; `MatchingResult.setFilterValues()` / `.applyFilterValues()` apply them.
 
