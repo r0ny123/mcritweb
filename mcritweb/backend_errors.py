@@ -33,7 +33,12 @@ branch for it.
 """
 
 import requests
-from flask import current_app, render_template, request
+from flask import Response, current_app, render_template, request
+
+try:
+    from mcrit.client.McritClient import McritClientError, McritGone, McritNotFound, McritRequestError, McritServerError
+except ImportError:  # an mcrit before the client learnt to raise (its half of issue #43)
+    McritClientError = McritGone = McritNotFound = McritRequestError = McritServerError = None
 
 #: name of the blueprint whose callers get a status code instead of a page. Kept here
 #: rather than imported from views/api.py, which imports this module - a test asserts
@@ -126,6 +131,29 @@ def register(app):
         current_app.logger.warning("MCRIT backend call failed: %r", error)
         return render_template("backend_unavailable.html", reason=message_for(error)), 503
 
+    if McritClientError is not None:
+        # the mcrit half of #43: with `raise_server_errors` the client raises where the
+        # server reported a failure of its own, so that case no longer arrives as None
+        @app.errorhandler(McritServerError)
+        def backend_failed(error):
+            current_app.logger.warning("MCRIT backend failed a request: %s", error)
+            if wants_a_status_code():
+                # unreachable through views/api.py, which uses raw responses, but a
+                # future API route on a parsing client should still answer as a gateway
+                return Response(status=502)
+            return render_template("backend_server_error.html", status_code=error.status_code, message=error.message), 502
+
+        @app.errorhandler(McritRequestError)
+        def backend_refused(error):
+            # not raised by mcritweb's own clients (they leave `raise_client_errors` off,
+            # so a refused request answers None and the view decides); kept so a client
+            # built with it never surfaces as a stack trace
+            current_app.logger.info("MCRIT backend refused a request: %s", error)
+            status = 404 if isinstance(error, (McritNotFound, McritGone)) else 400
+            if wants_a_status_code():
+                return Response(status=status)
+            return render_template("backend_no_result.html", what=f"the requested data ({error.message or 'no detail'})", refusal_only=True), status
+
     @app.errorhandler(NoResultFromBackend)
     def backend_returned_nothing(error):
         # Rendered in place for the same reason as above. No handler on the api
@@ -134,4 +162,9 @@ def register(app):
         # produces a None to check. A test pins that, so the day it stops being true
         # is a test failure rather than an unhandled exception.
         current_app.logger.warning("MCRIT backend returned no %s", error.what)
-        return render_template("backend_no_result.html", what=error.what), 502
+        # with a client that raises server failures, a None can only mean the request
+        # was refused or named something that is not there - and the page says so
+        from mcritweb.views.client import CLIENT_RAISES_SERVER_ERRORS
+
+        status = 404 if CLIENT_RAISES_SERVER_ERRORS else 502
+        return render_template("backend_no_result.html", what=error.what, refusal_only=CLIENT_RAISES_SERVER_ERRORS), status

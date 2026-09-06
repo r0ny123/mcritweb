@@ -22,6 +22,12 @@ import requests
 from fixtureData import job_id_of
 
 from mcritweb.backend_errors import NoResultFromBackend, require_result
+from mcritweb.views.client import CLIENT_RAISES_SERVER_ERRORS
+
+#: With a client that raises server failures (mcrit's half of #43) a None can only mean
+#: "not there, gone or refused", and the page says so with a 404; against an older
+#: mcrit it still has to cover a crashed backend and answers 502.
+NO_RESULT_STATUS = 404 if CLIENT_RAISES_SERVER_ERRORS else 502
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
@@ -135,7 +141,7 @@ def test_a_page_says_the_backend_returned_nothing(client, as_role, role, verb, u
 
     response = client.post(url, data=form) if verb == "post" else client.get(url)
 
-    assert response.status_code == 502, "a page built from a missing result is not a success"
+    assert response.status_code == NO_RESULT_STATUS, "a page built from a missing result is not a success"
     assert "did not return" in response.get_data(as_text=True)
 
 
@@ -153,7 +159,7 @@ def test_the_statistics_page_does_not_report_an_empty_collection(client, as_role
 
     response = client.get("/explore/statistics")
 
-    assert response.status_code == 502
+    assert response.status_code == NO_RESULT_STATUS
 
 
 @pytest.mark.parametrize(
@@ -167,7 +173,7 @@ def test_a_change_that_was_not_scheduled_is_not_reported_as_scheduled(client, as
 
     response = client.post("/explore/modifyFamily", data=RENAME_FAMILY)
 
-    assert response.status_code == 502
+    assert response.status_code == NO_RESULT_STATUS
     assert "was scheduled" not in response.get_data(as_text=True)
 
 
