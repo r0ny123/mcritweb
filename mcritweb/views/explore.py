@@ -276,9 +276,29 @@ def sample_by_id(sample_id):
 FUNCTION_NAME_PATTERN = re.compile(r"^[ -~]{0,256}$")
 
 
+#: the last mcrit release without PUT /functions/{id}; a backend reporting this version or
+#: older cannot rename, whatever the installed McritClient offers
+LAST_MCRIT_WITHOUT_FUNCTION_RENAME = (1, 8, 1)
+
+
+def _version_tuple(version):
+    try:
+        return tuple(int(part) for part in str(version).split("-")[0].split(".")[:3])
+    except (TypeError, ValueError):
+        return None
+
+
 def can_modify_functions(client):
-    """Renaming a function needs McritClient.modifyFunction, which mcrit 1.8.1 does not have yet."""
-    return callable(getattr(client, "modifyFunction", None))
+    """Renaming a function needs McritClient.modifyFunction and a backend that serves
+    PUT /functions/{id}; both arrived after mcrit 1.8.1, and an up-to-date client can well
+    be talking to an older server, so the server's own version decides."""
+    if not callable(getattr(client, "modifyFunction", None)):
+        return False
+    try:
+        version = _version_tuple(client.getVersion())
+    except Exception:
+        return False
+    return version is not None and version > LAST_MCRIT_WITHOUT_FUNCTION_RENAME
 
 
 @bp.route('/modifyFunction', methods=['POST'])

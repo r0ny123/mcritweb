@@ -10,6 +10,9 @@ from testFunctionPages import MULTI_BLOCK_FUNCTION
 
 @pytest.fixture
 def fake_mcrit(corpus_mcrit):
+    # the captured corpus answers the version of the backend it was captured from;
+    # renaming needs the release after 1.8.1, so the fake reports one
+    corpus_mcrit.getVersion = lambda *args, **kwargs: "1.9.0"
     return corpus_mcrit
 
 
@@ -78,6 +81,17 @@ class _OlderBackend:
         if name == "modifyFunction":
             raise AttributeError(name)
         return getattr(self._corpus, name)
+
+
+def test_an_older_server_behind_a_new_client_disables_the_button(client, as_role, fake_mcrit, app):
+    # the installed McritClient has modifyFunction, the server it talks to does not serve it
+    fake_mcrit.getVersion = lambda *args, **kwargs: "1.8.1"
+    as_role("contributor")
+    page = client.get(f"/explore/functions/{MULTI_BLOCK_FUNCTION}").data.decode()
+    assert "needs an MCRIT backend newer than 1.8.1" in page
+    response = client.post("/explore/modifyFunction", data={"function_id": MULTI_BLOCK_FUNCTION, "function_name": "x"}, follow_redirects=True)
+    assert "cannot rename functions" in response.data.decode()
+    assert not _calls(fake_mcrit, "modifyFunction")
 
 
 def test_an_older_backend_disables_the_button_and_refuses_the_post(client, as_role, fake_mcrit, app):
