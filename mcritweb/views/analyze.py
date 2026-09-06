@@ -17,11 +17,10 @@ bp = Blueprint('analyze', __name__, url_prefix='/analyze')
 
 
 def get_unique_samples_from_search_result(search_result):
-    """the page's samples, then an id match that is not already among them"""
+    """the page's samples, then the id / sha256 direct matches not already among them"""
     unique = {sample_entry.sample_id: sample_entry for sample_entry in search_result.entries}
-    id_match = search_result.id_match
-    if id_match is not None:
-        unique.setdefault(id_match.sample_id, id_match)
+    for direct_match in search_result.direct_matches:
+        unique.setdefault(direct_match.sample_id, direct_match)
     return list(unique.values())
 
 

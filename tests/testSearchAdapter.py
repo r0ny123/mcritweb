@@ -157,6 +157,20 @@ def test_the_typed_method_is_preferred_where_the_client_has_one():
     assert client.calls[-1][0] == "searchSamples"
 
 
+def test_the_compare_pickers_keep_the_direct_matches():
+    from mcritweb.views.analyze import get_unique_samples_from_search_result
+
+    corpus = CorpusMcritClient()
+    first, second = list(corpus._samples.values())[:2]
+    # an id match and a sha256 match that the page itself does not hold, plus a page entry
+    page = SearchPage([second], {"forward": None, "backward": None}, id_match=first, sha_match=first)
+    unique = get_unique_samples_from_search_result(page)
+    assert [sample.sample_id for sample in unique] == [second.sample_id, first.sample_id]
+    # a sha256 search alone still names its sample
+    page = SearchPage([], {"forward": None, "backward": None}, sha_match=first)
+    assert [sample.sample_id for sample in get_unique_samples_from_search_result(page)] == [first.sample_id]
+
+
 class _Request:
     def __init__(self, args):
         self.args = args
