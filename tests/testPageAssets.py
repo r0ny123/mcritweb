@@ -55,8 +55,10 @@ PAGE_SPECIFIC = {
     "jquery-ui.css": "result_cross.html",
 }
 
-#: assets no template should load at all any more
-RETIRED = ["jquery.dataTables.min.js", "dataTables.bootstrap5.min.js", "dataTables.bootstrap5.min.css"]
+#: assets no template should load at all any more. dropzone.js is the unminified build
+#: of the same 5.9.2 that dropzone.min.js is; all.css and bootstrap.css are the full
+#: builds the subset and the minified file replaced (issue #63)
+RETIRED = ["jquery.dataTables.min.js", "dataTables.bootstrap5.min.js", "dataTables.bootstrap5.min.css", "dropzone.js", "css/all.css", "css/bootstrap.css"]
 
 
 @pytest.mark.parametrize("asset", sorted(PAGE_SPECIFIC))
@@ -127,17 +129,41 @@ def test_only_base_html_loads_a_jquery():
     assert loaders == {"base.html"}, f"more than one template loads a jQuery build: {sorted(loaders)}"
 
 
-def test_bootstrap_is_loaded_synchronously():
+def test_bootstrap_is_deferred_but_never_lazy():
     """What decides that `$.fn.tooltip` is Bootstrap's and not jQuery UI's.
 
-    Bootstrap 5.0.2 defines its jQuery plugins on DOMContentLoaded, which lands after
-    every plain `<script>` in the document - so it wins the name whatever the order.
-    Give this tag `defer` or `async`, or load it on demand, and that stops being true.
-    Measured both ways in Chromium; see ADR-0015.
+    Bootstrap 5.0.2 defines its jQuery plugins when it executes, or on DOMContentLoaded
+    if it executes earlier. A deferred script runs after every plain `<script>` of the
+    document - jQuery UI on the cross compare page among them - and before
+    DOMContentLoaded, so Bootstrap still registers last and still wins the name, while
+    its 78 KB no longer block the first paint. `async`, or loading it on demand after
+    the page is up, would let jQuery UI register after it. Measured both ways in
+    Chromium; see ADR-0015 and issue #63.
     """
     tag = re.search(r"<script[^>]*bootstrap\.bundle\.min\.js[^>]*>", code_of(BASE))
     assert tag is not None, "base.html no longer loads Bootstrap's bundle"
-    assert "defer" not in tag.group(0) and "async" not in tag.group(0), tag.group(0)
+    assert "defer" in tag.group(0) and "async" not in tag.group(0), tag.group(0)
+
+
+def test_nothing_touches_bootstrap_while_the_page_parses():
+    """The one construction that needs Bootstrap at once - `new Autocomplete`, which
+    builds a Bootstrap dropdown - waits for DOMContentLoaded, by which time the
+    deferred bundle has run. Measured: without the wait every page logged
+    "bootstrap is not defined" from autocomplete.js."""
+    for path in TEMPLATE_ROOT.rglob("*.html"):
+        code = path.read_text()
+        for match in re.finditer(r"new Autocomplete\(", code):
+            before = code[max(0, match.start() - 600):match.start()]
+            assert "DOMContentLoaded" in before or "$(document).ready" in before, f"{path.name} builds an Autocomplete while parsing"
+
+
+def test_jquery_and_autocomplete_are_still_plain_scripts():
+    """Inline blocks call `$` and `new Autocomplete` while the page parses, so neither
+    library can be deferred without rewriting every one of them."""
+    for asset in ("jquery.js", "autocomplete.js"):
+        tag = re.search(r"<script[^>]*" + re.escape(asset) + r"[^>]*>", code_of(BASE))
+        assert tag is not None, f"base.html no longer loads {asset}"
+        assert "defer" not in tag.group(0) and "async" not in tag.group(0), tag.group(0)
 
 
 def test_the_pages_that_lost_a_library_still_render(client, as_role):
