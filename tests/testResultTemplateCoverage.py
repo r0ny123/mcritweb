@@ -29,7 +29,7 @@ import unittest
 from contextlib import contextmanager
 
 import pytest
-from fixtureData import job_id_of
+from fixtureData import REPORTS, job_id_of
 from flask import template_rendered
 
 LOG = logging.getLogger(__name__)
@@ -62,6 +62,9 @@ RENDERED_BY = [
     ("/data/result/{cross_compare}?custom=999", "result_corrupted.html"),
     ("/data/result/ffffffffffffffffffffffff", "result_invalid.html"),
     ("/data/linkhunt/ffffffffffffffffffffffff", "result_incompatible.html"),
+    ("/data/result/{maintenance_rebuild_index}", "result_maintenance.html"),
+    ("/data/result/{maintenance_recalculate_pichashes}", "result_maintenance.html"),
+    ("/data/result/{maintenance_recalculate_minhashes}", "result_maintenance.html"),
     ("/data/jobs/{matches_for_sample}", "job_overview.html"),
     ("/data/jobs/ffffffffffffffffffffffff", "job_invalid.html"),
 ]
@@ -72,10 +75,6 @@ UNCOVERED = {
     "result_empty.html":
         "needs a finished job with a falsy result. testResultPages.py drives it through "
         "a monkeypatched backend rather than a URL, so it has no entry here.",
-    "result_maintenance.html":
-        "needs a rebuildIndex / recalculatePicHashes / recalculateMinHashes job and its "
-        "result. Three distinct result shapes, one per branch of the template - they "
-        "should be captured from a live instance, not guessed.",
     "result_compare_function_vs.html":
         "needs CorpusMcritClient.getMatchFunctionVs and getMatchesForPicHash, plus "
         "whatever views/functiondiff.py reaches for. The largest of these gaps.",
@@ -109,9 +108,7 @@ def records_templates(app):
 
 
 def job_ids():
-    return {name: job_id_of(name) for name in
-            ("matches_for_sample", "matches_for_sample_vs", "matches_for_query",
-             "cross_compare", "unique_blocks")}
+    return {name: job_id_of(name) for name in REPORTS}
 
 
 @pytest.mark.parametrize("url,template", RENDERED_BY, ids=[url for url, _ in RENDERED_BY])
