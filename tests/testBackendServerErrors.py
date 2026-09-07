@@ -14,7 +14,13 @@ import unittest
 
 import pytest
 from fixtureData import job_id_of
-from mcrit.client.McritClient import McritClient, McritNotFound, McritServerError
+
+try:
+    from mcrit.client.McritClient import McritClient, McritNotFound, McritServerError
+except ImportError:
+    # the typed client errors arrive with danielplohmann/mcrit#185; against an older
+    # mcrit the views keep the None path and nothing here applies
+    pytest.skip("the installed mcrit has no typed client errors", allow_module_level=True)
 
 from mcritweb import backend_errors
 from mcritweb.views import client as client_module
