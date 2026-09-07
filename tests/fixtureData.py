@@ -24,7 +24,6 @@ from mcrit.minhash.MinHash import MinHash
 from mcrit.queue.LocalQueue import Job
 from mcrit.storage.FamilyEntry import FamilyEntry
 from mcrit.storage.FunctionEntry import FunctionEntry
-from mcrit.storage.MatchedFunctionEntry import MatchedFunctionEntry
 from mcrit.storage.SampleEntry import SampleEntry
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
@@ -276,9 +275,15 @@ class CorpusMcritClient:
             "function_entry_b": entry_b.toDict(),
             "sample_entry_a": sample_a.toDict(),
             "sample_entry_b": sample_b.toDict(),
-            "match_entry": MatchedFunctionEntry(
-                int(function_id_a), entry_a.binweight, entry_a.offset, match_tuple
-            ).toDict(),
+            # serialised by hand: MatchedFunctionEntry.toDict() of mcrit <= 1.8.1 re-encodes
+            # the flag booleans with their bit values (danielplohmann/mcrit#155), which
+            # turns a pichash match into a library one on the way out
+            "match_entry": {
+                "fid": int(function_id_a),
+                "num_bytes": entry_a.binweight,
+                "offset": entry_a.offset,
+                "matches": match_tuple,
+            },
         }
 
     def getMatchesForPicBlockHash(self, picblockhash, summary=False, *args, **kwargs):
