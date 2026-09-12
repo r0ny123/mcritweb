@@ -296,3 +296,17 @@ def test_the_combined_graph_route_validates_the_ids(client, as_role, fake_mcrit)
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_main_duo_keeps_the_hook_function_compare_needs():
+    """`main_duo.js` is a project fork of a vendored file; a refresh from upstream would
+    silently drop the hook `function_compare.js` synchronises the panes through."""
+    import os
+    static = os.path.join(os.path.dirname(__file__), "..", "mcritweb", "static")
+    with open(os.path.join(static, "trace_CFG", "main_duo.js")) as f:
+        main_duo = f.read()
+    with open(os.path.join(static, "function_compare.js")) as f:
+        function_compare = f.read()
+    assert "graph_zooms[graph_id] = {zoom: zoom, svg: svg, inner: inner, initialScale: initialScale};" in main_duo
+    assert 'if (typeof onGraphShown === "function") {' in main_duo
+    assert "function onGraphShown(graph_id) {" in function_compare
