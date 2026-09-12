@@ -764,7 +764,10 @@ def jobs():
         max_count = statistics["totals"][state_category] if state_category in statistics["totals"] else 0
         pagination = Pagination(request, max_count, limit=25, query_param="p", limit_param="l")
     else:
-        max_count = sum(statistics[active_category].values()) if active_category else 0
+        # `active` is a query parameter: a category the backend has not reported is a
+        # bookmark or a typo, not a server error, so size the page at zero and let the
+        # empty state speak.
+        max_count = sum(statistics.get(active_category, {}).values())
         pagination = Pagination(request, max_count, limit=25, query_param="p")
     jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, ascending=ascending)
     samples_by_id = {}
