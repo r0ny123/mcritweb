@@ -172,7 +172,8 @@
     <tbody>
       <tr>
         <td valign="middle">Task:</td>
-        <td valign="middle">{{ job_info.parameters }}</td>
+        {# the readable form; the RPC call the queue recorded stays reachable as the tooltip (issue #40) #}
+        <td valign="middle" title="{{ job_info.parameters }}">{{ job_info|job_task }}</td>
       </tr>
       <tr>
         <td valign="middle">Job ID:</td>
