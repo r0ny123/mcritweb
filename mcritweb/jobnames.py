@@ -35,6 +35,7 @@ JOB_METHOD_NAMES = {
     "updateMinHashesForSample": "Update MinHash",
     "updateMinHashes": "Update all missing MinHashes",
     "rebuildIndex": "Rebuild full Index",
+    "rebuildPicBlockHashIndex": "Rebuild PicBlockHash Index",
     "recalculatePicHashes": "Recalculate PicHashes",
     "recalculateMinHashes": "Recalculate MinHashes and Index",
     "repairMinHashes": "Repair MinHashes",
