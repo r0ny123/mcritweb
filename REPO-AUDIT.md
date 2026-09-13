@@ -306,11 +306,12 @@ plus `testCsrf.py`'s parametrisation failing if the hooks go.
 signing key belonged to a throwaway instance in a container that no longer exists and
 the cookie is scoped to `127.0.0.1`, so the proposed rotation has no target. But "the
 file is out of the working tree on every branch" was not quite true: it is still in the
-tree of **eight branches**, none of which has an open PR and none of which is merged to
-`master`. All 62 open PR heads are clean. Rewriting the history of branches carrying
-open PRs, for an artifact with no live exposure, is the wrong trade and not an
-unattended decision; deleting those eight stale branches is the cheap complete cleanup
-and is flagged for the owner rather than done.
+tree of **eight branches**, none of which is merged to
+`master`. Rewriting the history of branches carrying open PRs, for an artifact with no
+live exposure, is the wrong trade and not an unattended decision — and deleting the
+branches, floated as the cheap alternative, would have been worse: each is the head of
+an open upstream PR. **Settled in section 9**: upstream removed the file with an
+ordinary commit, which is the move neither option here had considered.
 
 ## 6. Findings carried out of the merges - now resolved
 
@@ -475,9 +476,11 @@ its private address (`GH007`). Everything here is authored as
   block is compared byte-for-byte against master's before the push, and the file is checked
   to contain exactly one pinned install and no unpinned one. All **62/62** open PR heads
   now match master's block exactly, and all seven are 0 commits behind master.
-- **The eight stale branches holding the cookie blob** are the last tree references to it.
-  None has an open PR; deleting them is the complete cleanup and needs the owner's
-  go-ahead (section 5).
+- ~~**The eight stale branches holding the cookie blob** are the last tree references to
+  it.~~ **Corrected, then settled upstream 2026-09-13** — see section 9. "Stale" was wrong:
+  every one of the eight is the head of an *open* upstream PR (`fkie-cad/mcritweb#163`
+  through `#170`), matched by SHA on `refs/pull/N/head`, so deleting them would have
+  closed eight PRs. Upstream dropped the file itself instead.
 - **Nothing here was merged.** Every PR is left reviewed, current and green, for its author
   to merge - that was the scope.
 
@@ -488,3 +491,113 @@ its private address (`GH007`). Everything here is authored as
 - MCRITweb's user manual (`docs/manual/README.md`) documents no maintenance action at all,
   so the three new buttons are not described there either. Worth a pass over the admin
   page as a whole rather than a paragraph bolted on for these three.
+
+## 9. Upstream integration — `fkie-cad/mcritweb#177`, reviewed 2026-09-13
+
+Opened by the maintainer as a **draft, explicitly not for merge**: `integrate-independent`,
+183 commits, consolidating 39 of the 76 open upstream PRs onto `master`. It changes the
+shape of everything in section 8, so it is recorded here rather than folded into it.
+
+**Whose PRs these are.** Of the 90 upstream PR head refs, **75 are branches in this fork**
+— matched by SHA on `refs/pull/N/head`. The upstream backlog and this audit's output are
+largely the same set of changes, which is why an integration branch is the thing that now
+gates the rest.
+
+### Verified independently, not taken on the PR's word
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| 39 PRs integrated | `git log --first-parent`, counting `Merge PR #N` subjects | **37** such merges; two of the 39 folded without one |
+| nothing lost in conflict resolution | for each, `git merge-tree --write-tree pr177 <PR head>` and compare to `pr177^{tree}` | **37/37 identical** — every PR fully absorbed |
+| 808 tests pass | full suite in a clean worktree on the head | **803 passed, 5 skipped** (the Playwright browser tests), 244s |
+| ruff passes | `ruff check .` | clean |
+
+The absorption check is the one worth keeping: re-merging an already-merged PR is a no-op
+**only if** the resolution kept all of it, so a hand-resolved merge that quietly dropped a
+hunk shows up as a differing tree. None did.
+
+### The resolutions, read with `--remerge-diff`
+
+`git show --remerge-diff` shows exactly what a human changed while resolving, which is
+where an integration hides its bugs. Four were worth reading:
+
+- **#164 / #167 / #170** — all three "conflicts" were import blocks. Each resolution keeps
+  both sides' imports. Nothing else was touched.
+- **#113** — an assertion was retargeted (`"failed!"` → `"the backend did not answer"`)
+  because that PR changed the wording. The negative assertion it exists to protect
+  (`"Nothing matched" not in page`) is untouched. Reconciled, not weakened.
+- **#146 vs #168** — the one that mattered. #146 moved family names to a JSON endpoint,
+  which reopened the `innerHTML` injection #168 had closed. Resolved by centralising the
+  escaping in a new `mcritweb/autocomplete.py`, shared by the `autocomplete_items`
+  template filter and by `explore.family_names`. Both entries into the widget were
+  confirmed to go through it, and the test was **strengthened** rather than adjusted: it
+  now asserts the raw name does not survive the round trip at all.
+
+**Verdict: no blocking findings.** The gate is the maintainer's own — live review on a
+test instance — not anything found here.
+
+### What #177 settles
+
+`3adac71` drops `work/harness/cookies.txt` and gitignores `work/harness/`, with the same
+reasoning recorded in section 5 ("a credential artifact — even a dev one against localhost
+— should not enter the repository's history"). That closes the open question there, by a
+third route: an ordinary commit, no history rewrite and no branch deletion.
+
+Seven of the eight branches carrying the blob are integrated, so merging #177 removes it.
+The eighth, `fix/query-uploads-collide-across-users` (upstream #169), is **not** integrated
+and would have put the file back. Fixed on the branch:
+
+- `5ef48d8` — drops the file and adds a `.gitignore` block byte-identical to #177's, so the
+  two sides of the merge resolve to the same content instead of colliding.
+- `7f4d77c` — this branch predates the tooling canonicalisation of section 8, so it carried
+  an older wording of the same `AGENTS.md` / `Makefile` change that #177 has since settled
+  its own way. Replaced with #177's exact text, for the same reason.
+
+Conflicts against the integration went from **five files to three**: `AGENTS.md` (the
+Uploads bullet, genuine PR content), `README.md` (both sides add an `unreleased` entry) and
+`mcritweb/views/analyze.py`. 274 tests pass, ruff clean, pushed.
+
+### What is left, and what gates it
+
+**37 PRs are not integrated** (excluding #103, whose content #177 carries at its base, and
+#177 itself).
+
+- **4 are gated on the backend**, and the PR names them: upstream `#173 → mcrit#163`,
+  `#172 → mcrit#161`, `#174 → mcrit#169`, `#130 → mcrit#185`. All four mcrit PRs are this
+  fork's (`r0ny123/mcrit#21, #18, #26, #42`), all **0 commits behind `main`**, conflict-free
+  against it, and **7/7 green**. Nothing is owed on this side; they are waiting on a merge
+  decision.
+- **1 is a sequencing question** — `#176`, which moves the version into `pyproject.toml`.
+- **The other 32 need conflict resolution**, and `mcritweb/views/data.py` is the reason: 20
+  of them change it, each adding its own helpers to the same regions. This is not the
+  mechanical collision that #103 was — there is no single edit that dissolves it.
+
+Measured against `pr177` directly, only **#33, #125, #138 and #172** merge with no conflict
+at all, and **#151** conflicts on `AGENTS.md` alone.
+
+A pairwise conflict matrix over the 37 was also computed and is **misleading**, recorded
+here so it is not recomputed: it reports `.github/workflows/test.yml`, `AGENTS.md` and
+`Makefile` colliding across 36 of 37 pairs. That is an artifact of pairwise comparison —
+each pair's merge base is upstream `master`, which lacks the CI fix, so both sides adding
+it reads as add/add. Against `pr177`, which already has it, those three files are identical
+on most branches and do not conflict.
+
+**The resolution work is gated on #177 landing on `master`.** Merging an unmerged draft
+integration branch into 32 PR branches would balloon every one of their diffs with 183
+foreign commits. Once it is on `master`, the same branches take it as an ordinary base
+merge and each diff collapses back to its own change.
+
+### Dead end recorded
+
+Checked whether the integration calls an `McritClient` method newer than the declared
+`mcrit>=1.5.3` floor — `search_samples`, `search_families` and `search_functions` appear in
+no tagged `McritClient.py` when grepping for `def`. They are `functools.partialmethod`
+bindings and have been present since v1.5.3. **No finding; the floor is correct.**
+
+### Version, for the maintainer's third question
+
+`1.5.0`, not a patch on `1.4.8`. The integration adds `python_requires=">=3.11"` to
+`setup.py` (from #166) — deployment-affecting, since a 3.8–3.10 host stops resolving — on
+top of four security fixes and 39 PRs. Suggested order: **#177 first, then #176, then tag**.
+Both touch the version, and resolving one PR against a merged integration is a smaller job
+than re-resolving a 183-commit integration against one PR.
