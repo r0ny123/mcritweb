@@ -563,10 +563,17 @@ Uploads bullet, genuine PR content), `README.md` (both sides add an `unreleased`
 #177 itself).
 
 - **4 are gated on the backend**, and the PR names them: upstream `#173 → mcrit#163`,
-  `#172 → mcrit#161`, `#174 → mcrit#169`, `#130 → mcrit#185`. All four mcrit PRs are this
-  fork's (`r0ny123/mcrit#21, #18, #26, #42`), all **0 commits behind `main`**, conflict-free
-  against it, and **7/7 green**. Nothing is owed on this side; they are waiting on a merge
-  decision.
+  `#172 → mcrit#161`, `#174 → mcrit#169`, `#130 → mcrit#185`. Those four are open PRs on
+  **`danielplohmann/mcrit`**, headed by this fork's branches (`r0ny123/mcrit#21, #18, #26,
+  #42`) — all **0 commits behind upstream `main`**, conflict-free against it, and **7/7
+  green**.
+
+  The merge that unblocks them is upstream's, and only upstream's. Merging them into this
+  fork's `main` would do nothing — `mcritweb/requirements.txt` asks for `mcrit>=1.5.3`,
+  resolved from PyPI, so nothing ever installs what sits in the fork — and it would push
+  the fork's `main` ahead of upstream, where it is currently exactly level. Every branch
+  cut from it afterwards would carry backend commits upstream does not have, which is the
+  trap section 1 records for mcritweb's `master`. Nothing is owed on this side.
 - **1 is a sequencing question** — `#176`, which moves the version into `pyproject.toml`.
 - **The other 32 need conflict resolution**, and `mcritweb/views/data.py` is the reason: 20
   of them change it, each adding its own helpers to the same regions. This is not the
