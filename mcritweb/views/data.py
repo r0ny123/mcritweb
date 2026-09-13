@@ -271,7 +271,16 @@ def result(job_id):
             return redirect(url_for('explore.families'))
         elif job_info.parameters.startswith("modifyFamily"):
             return redirect(url_for('explore.families'))
-        elif job_info.parameters in ["rebuildIndex()", "recalculatePicHashes()", "recalculateMinHashes()"]:
+        elif job_info.parameters in [
+            "rebuildIndex()",
+            "recalculatePicHashes()",
+            "recalculateMinHashes()",
+            # mcrit 1.9.0. Without these three here the result of a job MCRITweb itself
+            # scheduled falls through to the final else and is reported as an invalid job id.
+            "repairMinHashes()",
+            "recomputeFamilyStats()",
+            "rebuildPicBlockHashIndex()",
+        ]:
             return render_template("result_maintenance.html", result=result_json, job_info=job_info)
     elif job_info and not (job_info.is_finished or job_info.is_failed or job_info.is_terminated):
         # if we are not done processing, list job data
