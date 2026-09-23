@@ -36,6 +36,7 @@ fix/204-cfg-loops|fix-204-cfg-loops.md|
 fix/206-admin-account-handlers|fix-206-admin-account-handlers.md|
 fix/207-check-then-fetch|fix-207-check-then-fetch.md|
 fix/linkhunt-empty-family-count|fix-linkhunt-empty-family-count.md|issue-new-linkhunt-family-count.md
+fix/cross-job-unnamed-family|fix-cross-job-unnamed-family.md|issue-new-cross-job-unnamed-family.md
 '
 
 run() {
