@@ -12,7 +12,8 @@ FORK=https://github.com/r0ny123/mcritweb
 UPSTREAM=familiary/mcritweb
 TEXTS=claude/admiring-turing-4ihzfx
 
-# branch on the fork | PR text | issue text to file first, if the PR needs a new issue
+# branch on the fork | PR text | issue text to file first, if the PR needs a new issue |
+# base branch, if the PR is stacked on another one of this list rather than on master
 BRANCHES='
 fix/182-cross-compare-lazy-tabs|fix-182-cross-compare-lazy-tabs.md|
 fix/183-poll-job-status|fix-183-poll-job-status.md|
@@ -47,16 +48,24 @@ for file in $(git ls-tree --name-only refs/remotes/fork/texts pr-text/); do
     git show "refs/remotes/fork/texts:$file" > "../texts/$(basename "$file")"
 done
 
-echo "$BRANCHES" | while IFS='|' read -r branch text issue; do
+echo "$BRANCHES" | while IFS='|' read -r branch text issue onto; do
     [ -n "$branch" ] || continue
     if [ "$(gh pr list --repo "$UPSTREAM" --head "$branch" --state open --json number --jq length)" != 0 ]; then
         echo "skip $branch: it already has an open pull request"
         continue
     fi
     git fetch --quiet "$FORK" "+refs/heads/$branch:refs/remotes/fork/$branch"
-    base=$(git merge-base "refs/remotes/fork/$branch" origin/master)
-    if [ "$(git rev-list --count "$base..refs/remotes/fork/$branch")" != 1 ]; then
-        echo "stop: $branch is not one commit on master" >&2
+    if [ -z "$onto" ]; then
+        onto=master
+        base=$(git merge-base "refs/remotes/fork/$branch" origin/master)
+    else
+        # a stacked branch is one commit on its base branch, which an earlier row pushed
+        git fetch --quiet "$FORK" "+refs/heads/$onto:refs/remotes/fork/$onto"
+        base=$(git rev-parse "refs/remotes/fork/$onto")
+    fi
+    if [ "$(git rev-list --count "$base..refs/remotes/fork/$branch")" != 1 ] || \
+       [ "$(git rev-parse "refs/remotes/fork/$branch^")" != "$base" ]; then
+        echo "stop: $branch is not one commit on $onto" >&2
         exit 1
     fi
     run git push origin "refs/remotes/fork/$branch:refs/heads/$branch"
@@ -76,5 +85,5 @@ echo "$BRANCHES" | while IFS='|' read -r branch text issue; do
         sed "s|#NNN (the issue in \`pr-text/$issue\`, once it is filed)|#$number|" ../body.md > ../body.tmp
         mv ../body.tmp ../body.md
     fi
-    run gh pr create --repo "$UPSTREAM" --base master --head "$branch" --title "$title" --body-file ../body.md
+    run gh pr create --repo "$UPSTREAM" --base "$onto" --head "$branch" --title "$title" --body-file ../body.md
 done

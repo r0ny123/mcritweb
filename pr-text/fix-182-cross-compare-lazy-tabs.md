@@ -79,4 +79,6 @@ A small endpoint that serves the other panes was the alternative. It would have 
 - **#159** (`result_cross.html`, `data.py`): the "Cross Comparison of N samples" line and the `cross_compare` import line. Keep both changes: #159's wording with this PR's `samples[rendered_method]`.
 - **#160** (`result_cross.html`): the function-count cell's colour and the comment line after it. Keep both.
 - **#210** (`AGENTS.md`): both edit the "Tables reload by navigating" bullet. Keep both edits.
+- The **#191** branch (`data.py`): adjacent import lines. Keep both names.
 - Every other open PR merges cleanly.
+- The PR for #198 is stacked on this one: it changes the tooltips of the matrix cells that the tab filling here clones, and adapts that script. Its base switches to `master` once this is merged.
