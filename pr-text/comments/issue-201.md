@@ -1,0 +1,1 @@
+Covered by #208. It defines `forward_with_label_only` before the id-list check in the `/api` function passthrough, so the fallback path has it, and it removes the dead `search_samples` block with the unbound `query` from `cross_compare_from_hash_list`. `tests/testUnboundHandlers.py` in #208 covers both.

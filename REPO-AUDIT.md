@@ -1002,7 +1002,7 @@ unfiltered ones.
   library family 4 appears under two names, `''` and `MSVC`. Whether live data can produce that
   (a family whose samples carry different names, e.g. after a rename) is not established.
 
-## 13. The PR set for familiary (2026-09-23, from 12:10 UTC; last updated 16:57 UTC)
+## 13. The PR set for familiary (2026-09-23, from 12:10 UTC; last updated 20:00 UTC)
 
 Daniel has granted write access to branches on familiary/mcritweb; `master` is protected, so
 every change goes through a PR. This session cannot push there: it is bound to the r0ny123
@@ -1081,23 +1081,44 @@ Within the set, only #182's and #191's branches conflict with each other, on adj
 lines of `data.py`; keep both names. #198's branch carries #182's commit, so it shows the same
 conflict with #191 until #182 is merged.
 
-### 13.2 Issues left without a PR
+### 13.2 Issues left without a PR, and the partial ones
 
-- **#194's sample-match passes**: each computes a different value once, 0.005 ms in all; #194's
-  PR says so and is "Part of #194".
-- **#195**: not actionable, measured by the familiary session: the suggested maps cost more than
-  the lookups they replace.
-- **#196**: its DataTables half is already in #126, which removes the initializer; that
-  initializer selected `#job-table`, an id the jobs page never renders. Its row-handler half
-  was measured in Chromium and is not worth a change: binding the four row templates' click
-  handlers takes under 0.5 ms, under 0.2% of the page, at the 250 rows a page can show at most,
-  and no table gains rows after load on master. ADR 0014 lists delegating them only as a
-  precondition for partial table reloads, which it declined.
-- **#203**: not a bug. The renderer draws only unfiltered data, and live PNGs under six filters
-  were md5-identical.
-- **#205**: mostly moot once #192's PR lands, because no page embeds the whole family list after
-  it. Rescoping or closing it is Daniel's call.
-- **#76**: mcrit's search, not mcritweb's.
+Each of these gets a comment on its issue, drafted in `pr-text/comments/issue-<n>.md` and posted by
+`pr-text/finish-upstream.py comments` (13.8). The comments carry the evidence below.
+
+- **Partly fixed, the rest tracked**:
+  - #183: #214 plus #145's family guard cover all of it; close once both are in.
+  - #191: #221 does the MCRITweb part. One request per sample or family, and one `getJobData` per
+    dependency, need backend batch reads: the batch sample and family lookup (the issue r0ny123
+    filed, and mcrit branch `feat/batch-sample-lookup`) and a `job_ids` selector on `/jobs`
+    (`feat/jobs-select-by-ids`). The MCRITweb side is `fix/191-batch-lookups`, a draft PR on
+    #221's branch until an mcrit release carries both, since it raises the `mcrit` floor (13.9).
+  - #192: #222 does the submit form. The queue half needs `sample_ids` on `/jobs`
+    (`feat/jobs-select-by-ids`); its MCRITweb side is `fix/192-queue-reads-by-sample`, a draft
+    PR on #222's branch, with the same release caveat (13.9).
+  - #194: #224 plus #145 cover the function aggregation. The sample-match passes compute a
+    different value each, 0.005 ms in all, and stay as they are; close once both are in.
+  - #202: #145 has the atomic write, #229 the size, and `fix/202-export-bytes`, on #232's
+    branch, the exports: it passes the backend's bytes on instead of parsing them. It works with
+    the 1.9.0 client as before, and saves the second copy once the client honours
+    `raw_responses` for exports (danielplohmann/mcrit#183, 608a364), so it needs no floor raise
+    (13.9).
+- **No PR, on purpose**:
+  - #195: not actionable, measured by the familiary session: the suggested maps cost more than
+    the lookups they replace (13.9 ms to build against 0.026 ms per 100 rows).
+  - #196: its DataTables half is already in #126, which removes the initializer; that
+    initializer selected `#job-table`, an id the jobs page never renders. Its row-handler half
+    was measured in Chromium and is not worth a change: binding the four row templates' click
+    handlers takes under 0.5 ms, under 0.2% of the page, at the 250 rows a page can show at most,
+    and no table gains rows after load on master. ADR 0014 lists delegating them only as a
+    precondition for partial table reloads, which it declined.
+  - #203: not a bug. The renderer draws only unfiltered data, and live PNGs under six filters
+    were md5-identical.
+  - #205: mostly moot once #222 lands, because no page embeds the whole family list after it.
+  - #76: mcrit's search, not mcritweb's. danielplohmann/mcrit#170 (open) answers function name
+    searches from the distinct names: a no-result search 4.2 s → 22 ms on two million functions.
+- **Covered by open PRs that predate the issue**: #185 by #145 (all four counting calls), and
+  #201 by #208 (both unbound names). #201 is commented on only if #208 does not name it.
 
 ### 13.3 Bugs found live
 
@@ -1114,20 +1135,32 @@ conflict with #191 until #182 is merged.
 - **Pages that answer 500 on master, already fixed by open PRs**: `GET /admin/change_password`
   and `/admin/change_username` (the #206 branch), the result pages of the three 1.9.0 repair
   jobs (#212), and `/` for a logged-in user while the backend is down (#130).
-- **In the mcrit backend**, for mcrit's own tracker:
-  - `SampleResource.on_put` checks a version against `^[ -~]{1,64}$` but says "0-64 printable
-    characters", so clearing a version is refused with a 400. Master ignores the refusal; #189
-    reports it.
-  - `GET /complete_minhashes` with nothing left to hash raises `UnboundLocalError` in
-    `Worker.updateMinHashes`, and the job never finishes.
-  - `SampleResource.on_put` also checks a family name against a pattern that needs at least two
-    characters, though its message says "0-64", so no sample can be moved into the unnamed
-    family, or into a one-character family, through the API.
-  - #192's other half needs a sample selector on mcrit's job queue. The familiary session
-    drafted that issue as `pr/mcrit-issue-queue-sample-selector.md` on its status page.
-  - #191's rest needs a batch sample lookup, which mcrit's storage already has
-    (`getSampleEntriesByIds`) without a route or client method. Drafted in
-    `pr-text/issue-mcrit-batch-sample-lookup.md`, for danielplohmann/mcrit.
+- **In the mcrit backend** (danielplohmann/mcrit), found against main 77db150, and rebased onto
+  main 2ac8d7b after #163 and #169 were merged there; checked against the 22 PRs open now. Each is
+  an issue text in `pr-text/` and a branch on r0ny123/mcrit, one commit or two on main, with its
+  PR text in `pr-text/mcrit-pr-*.md`:
+  - `SampleResource.on_put` and `FamilyResource.on_put` refuse `""` and every one-character family
+    name, and `""` as a version or component, although their messages allow 0-64 characters.
+    `issue-mcrit-edit-length-checks.md`; branch `fix/edit-length-checks`, which must merge after
+    the rename fix.
+  - Renaming a family to its own name deletes it (MongoDbStorage) or raises `KeyError`
+    (MemoryStorage), and would double family 0's counters. MemoryStorage also fails ordinary
+    renames, re-keying moved functions with a stale `sample_id`.
+    `issue-mcrit-family-rename-same-name.md`; branch `fix/family-rename-same-name`. The review
+    moved the guard from `getFamilyId(name) != family_id` to a comparison with the stored name:
+    names are not unique, since `recomputeFamilyStats` re-creates a missing family document under
+    its samples' name, and a shared name would have merged the family into the other one.
+  - `/jobs` can't select jobs by sample or by id, which #192's queue half and #191's dependency
+    fetches need. `issue-mcrit-queue-sample-selector.md` (revised from the familiary session's
+    draft: #168 noted, index plan checked, job ids added); branch `feat/jobs-select-by-ids`.
+    Measured before pushing: one regex with an alternation of the ids gets no index bounds, and
+    with `get_jobs`' `_id` sort MongoDB 8.0 read every document of a 60,000-job queue (~105 ms).
+    The branch sends an `$in` of two literal-prefix regexes per id instead: 102-124 index keys
+    and 1.3-1.7 ms for 25 samples, identical results, and a test that pins the bounds.
+  - No batch sample or family lookup, which #191 needs. r0ny123 filed that issue; branch
+    `feat/batch-sample-lookup`.
+  - `GET /complete_minhashes` with nothing left to hash raised `UnboundLocalError` in
+    `Worker.updateMinHashes`. Already fixed by open danielplohmann/mcrit#194 (9ebdfd6), so no issue.
 
 ### 13.4 Conflicts with the open PRs
 
@@ -1179,3 +1212,45 @@ every PR against master, and #198's against #182's branch. A branch that already
 PR is skipped, so a second run only fills in what is missing. Nothing is merged. The familiary
 session should not run its `apply-and-push.sh`, or the same issues would get branches from two
 different commits.
+
+### 13.7 The PRs are open
+
+r0ny123 opened all 22 from the handoff. Each PR's head, read from `refs/pull/<n>/head` on familiary,
+is the commit in 13.1:
+
+| issue | PR | | issue | PR | | issue | PR |
+|---|---|---|---|---|---|---|---|
+| #182 | #213 | | #190 | #220 | | #199 | #227 |
+| #183 | #214 | | #191 | #221 | | #200 | #228 |
+| #184 | #215 | | #192 | #222 | | #202 | #229 |
+| #186 | #216 | | #193 | #223 | | #204 | #230 |
+| #187 | #217 | | #194 | #224 | | #206 | #231 |
+| #188 | #218 | | #197 | #225 | | #207 | #232 |
+| #189 | #219 | | #198 | #226 (on #213's branch) | | link hunt family count | #234 |
+| | | | | | | unnamed family in cross job rows | #236 |
+
+The two new issues went in just before their PRs, so they are presumably #233 and #235; this
+session can't read familiary's API to confirm.
+
+### 13.8 Finishing upstream
+
+`pr-text/finish-upstream.py` does the rest with r0ny123's `gh`, in order, each step a dry run until
+`--apply`, and each skipping what is already done:
+
+1. `search` lists every issue and PR on danielplohmann/mcrit that the new issues could duplicate.
+2. `issues` files the rename, edits and selector issues, and finds the batch issue r0ny123 filed.
+3. `prs` opens the four mcrit PRs from r0ny123/mcrit, after checking each branch head.
+4. `followups` pushes the three MCRITweb follow-ups of 13.9 from r0ny123/mcritweb to familiary
+   under the same names, never forced, after checking each head and that each base PR's branch
+   has not moved, and opens their PRs: #202's for review, #191's and #192's as drafts.
+5. `bodies` points #219, #221, #222 and #236 at the mcrit issues and PRs, replacing the sentences
+   that said an issue still needed filing.
+6. `comments` posts the comments of 13.2, skipping closed issues and any already posted; those on
+   #191, #192 and #202 name the follow-up PRs.
+7. `verify` checks every familiary PR, follow-up (with its draft state) and mcrit PR and issue for
+   its head, base, author, and the absence of a footer or a leftover placeholder, and reports CI.
+
+It was run end to end against a stand-in `gh` and `git` holding the real texts: dry runs, applies,
+re-runs, the #201 and closed-issue skips, and an injected footer all behaved as described. Run again
+with the `followups` step: the three pushes went to new branches only, the drafts came out as
+drafts on the right bases, and every rendered text was free of placeholders.

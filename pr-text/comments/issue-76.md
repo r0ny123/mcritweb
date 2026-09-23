@@ -1,0 +1,3 @@
+Nothing to change in MCRITweb for this: it forwards the search as is, and the time is spent in the backend. A free-text function search is an unanchored, case-insensitive regex on `function_name`. MongoDB can't bound that with an index, so a search with no hits examines every function before it answers.
+
+danielplohmann/mcrit#170 (open) answers these searches from the distinct function names instead, which one index scan lists. Its commit message has the numbers, on two million synthetic functions with 5,000 distinct names: a search with no results went from 4.2 s to 22 ms, and a name held by 19 functions from 4.2 s to 2 ms.
