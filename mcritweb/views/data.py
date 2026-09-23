@@ -269,13 +269,18 @@ def export_view():
             return render_template("export.html")
     return render_template("export.html")
 
-@bp.route('/specific_export/<type>/<item_id>')
+@bp.route('/specific_export/<type>/<int(signed=True):item_id>')
 @contributor_required
 @mcrit_server_required
 def specific_export(type, item_id):
     client = get_client()
+    # getExportData([]) asks the backend for /export/, which answers with the whole
+    # corpus, so an id that resolves to no samples must never reach it
     if type == 'family':
         samples = client.getSamplesByFamilyId(item_id)
+        if not samples:
+            flash(f'Family {item_id} does not exist or has no samples to export.', category='error')
+            return redirect(url_for('data.export_view'))
         sample_ids = [x.sample_id for x in samples.values()]
         export_file = json.dumps(client.getExportData(sample_ids))
         return Response(
@@ -284,11 +289,11 @@ def specific_export(type, item_id):
             headers={"Content-disposition":
                     "attachment; filename=export_family_"+str(item_id)+".json"})
     if type == 'samples':
-        sample_ids = []
         sample_entry = client.getSampleById(item_id)
-        if sample_entry:
-            sample_ids.append(sample_entry.sample_id)
-        export_file = json.dumps(client.getExportData(sample_ids))
+        if sample_entry is None:
+            flash(f'Sample {item_id} does not exist.', category='error')
+            return redirect(url_for('data.export_view'))
+        export_file = json.dumps(client.getExportData([sample_entry.sample_id]))
         return Response(
             export_file,
             mimetype='application/json',
