@@ -1196,6 +1196,55 @@ def job_by_id(job_id):
     return render_template('job_overview.html', families=families_by_id, samples=samples_by_id, job_info=job_info, auto_refresh=auto_refresh, child_jobs=child_jobs, missing_children=missing_children)
 
 
+# registered here rather than in create_app() with the other filters, because the status
+# route below calls it as a plain function as well
+@bp.app_template_filter('job_status')
+def job_status(job_info):
+    """What a job's overview page waits on, or None where polling for it saves nothing.
+
+    A job with dependencies - a cross compare waits on one 1vN job per sample - lists
+    them on its overview, and each row needs the dependency and its sample from the
+    backend: 1 + 2N calls to render the page for N dependencies. Its meta refresh paid
+    that every few seconds to find out whether anything had moved (issue #183). What
+    moves is on the job's own document: its start, progress, finish and failure, and
+    `unfinished_dependencies`, which the queue shrinks as each dependency finishes or
+    finally fails. So the page polls `job_status_by_id` for this instead - one call -
+    and reloads once the answer is no longer the one it was rendered from.
+
+    `Job` models `all_dependencies` but not `unfinished_dependencies`, so that one is
+    read off the document the backend sent. A document without it gets None, and so
+    does a job without dependencies, whose page renders from the same one call a poll
+    would make; both pages keep the meta refresh.
+    """
+    unfinished_dependencies = job_info._data.get("unfinished_dependencies")
+    if not job_info.all_dependencies or not isinstance(unfinished_dependencies, list):
+        return None
+    return {
+        "started_at": job_info.started_at,
+        "finished_at": job_info.finished_at,
+        "failed": job_info.is_failed,
+        "progress": job_info.progress,
+        "unfinished_dependencies": len(unfinished_dependencies),
+    }
+
+
+@bp.route('/jobs/<job_id>/status')
+@visitor_required
+@mcrit_server_required
+def job_status_by_id(job_id):
+    """`job_status` as JSON, for job_overview.html to poll.
+
+    Anything but a 200 carrying the answer the page was rendered from makes the page
+    reload - a job the backend no longer has (the 404 here), an expired session that
+    answers with the login page, a backend that cannot be reached - so whatever
+    happened is rendered by the page itself, as it was when the meta refresh did it.
+    """
+    job_info = get_client().getJobData(job_id)
+    if job_info is None:
+        return {"status": None}, 404
+    return {"status": job_status(job_info)}
+
+
 @bp.route('/jobs/<job_id>/delete', methods=('POST',))
 @contributor_required
 @mcrit_server_required

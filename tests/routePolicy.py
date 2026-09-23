@@ -176,6 +176,9 @@ ROUTE_POLICY = {
     "analyze.start_cross_compare": (VISITOR, WRITES_ON_GET),
     "analyze.query": (VISITOR, WRITES_ON_POST),
     "data.jobs": (VISITOR, READ_ONLY),
+    # what data.job_by_id polls while a job with dependencies runs, instead of
+    # re-rendering itself - one getJobData, the same one that page starts with
+    "data.job_status_by_id": (VISITOR, READ_ONLY),
     "data.job_by_id": (VISITOR, READ_ONLY),
     "data.result": (VISITOR, READ_ONLY),
     # writes the report to instance/cache/results on a cache miss, exactly as

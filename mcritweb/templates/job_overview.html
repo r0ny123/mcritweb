@@ -8,7 +8,40 @@ Overview for Job: {{ job_info.job_id }}
 {% endblock %}
 {% block style %}
 {% if (auto_refresh > 0) and (not job_info.finished_at) %}
+{% set status = job_info|job_status %}
+{% if status is none %}
 <meta http-equiv="refresh" content="{{ auto_refresh }}">
+{% else %}
+{# rendering this page fetches every dependency and its sample again, so rather than
+   refresh it polls the job's own status and reloads once that has moved - see
+   data.job_status. Without JavaScript it refreshes as it always did. #}
+<noscript><meta http-equiv="refresh" content="{{ auto_refresh }}"></noscript>
+<script>
+  (function () {
+    const statusUrl = {{ url_for('data.job_status_by_id', job_id=job_info.job_id)|tojson }};
+    const renderedStatus = JSON.stringify({{ status|tojson }});
+    // setTimeout fires at once past 2^31-1 ms, where the meta refresh waited
+    const interval = Math.min({{ auto_refresh|tojson }} * 1000, 2147483647);
+
+    function check() {
+      fetch(statusUrl, {cache: "no-store"})
+        .then(function (response) { return response.ok ? response.json() : {}; })
+        .then(function (answer) {
+          if (JSON.stringify(answer.status) === renderedStatus) {
+            window.setTimeout(check, interval);
+          } else {
+            window.location.reload();
+          }
+        })
+        // an expired session's login page, a backend that cannot be reached: the
+        // page renders whatever that is, as it did when the meta refresh reloaded it
+        .catch(function () { window.location.reload(); });
+    }
+
+    window.setTimeout(check, interval);
+  })();
+</script>
+{% endif %}
 {% endif %}
 
 {{ job_row_std_js() }}
