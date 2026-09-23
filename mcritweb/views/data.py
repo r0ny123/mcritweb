@@ -1325,8 +1325,11 @@ def submit():
                 new_sample_entry, job_id = client.addReport(smda_report)
                 return url_for('explore.sample_by_id', sample_id=new_sample_entry.sample_id), 202 # Accepted
             else:
-                with open(os.sep.join([current_app.instance_path, "temp", "uploads", upload_sha256]), "wb") as fout:
-                    fout.write(binary_content)
+                # The binary goes to the backend and is not kept here: nothing reads a copy
+                # back (the query upload path names its files by job id, #169), so one
+                # written to temp/uploads was only a second copy of the sample left on the
+                # web host.
+                #
                 # These three ride in the query string McritClient builds by hand, so
                 # they are escaped rather than trusted. All three are str by
                 # construction - `f` is None-checked above, and both form fields would
