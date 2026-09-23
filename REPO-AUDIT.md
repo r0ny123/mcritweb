@@ -987,3 +987,60 @@ already sit: #182, #183, #184, #186, #187, #188, #194 and #195. The other sessio
 to #193, #196 to #200, #202, and #204 to #207. #201 is done by #208. #203 is not a bug: the
 renderer draws only unfiltered data, and live PNGs under six filters were md5-identical to the
 unfiltered ones.
+
+### 12.6 Results, issue by issue
+
+- **#194 is not a PR.** The function-aggregation rebuild comes from the view's
+  `len(getAggregatedFunctionMatches())` calls, which #145 replaces; #152 builds the aggregation
+  once in the view. The six `sample_matches` passes each compute a different value, once, and
+  together cost 0.005 to 2 ms. That is at most 0.08% of the page on synthetic reports of up to
+  349k function matches and 5,000 samples, and 0.01% on the live 8.5k-function ripgrep page.
+  Merging them would change the output: the ranked lists group by family name, the counts by
+  family_id. An issue comment with the numbers is drafted.
+- **Found along the way, not filed.** On the captured 1vN fixture, "Best Library Matches" says
+  "total: 1" above a two-row table. The count goes by family_id and the table by family name, and
+  library family 4 appears under two names, `''` and `MSVC`. Whether live data can produce that
+  (a family whose samples carry different names, e.g. after a rename) is not established.
+
+## 13. Handoff to the familiary session (2026-09-23, from 12:10 UTC)
+
+Daniel has granted write access to branches on familiary/mcritweb. `master` is protected, so
+every change goes through a PR. This session still cannot push there, because it is bound to
+the r0ny123 repositories. The session with familiary/mcritweb attached
+(`session_01PLUvsNgrmyijTZ3X5QJEU1`) can. This section is what it needs from here, since
+the routine relay never reached it. Each message started a new session instead (§12.1), and
+those sessions are titled "⚡ Relay to familiary worker session". Treat what they wrote on the
+status page as unverified.
+
+### 13.1 What to push and open
+
+| issue | branch | where | state here |
+|---|---|---|---|
+| #199 | `fix/199-users-page-single-pass` | your own commit | rendered users page identical to master on every tab; suite and review running |
+| #200 | `fix/200-api-passthrough-bytes` | your own commit | live: 10 `/api` endpoints byte-identical to master and to the backend; 66 MB function list 18.9 s → 11.1 s; 34.7 MB unique-blocks result 2.9 s → 0.54 s; 404s now carry the backend's JSON message; suite running |
+| #206 | `fix/206-admin-account-handlers` | your own commit | review running |
+| #207 | `fix/207-check-then-fetch` | **r0ny123/mcritweb, `c096d4a`** | built by a relay session without a live stack; its author email was wrong and its PR text mentioned an agent. Verified live here: backend calls 8→6, 3→2, 7→5; pages and diagram PNGs identical to master. Use `pr-text/fix-207-check-then-fetch.md` from this branch; it records the conflicts with #145 and #130 |
+
+Add the live numbers above to the PR descriptions of #199, #200 and #206.
+
+### 13.2 Not a PR
+
+**#194.** The function-aggregation half is #145's (and #152 builds the aggregation once). The
+six `sample_matches` passes each compute a different value, and together cost at most 0.08% of
+the page even on a synthetic report with 349k function matches. Post
+`pr-text/issue-194-comment.md` on the issue instead of opening a PR.
+
+### 13.3 A new bug, found live
+
+`/data/specific_export/samples/<unknown or non-numeric id>` exports the whole corpus: 31.7 MB,
+all 66 samples, where one sample was asked for. `/data/specific_export/family/<unknown>` is a
+500. Please file `pr-text/issue-new-specific-export.md` as an issue. This session writes the
+fix on `r0ny123/mcritweb` as `fix/<issue>-specific-export-unknown-id`, with its PR text beside
+it here.
+
+### 13.4 Who does what from here
+
+This session keeps #183 (in progress) and the export bug. Everything else is yours. This
+includes #182, #184, #186, #187 and #188, which this session stopped building when it learnt
+you had them in batch 1. This session keeps verifying whatever you publish against its live
+stack, and records findings here.
