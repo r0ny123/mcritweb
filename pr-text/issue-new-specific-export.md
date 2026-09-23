@@ -15,4 +15,4 @@ The family branch has the same hole one step later. Its unknown-id case is a 500
 
 Nothing needs a forged URL to reach this. The export buttons on the sample and family rows link here, and a page left open after a sample or family was deleted produces exactly this request. On a large corpus the answer is gigabytes, which the backend assembles and the web process holds in memory twice, via `json.dumps` over the parsed dict. Contributors can already export everything on purpose from `/data/export`, so this does not expose anything new. The route just answers a different question from the one it was asked.
 
-Fix direction: take `item_id` as an int in the route (`<int:item_id>`), and refuse with a message instead of exporting when the sample or family is unknown or the family has no samples. Never pass an empty list to `getExportData`.
+Fix direction: take `item_id` as an int in the route (`<int(signed=True):item_id>`, since query samples have negative ids), and refuse with a message instead of exporting when the sample or family is unknown or the family has no samples. Never pass an empty list to `getExportData`.

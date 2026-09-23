@@ -1,39 +1,58 @@
-Title: Drop the existence probe in front of fetches that already answer for an unknown id
+Title: Drop the existence probes in front of fetches that already answer for an unknown id
 
 ## Summary
-Addresses #207.
+Part of #207.
 
-Three of the check-then-fetch pairs in #207 were a second round trip to learn something the fetch that follows already reports. Each fetch answers `None` for an unknown id, so the probe added nothing.
+Three of the check-then-fetch pairs in #207 were a second round trip to learn something the fetch that follows already reports. Each of those fetches answers `None` for an unknown id, so the probe added nothing. The other two instances the issue names stay, for the reasons under Limitations.
 
 ## What changed
-- `data.match_functions`: calls `getMatchFunctionVs` directly and branches on `None`. Before, it asked `isFunctionId(a) and isFunctionId(b)` first, and mcrit's `MatchResource.on_get_function_vs` runs those same checks again server-side.
-- `data.result_matches_for_sample_or_query`: the `samid` filter now reads the sample once with `getSampleById` and keeps the entry. Before, it called `isSampleId` and then `getSampleById` two lines later.
-- `MatchReportRenderer.processReport`: calls `getFunctionsBySampleId` for the reference sample directly, and falls back to `{}` when it answers `None`. That is the same fallback the `isSampleId` guard selected.
-- New test `test_the_comparison_page_reports_an_unknown_function_id_instead_of_500ing`: an unknown function id still lands on the friendly flash.
+- `data.match_functions` calls `getMatchFunctionVs` directly and branches on `None`. Before, it asked `isFunctionId(a) and isFunctionId(b)` first, and mcrit's `MatchResource` runs those same checks again inside the call, answering 404 for an unknown id.
+- The `samid` filter in `data.result_matches_for_sample_or_query` now reads the sample once with `getSampleById` and keeps the entry. Before, it called `isSampleId` and then `getSampleById` two lines later, on the same endpoint.
+- `MatchReportRenderer.processReport` calls `getFunctionsBySampleId` for the reference sample directly, and falls back to `{}` when it answers `None`. That is the same fallback the `isSampleId` guard selected. `/samples/<id>/functions` answers 404 for an unknown sample.
+- `AGENTS.md` says to check `is*Id` before acting on a user-supplied id. It gains the exception: when the call you need answers `None` for an unknown id itself, that `None` is the check.
+- The `tests/conftest.py` docstring that described `match_functions`' old guard is brought up to date.
 
 ## Why
 Every one of these pairs asked the backend the same question twice, back to back, on pages that are already backend-bound.
 
+Backend calls per view, counted in-process against the captured corpus. The first three rows were also counted live, from mcrit 1.9.0's request log, with the same numbers:
+
+| View | master | this branch |
+|---|---|---|
+| function comparison, `/data/matches/function/<a>/<b>` | 8 | 6 |
+| the same with an unknown id | 3 | 2, same flash |
+| sample-filtered result page (`?samid=`), drawing its diagram | 7 | 5 |
+| the same page once the diagram is cached | 5 | 4 |
+
+## Behaviour change
+The mcrit client answers `None` for a backend error as well as for a 404 (`handle_response`). Where master then indexed that `None`, it raised a `TypeError`:
+- **Two existing functions whose comparison the backend fails to produce:** master answered 500. This branch shows the page's existing "One of the function_ids is not valid." flash, which blames the ids for what was a backend failure.
+- **A sample whose function list the backend fails to return:** master answered 500. This branch draws the diagram without function data.
+
+The other failures injected at these calls end as they did on master, or better: an unreachable `/samples/<id>` behind the diagram was a 500 and now draws it. None raises here that did not raise on master.
+
 ## Validation
-- Full offline suite and `ruff check .` pass.
-- Live against mcrit 1.9.0 (64 samples, including an 8.5k-function sample). Backend calls per page view, counted from the server's request log:
+- New `tests/testCheckThenFetch.py`, five tests. All five fail on master and pass here. They pin that:
+  - the comparison page makes no `isFunctionId` call and exactly one `getMatchFunctionVs`;
+  - a `samid` page makes no `isSampleId` call and one `getSampleById`, for a 1vN report and for a query report;
+  - the comparison survives `getMatchFunctionVs` answering `None` for two valid ids;
+  - the diagram survives `getFunctionsBySampleId` answering `None`.
+- The existing unknown-id test in `tests/testFunctionPages.py` still lands on the same flash.
+- Full suite and `ruff check .` pass.
+- Live against mcrit 1.9.0 (66 samples, including an 11.6k-function sample), with CSRF tokens blanked, the rendered HTML is identical to master:
+  - on the function comparison pages;
+  - on 1vN and query result pages, plain and with `samid`, including negative (query) sample ids and an unknown `samid`.
 
-  | Page | master | this branch |
-  |---|---|---|
-  | `/data/matches/function/357/358` | 8 | 6 |
-  | `/data/matches/function/357/999999` (unknown id) | 3 | 2, same flash |
-  | a 1vN query result with `?samid=8` | 7 | 5 |
-
-- The rendered HTML is identical to master on both function-compare pages and on these result pages:
-  - a 1vN query result, plain and with `samid=8`;
-  - an 8.5k-function 1vN result, plain and with `samid=8`;
-  - a 1vN result with `samid=12`, and with an unknown `samid=99999`.
-
-  The query result has a negative sample id. I compared everything after blanking CSRF tokens.
-- I cleared and regenerated the match diagrams for those jobs; their PNGs are md5-identical to master's.
+  With their cached diagrams cleared first, the regenerated PNGs are md5-identical to master's.
 
 ## Limitations
-- The single-sample export branch (`specific_export`) is left alone. Its `getSampleById` is not only an existence check: when it returns `None`, the route calls `getExportData([])`, which asks the backend for `/export/` and gets back the whole corpus. That is a separate bug, filed on its own. Collapsing the round trip there needs that fix first.
-- `unique_blocks`' per-id `isSampleId` validation is deliberate, as the issue says. It stays.
-- **Conflict with #145, `data.py`, the `samid` branch.** #145 drops that branch's `create_match_diagram` call and this PR drops its second `getSampleById`. Whichever lands second deletes both lines and keeps this PR's walrus lookup.
-- **Conflict with #130, `data.py`, `match_functions`.** #130 wraps `getMatchFunctionVs` in `require_result(...)`, which turns a `None` into its backend-failure page. Here `None` means "unknown id", so a plain merge would show the failure page for a mistyped id. The mcrit 1.9.0 client answers `None` for a 404 and a 500 alike (its `handle_response`); only a connection error raises. If #130 lands first, keep the `isFunctionId` pre-check in `match_functions` and take only the other two changes from this PR.
+- **The single-sample export (`specific_export`) is left alone.** Its `getSampleById` is what tells an unknown id apart there. Without it the route would call `getExportData([])`, which asks the backend for `/export/` and gets the whole corpus back. That bug is fixed in its own PR, which keeps the lookup deliberately.
+- **`unique_blocks`' per-id `isSampleId` validation is deliberate**, as the issue says. mcrit 1.9.0 has no batch sample lookup to replace it with.
+- **`explore.fetchCombinedDotGraph` has the same pair** (`isFunctionId` twice before `getFunctionById` twice). A test pins that route's validate-first behaviour, so it is not changed here.
+
+## Merge conflicts
+- **#145, `data.py`, the `samid` branch.** #145 drops that branch's `create_match_diagram` call, and this PR drops its second `getSampleById`. The two edits are on adjacent lines. Whichever lands second deletes both lines and keeps this PR's walrus lookup.
+- **#130, `data.py`, `match_functions`.** #130 wraps `getMatchFunctionVs` in `require_result(...)` behind the `isFunctionId` pre-check. That turns a `None` into its backend-failure page. Here `None` also means "unknown id", so a plain merge would show the failure page for a mistyped id.
+  - If this lands second, keep this PR's `match_functions`.
+  - If this lands first, #130 should keep it too.
+  - Either way, the comparison's backend failure keeps the misleading flash described under "Behaviour change". The fix for that is a message that names both possibilities, and it fits better in #130.
