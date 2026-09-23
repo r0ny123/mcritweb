@@ -18,7 +18,7 @@ Fixes #NNN (the issue in `pr-text/issue-new-specific-export.md`, once it is file
   - a negative id still reaching the backend.
 
 ## Why
-`McritClient.getExportData([])` requests `/export/`, and mcrit answers that with every sample it holds. The export buttons on sample and family rows link to this route. A row left on screen after its sample or family was deleted produces exactly this request, so nobody has to forge a URL to hit it. On a large corpus the answer is gigabytes. The backend assembles it, and the web process holds it twice: once parsed, and once as the `json.dumps` string.
+`McritClient.getExportData([])` requests `/export/`, and mcrit answers that with every sample it holds. The export buttons on sample and family rows link to this route. Family 0, the unnamed family mcrit creates in every storage and keeps even when it has no samples, is listed on `/explore/families` with an export button. When every sample has a family, that one click downloads everything. A row left on screen after its sample or family was deleted produces the same request, so nobody has to forge a URL to hit it. On a large corpus the answer is gigabytes. The backend assembles it, and the web process holds it twice: once parsed, and once as the `json.dumps` string.
 
 ## Validation
 - Full offline suite and `ruff check .` pass.
@@ -30,6 +30,7 @@ Fixes #NNN (the issue in `pr-text/issue-new-specific-export.md`, once it is file
   | `/data/specific_export/samples/abc` | 200, 31.7 MB, all 66 samples | 404 |
   | `/data/specific_export/family/99999` | 500, `AttributeError` | 302, "Family 99999 does not exist or has no samples to export." |
   | `/data/specific_export/family/abc` | 500, `AttributeError` | 404 |
+| `/data/specific_export/family/0`, the empty default family, which `/explore/families` lists with an export button | 200, 31.7 MB, all 66 samples | 302, "Family 0 does not exist or has no samples to export." |
   | `/data/specific_export/family/3` | 200, 4 samples | identical |
   | `/data/specific_export/samples/8` | 200, 1 sample | identical |
   | `/data/specific_export/samples/-1` (a query sample) | 200, 0 samples | identical |
