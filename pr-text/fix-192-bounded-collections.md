@@ -97,6 +97,12 @@ The full proposal is written up as a ready-to-file mcrit issue. **It still needs
   The widget still shows at most 5 items.
 - Pages are about 2.2 kB larger (index), or 2.5 kB on listing pages that also carry an edit modal (+2,142 B on `/data/submit` with this 3-family corpus). The shared partial's script now rides along with the drop overlay on every page. On `/data/submit` it replaces the embedded list, which grew with the corpus.
 
+**Checked again on a second instance** (mcrit 1.9.0, 16 families):
+- `/data/submit` no longer calls `GET /families`: 2 backend calls become 1.
+- The page is 17,630 bytes whatever the family table holds. Master's grows with it, and is 16,142 bytes there.
+- In a browser, the type-ahead offers what master's does: `rip` gives ripgrep, and `live` gives live-submit and livecheck141. There are no console errors.
+- The upload overlay's family field on the listing pages now gets suggestions. Master handed it an empty list, so it never had any.
+
 ## Merge conflicts
 - **#126** (`base.html`, `js/ac_family_names.html`, `table/submit_or_query_dropzone.html`): #126 defers Bootstrap and so builds the family type-ahead on `DOMContentLoaded`; it also adds a `lazy` flag to the dropzone macro. This PR drops the macro's `families` argument and attaches the shared type-ahead to the dropzone's family field. On merge:
   - keep #126's `DOMContentLoaded` wrapper and call this PR's `attachFamilyAutocomplete(document.getElementById('family'))` inside it;

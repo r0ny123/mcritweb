@@ -65,6 +65,21 @@ On master, an ordinary explore page read the `server` row five times: once in th
 - `saveToDb` doesn't drop `g.mcrit_client`. A view that built a client and then saved new settings would keep the old client for the rest of that request. `change_server` doesn't do that, because it builds its client after the save. Having `db.py` reach into the client seam from #88 seemed the wrong direction.
 - `administration.py`'s `change_username`, `change_password` and `regenerate_apitoken` still load the user by id again, which the issue also lists. They are left out on purpose, because #206's fix is in progress there.
 
+**Checked again on a second instance** (mcrit 1.9.0, 66 samples). SQL statements per request, traced in process:
+
+| Request | master | this branch |
+|---|---|---|
+| `GET /` | 6 | 3 |
+| `GET /explore/samples` | 8 | 4 |
+| `GET /admin/server` | 6 | 3 |
+| `GET /settings` | 6 | 5 |
+| `GET /admin/users/` | 6 | 6 |
+
+- The only full user-table scan left is the one `/admin/users/` renders.
+- Every page rendered identically to master, for an admin and for a newly registered visitor.
+- A changed default filter, column setting and username each took effect on the next request.
+- The merged filename parser returned what master's two did for all 7 filenames tried, and logged a filename with no address once.
+
 ## Merge conflicts
 - **#114, #130, #160**: import lines in `administration.py`, `utility.py` and `authentication.py`. Keep both sides.
 - **#176**: its import line, and the two lines that read the running version. #176 makes `pyproject.toml` the version source through `get_mcritweb_version()`. Keep that source and have this PR's pages read whatever #176 establishes.

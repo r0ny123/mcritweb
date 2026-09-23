@@ -77,5 +77,7 @@ Function names and labels can change, so they are not memoized; the page reads t
 - Two concurrent first views of the same pair both compute it.
 - The byte weight is an estimate, and the 64 MiB bound is a module constant.
 
+**Checked again on a second instance** (mcrit 1.9.0, 66 samples), on the five largest matched pairs of an 11,598-function sample, plus one reversed pair. The comparison page, the combined graph and both single-function graphs were byte-identical to master, first request and repeat: 36 pairs, no differences. The pairs there are 194-309 instructions long, so the time saved stays within noise (15-250 ms per request either way).
+
 ## Merge conflicts
 Merges cleanly with every open PR.

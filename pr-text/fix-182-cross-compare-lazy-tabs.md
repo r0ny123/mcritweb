@@ -56,6 +56,18 @@ A small endpoint that serves the other panes was the alternative. It would have 
   - A result with only `score_weighted` and `frequency_weighted` renders `score_weighted`, fills `frequency_weighted` on click, and shows no JS errors when the tabs of missing methods are clicked.
 - **N=130 samples:** 39.0 MB → 7.4 MB, and server time 6.0 s → 1.2 s. (The live backend has 13 samples. N=130 was made by repeating the ids ten times in `?custom=`, on the same live cross job, master against this branch.)
 
+**Checked again on a second instance** (mcrit 1.9.0, 66 samples), on all nine cross compares there. Warm cache, median of 3:
+
+| N | master | this branch |
+|---|---|---|
+| 40 | 4,122,075 B, 561 ms | 807,383 B, 182 ms |
+| 15 | 709,070 B, 90 ms | 159,294 B, 76 ms |
+| 10 | 363,191 B, 63 ms | 94,151 B, 59 ms |
+| 3 | 77,311 B, 28 ms | 40,494 B, 29 ms |
+
+- In a browser, every tab of the 40-sample job was compared with master's rendering of the same tab: cell text, tooltip, colour, link and edit button data. This was done in the default order and in a reversed `?custom=` order. The 3-sample job, which has no fifth-sample header row, was compared too. 19,254 cells, 0 differences, no JS errors.
+- The edit modal on a pane filled in the browser matches master's for the same sample.
+
 ## Limitations
 
 - The per-cell tooltip is left as it is and now dominates the page; that is #198. The per-method scores are now in the page, which a tooltip built on hover can reuse. If the cell markup changes there, the one-line patch in the fill script has to follow; a comment in the macro points to it.

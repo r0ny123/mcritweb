@@ -29,6 +29,7 @@ fix/187-link-hunt-clusters|fix-187-link-hunt-clusters.md|
 fix/194-result-view-passes|fix-194-result-view-passes.md|
 fix/182-cross-compare-lazy-tabs|fix-182-cross-compare-lazy-tabs.md|
 fix/192-bounded-collections|fix-192-bounded-collections.md|
+fix/202-result-cache-size|fix-202-result-cache-size.md|
 fix/183-job-page-poll|fix-183-job-page-poll.md|
 fix/linkhunt-empty-family-count|fix-linkhunt-empty-family-count.md|issue-new-linkhunt-family-count.md
 '

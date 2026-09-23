@@ -63,6 +63,12 @@ The Unique Blocks result page no longer rebuilds the YARA block cover on every r
     Wall-clock times over HTTP moved the same way but were too noisy on the shared test machine to quote.
   - 64 concurrent mixed-parameter requests over 12 threads all matched the sequential renders. No 500s in the server log.
 
+**Checked again on a second instance** (mcrit 1.9.0, 66 samples), on all five unique blocks jobs there. One is an 11,598-function sample with a 35 MB result.
+- Across 17 variants per job (tabs, block pages, page size, filters, each rule parameter, and an empty cover), the rule text, cover summary and block table were byte-identical to master.
+- On the large job, a request took 4.6-7.0 s on master every time. Here a repeat takes 1.6-2.5 s.
+- `required_per_sample=100` took 36-52 s on master every time. Here a repeat takes 1.9 s.
+- One job no build had fetched before showed the first-render difference live. Master's first render started its block table at another pichash than its later renders did. This branch's first render already matched master's later ones.
+
 ## Limitations
 - **Only the unique blocks first render changes.** It now matches every later render, where before it could show a different, equally valid cover. Renders from the cached copy are unchanged.
 - **Still differs on the first view:** the per-sample statistics table follows `by_sample_id`'s order, and that order still differs between the first view and later ones, as on master (the cached copy sorts sample ids as strings, e.g. "10" before "7"). It doesn't feed the cover or the rule, so it is left as it was.

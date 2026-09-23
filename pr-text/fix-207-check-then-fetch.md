@@ -14,6 +14,7 @@ Four places asked the backend whether an id exists and then fetched the entity. 
   - Single sample: passes the id straight to `getExportData([id])`. `MinHashIndex.getExportData` leaves out ids it does not know, so an export with `num_samples == 0` means there was no such sample. The route reports that with a flash ("… it may not exist, or MCRIT could not export it.") and a redirect to the export page, as it already does for an unknown export type. The wording also covers a real sample whose export hit `STORAGE_MAX_EXPORT_SIZE`.
   - Family: `getSamplesByFamilyId` answers `{}` for a family without samples, and `_deleteFamilyIfEmpty` never deletes family 0, so family 0 can be empty. An empty family used to reach `getExportData([])`, a full-corpus export. An unknown family answered None, and `.values()` raised a 500. Both, and a failed export, now get a flash and the redirect.
 - `tests/conftest.py`: the `RecordingMcritClient` docstring explained its narrow `isSampleId` commitment with the `match_functions` TypeError this PR fixes. I shortened that paragraph.
+- `AGENTS.md`: the rule to check `is*Id` before acting on a user-supplied id now says when the fetch itself is the check, and that a `None` can also be a backend error.
 
 Left alone:
 - `analyze.unique_blocks` keeps its per-id `isSampleId`. mcrit 1.9.0 has no REST lookup for several sample ids at once: `getSamples` returns the whole collection, and `getSampleEntriesByIds` is storage-internal. That check also guards a submit rather than repeating a fetch, and its comment explains why a 500 must refuse the submit.
@@ -61,6 +62,20 @@ Each removed check requested the same backend resource as the call after it, or 
   - The export of sample 12 is identical once the compressed function blobs are decoded.
   - The flask log shows no tracebacks.
   - On this instance family 0 holds samples 0-6, so the empty-family case is covered by the tests, not live.
+
+**Checked again on a second instance** (mcrit 1.9.0, 66 samples), where family 0 is empty:
+
+| request | master | this branch |
+|---|---|---|
+| `/data/specific_export/family/0` | 200, 31,723,245 B: all 66 samples | redirect and flash |
+| `/data/specific_export/samples/99999`, `/samples/abc`, `/samples/<5000 digits>` | 200, the same whole corpus | redirect and flash |
+| `/data/specific_export/samples/１２` (fullwidth digits) | 200, sample 12's export, since `int()` accepts them | redirect and flash |
+| `/data/specific_export/family/99999`, `/family/abc`, `/family/-1` | 500 | redirect and flash |
+| `/data/specific_export/samples/0`, `/family/1` | 200 | 200, identical once the function blobs are decoded |
+
+- Family 0 is the unnamed family every mcrit storage keeps. `/explore/families` lists it with an export button, so on such an instance one click downloaded everything.
+- Backend calls per view match the table above: a function comparison 8 → 6, and with an unknown id 3 → 2; `?samid=` with the diagram cached 5 → 4; a known sample's export 3 → 2.
+- Nine function comparison and `?samid=` pages are byte-identical to master.
 
 ## Limitations
 - The client's `handle_response` turns both a 404 and a 500 into None. On a backend error the comparison page therefore says "One of the function_ids is not valid." That is also what master said when the error hit one of the `isFunctionId` checks, and before this PR an error on the comparison itself was a 500. Telling the two apart needs the raw response, so it is left for another change.

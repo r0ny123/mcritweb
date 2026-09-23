@@ -56,6 +56,11 @@ The cluster rows and links extracted from all 14 pages are identical to master's
 - The clusters hold the reference sample's function entries as they were when first clustered. If a function is renamed while an entry lives, the cluster table shows the old name until the entry is evicted or the process restarts.
 - This branch carries `mcritweb/views/memo.py` and `tests/testMemo.py` byte-identical with the #184 and #186 PRs, plus the same `reset_server` hunk, so the three merge cleanly in any order.
 
+**Checked again on a second instance** (mcrit 1.9.0, 66 samples), on five jobs with 28-42 clusters, three of them for an 11,598-function sample.
+- About 50 page pairs were compared: paging, the default filters restated, link score, min score, exclusions, strongest-per-family on and off, and cleared filters. There were no differences from master.
+- Master re-clusters on every request, 26-30 s for the large sample. Here, a page turn or a link score change after the first request takes 0.02-0.3 s. For example, `funp=2` took 0.07 s after a 26.6 s first view.
+- Filters that change what is clustered produced master's result, not a cached one.
+
 ## Merge conflicts
 - **#130**: #130 wraps `getFunctionsBySampleId` in `require_result(...)`, and this PR moves that call into the clustering closure. Keep the closure and put `require_result` around the call inside it.
 - **#145**: import lines. Keep both.

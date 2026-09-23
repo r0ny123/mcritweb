@@ -53,6 +53,12 @@ Other checks:
 - In isolation on that report, the table's aggregation drops from 112 ms to 3.3 ms per render.
 - What's left (about 750 ms, the same as the `funid` page, which aggregates nothing) is `MatchingResult.fromDict` and the JSON load.
 
+**Checked again on a second instance** (mcrit 1.9.0, 66 samples):
+- 45 result pages are byte-identical to master, whitespace included.
+- They come from five jobs: an 11.6k-function sample's 1vsN, three other 1vsN jobs, and a query job.
+- Each job was taken plain, on pages 2 and 3, at `funl` 10 and 250, with `famid`, with `samid`, with `filter_exclude_pic`, and on a page past the end.
+- The largest page took 130 ms instead of 174 ms (median of 5, warm cache).
+
 ## Limitations
 
 - This conflicts with PR #145 on two lines: the `render_template(...)` calls of the family and unfiltered branches, since both PRs add a keyword argument there. The fix is to take #145's line and add `function_rows=aggregate_function_matches_page(matching_result, function_pagination)`. I merged the two that way and re-ran everything above.
