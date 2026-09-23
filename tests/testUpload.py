@@ -14,6 +14,7 @@ answered by the suite rather than by hand.
 import io
 import json
 import logging
+import os
 import random
 import re
 from urllib.parse import quote
@@ -315,6 +316,23 @@ def test_a_dump_carries_its_bitness_and_base_address(client, as_role, fake_mcrit
     assert kwargs["is_dump"] is True
     assert kwargs["bitness"] == 64
     assert kwargs["base_addr"] == 0x140000000
+
+
+@pytest.mark.parametrize("options, extra", [("unmapped", {}), ("dumped", {"bitness": "32", "base_addr": "0x400000"})])
+def test_a_submitted_binary_leaves_no_copy_on_the_web_host(client, app, as_role, fake_mcrit, options, extra):
+    """The binary goes to the backend and nowhere else. `data.submit` used to write
+    every upload to temp/uploads/<sha256> on the way, and nothing ever read that name:
+    the directory's one reader is the query upload path, which names its files by job
+    id (#169). That was a second copy of every sample submitted - most of them malware -
+    kept on the web host with nothing to remove it."""
+    as_role("contributor")
+    uploads = os.path.join(app.instance_path, "temp", "uploads")
+
+    response = submit_binary(client, b"MZ keep no copy", options=options, **extra)
+
+    assert response.status_code == 202, response.get_data(as_text=True)[:200]
+    assert [call for call in fake_mcrit.calls if call[0] == "addBinarySample"], "the binary never reached the backend"
+    assert not os.path.isdir(uploads) or os.listdir(uploads) == []
 
 
 # --- the filename probe the dropzone fires on drop ---------------------------------
