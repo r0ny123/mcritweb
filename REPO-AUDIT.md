@@ -5,8 +5,9 @@ A running log of an end-to-end triage of every open pull request across
 `fkie-cad/mcritweb`), including what was found, what was decided and why, and what
 is deliberately left.
 
-Audit date: 2026-09-12. Baselines are measured, not estimated; every number below
-came from a run in this environment.
+Audit date: 2026-09-12, last updated 2026-09-23 (section 10: upstream 1.5.0, the open
+PRs brought onto it, and a correction to section 9). Baselines are measured, not
+estimated; every number below came from a run in this environment.
 
 ## Environment the numbers were taken in
 
@@ -508,13 +509,19 @@ gates the rest.
 | Claim | How it was checked | Result |
 |---|---|---|
 | 39 PRs integrated | `git log --first-parent`, counting `Merge PR #N` subjects | **37** such merges; two of the 39 folded without one |
-| nothing lost in conflict resolution | for each, `git merge-tree --write-tree pr177 <PR head>` and compare to `pr177^{tree}` | **37/37 identical** — every PR fully absorbed |
+| nothing lost in conflict resolution | for each, `git merge-tree --write-tree pr177 <PR head>` and compare to `pr177^{tree}` | ~~37/37 identical~~ — **withdrawn: this check cannot fail here** (§10.1) |
 | 808 tests pass | full suite in a clean worktree on the head | **803 passed, 5 skipped** (the Playwright browser tests), 244s |
 | ruff passes | `ruff check .` | clean |
 
-The absorption check is the one worth keeping: re-merging an already-merged PR is a no-op
+~~The absorption check is the one worth keeping: re-merging an already-merged PR is a no-op
 **only if** the resolution kept all of it, so a hand-resolved merge that quietly dropped a
-hunk shows up as a differing tree. None did.
+hunk shows up as a differing tree. None did.~~
+
+**Correction, 2026-09-23.** The check proves nothing here. Every one of those PR heads is an
+*ancestor* of the integration, so for each of them the merge base is the PR head itself and
+`merge-tree` returns the integration's tree by construction, dropped hunk or not. §10.1
+demonstrates it on a fake integration that drops a hunk and still "passes". What stands is
+the `--remerge-diff` reading below.
 
 ### The resolutions, read with `--remerge-diff`
 
@@ -594,6 +601,9 @@ integration branch into 32 PR branches would balloon every one of their diffs wi
 foreign commits. Once it is on `master`, the same branches take it as an ordinary base
 merge and each diff collapses back to its own change.
 
+**#177 landed on 2026-09-21**, with two more integrations and the 1.5.0 release; by then 24
+upstream PRs were still open, and all of them are current with it. See §10.3.
+
 ### Dead end recorded
 
 Checked whether the integration calls an `McritClient` method newer than the declared
@@ -608,3 +618,153 @@ bindings and have been present since v1.5.3. **No finding; the floor is correct.
 top of four security fixes and 39 PRs. Suggested order: **#177 first, then #176, then tag**.
 Both touch the version, and resolving one PR against a merged integration is a smaller job
 than re-resolving a 183-commit integration against one PR.
+
+## 10. Upstream 1.5.0 — verified, and the open PRs brought onto it (2026-09-23)
+
+#177 merged on 2026-09-21, followed the same day by two further integrations and the
+release:
+
+| merge on `master` | what it brought |
+|---|---|
+| `dc2412d` #177 | `integrate-independent`, as reviewed in §9 |
+| `210275b` #178 | `integrate-batch-2`: #108, #111, #134 |
+| `41b0a17` #179 | `integrate-batch-3`: #116, #139, #144, #150, #165, #175 |
+| `3bebcb1` #180 | the manual's lists render as lists on `/help` |
+| `98cfdc0` #181 | release 1.5.0 |
+
+53 upstream PR heads are now reachable from `master`.
+
+### 10.1 Master verified, and §9 corrected
+
+- **Tests:** 962 passed, 6 skipped, ruff clean. That is the figure the release commit
+  states, measured here rather than taken from it. The 6 skips are the Playwright tests;
+  with `playwright==1.56.0` against the Chromium build preinstalled in this environment they
+  run, and pass.
+- **§9's absorption check is withdrawn.** A fake integration that merges #170 and then
+  reverts its `mcritweb/views/data.py` change, put through the same `merge-tree` comparison,
+  comes out "identical". All 39 heads #177 integrated are ancestors of it, which makes the
+  check a tautology for every one of them. It can only say something about a PR whose head
+  is *not* in the integration's history.
+- **Reading the resolutions is the real check, with one blind spot.**
+  `git show --remerge-diff` over the 61 merges now on `master`: 20 carry hand edits (12 in
+  #177, 8 in the later integrations), and all 20 were read. Each keeps the intent of both
+  sides, with two things worth recording:
+  - `a5f7aa4` (#175 against #116 in `style.css`, part of batch-3) dropped a closing `}`.
+    53 `{` met 52 `}`, and CSS error recovery swallowed the seven rules after it, the
+    function comparison's whole layout (#74), without an error anywhere. Already fixed on
+    `master` by `a2d020a`. **This read missed it.** The remerge-diff shows nothing but the
+    three conflict markers being deleted - both sides kept verbatim, which reads as the
+    safest resolution there is. But the two sides had shared one closing `}` below the
+    conflict as context, and each needed its own. A brace count catches that where reading
+    does not, so every stylesheet merged since has been checked with one.
+  - `d350c5d` removes #104's sha256 check and its tests in favour of #169, which stops the
+    request naming the upload's file at all. Legitimate: the replacement tests cover every
+    case #104 listed, and more.
+
+### 10.2 Upstream PR state after the release
+
+Read from git (a `refs/pull/N/merge` ref exists only while a PR is open), since the GitHub
+API still refuses `fkie-cad` repositories from this environment.
+
+- **24 open:** #107 #114 #115 #117 #119 #122 #126 #130 #132 #133 #136 #141 #142 #145 #147
+  #148 #149 #152 #159 #160 #172 #173 #174 #176.
+- **Closed without a merge, content superseded:** #33 (unrelated history, older than the
+  fork's base), #138, #151, and #169, whose change reached `master` through the integration.
+
+### 10.3 The open PRs brought onto 1.5.0
+
+Each branch took `master` as an ordinary merge — no rebase, no force-push — so every PR's
+diff shrinks back to its own change. #172 merges clean and was left alone; the other 23 were
+resolved by reading both sides, checked with ruff (which selects `F`, so shadowed and
+undefined names fail), a duplicated-block check and a CSS brace count, and pushed only after
+a green full suite. Test counts differ because each branch carries its own tests on top of
+master's 962.
+
+| PR | branch | commits | passed | what the resolution had to decide |
+|---|---|---|---|---|
+| #107 | `fix/73-empty-result-vs-unknown-job` | `4a32b88` | 991 | its test's name shadowed a new master test — renamed |
+| #114 | `fix/89-cache-the-backend-probe` | `9a218fa` `2add9da` | 1017 | unions; and the ADR link text still said 0003 after the ADR became 0012 |
+| #115 | `fix/51-job-search` | `56aa4de` | 1071 | the job search rework on master's category check; the group-job tab joins `JOB_CATEGORIES`; a narrowed queue read that one unreadable job fails falls back to the full queue |
+| #117 | `fix/41-wrap-long-job-names` | `5e89824` | 995 | one template cell each |
+| #119 | `fix/65-empty-table-messages` | `e23feff` | 1044 | `empty_message` beside master's `row_decorations` |
+| #122 | `fix/39-one-name-per-job-method` | `aeab268` | 1007 | a test followed the fake's new per-method queue filter |
+| #126 | `fix/63-page-specific-libraries` | `151b893` | 1026 | **security:** master's escaped type-ahead (#168) kept over this branch's older copy; icon subset regenerated |
+| #130 | `fix/43-backend-transport-errors` | `af8ee07` | 1045 | `require_result` through master's functiondiff refactor; a marker test retired because #77 landed |
+| #132 | `fix/36-job-tab-in-the-url` | `2347217` | 991 | master's category check adopted; seven master tests follow the new redirect, one had been passing hollow |
+| #133 | `fix/55-rerun-job` | `e4d66f2` | 1040 | one band-range table, read in both directions; an alert git had merged in twice |
+| #136 | `fix/45-mark-the-search-term` | `7f38729` | 1055 | `highlight_terms` beside `row_decorations` |
+| #141 | `fix/44-dedumped-is-not-a-dump` | `8b5110c` | 1061 | guarded SMDA parse kept; its sha256-named upload write dropped, #169 owns uploads now |
+| #142 | `fix/38-filter-the-matching-statistics` | `9ece824` | 1011 | unions |
+| #145 | `fix/68-result-page-performance` | `7bc62a6` `54bc9e6` | 1117 | caching rework on master's `utc_now` and logging; then `$`→`\Z` and whole-id matching in the cache lookups |
+| #147 | `fix/80-block-isolation-table` | `9e150be` | 999 | annotation applied to master's parametric YARA rule; a button calling a function this branch removed |
+| #148 | `fix/7-round-the-score-columns` | `c75221a` | 1009 | a master test encoded truncation; it compares with `round()` now |
+| #149 | `fix/46-cross-job-duration` | `3c1371d` | 1016 | a local `utc_now()` shadowed master's timezone-aware one |
+| #152 | `fix/50-deduplicate-result-tables` | `7db5fe5` | 996 | master's count wins on the sample-filtered page |
+| #159 | `fix/42-cross-compare-ordering` | `05b1621` | 1022 | test helpers git had interleaved, rebuilt |
+| #160 | `fix/70-tokenise-the-palette` | `16d8f81` | 1101 | the palette carried onto master's newer templates; row state as classes; the CFG legend drawn from the graph's own colour constants |
+| #173 | `feat/72-edit-function-name` | `341c673` | 999 | a stale copy of a fake master had rewritten, dropped |
+| #174 | `feat/64-typed-search-results` | `0290e76` | 1003 | master's search views run on `SearchPage`; its new picker converted; an `is None` guard where master tests truthiness |
+| #176 | `release/modernize-release-workflow` | `699d889` | 998 | 1.5.0 carried into `pyproject.toml` and `CHANGELOG.md`; the floor stays at master's `>=3.11` |
+
+### 10.4 What git merged without a conflict, and got wrong
+
+The conflict markers were the easy part. None of these was inside one:
+
+| branch | what | caught by |
+|---|---|---|
+| #107 | a test name defined on both sides; Python keeps the later, so master's stopped running | ruff F811 |
+| #176 | `import re` removed from `utility.py`, which master's new code needs; the module no longer imported | ruff F821 |
+| #133 | the missing-sub-jobs alert rendered twice | master's own test for that alert |
+| #160 | a second, identical 74-line `SCHEMA_V1_4_8` in `testMigrations.py` | the duplicated-block check |
+| #160 | master's job-badge test found the badge by `color:green`, which #160 tokenises, so every badge read as absent | the full suite |
+| #174 | master's new `unique_blocks` picker still on the dict API, handing a dict to a helper that now takes a `SearchPage`: a 500 | its rendering test, extended to that page first |
+| #174 | master's `if not results`, harmless on a dict, drops the exact-match badge from a `SearchPage` that has no text hits | a new test, which fails with the truthiness guard |
+| #149 | a module-level `utc_now()` shadowing master's timezone-aware import | reading the auto-merged file |
+| #147 | master's button calling a JS function this branch had removed | reading the auto-merged template |
+| #132 | a master test passing hollow on the new redirect stub | asking why seven tests changed |
+
+### 10.5 The backend side
+
+Upstream mcrit merged #161 and #185 on 2026-09-16 (with #184). #163 and #169 are still open,
+and there is no release after v1.9.0. For the four mcritweb PRs the integration held back:
+
+- #172 (mcrit#161) and #130 (mcrit#185): the backend change is on mcrit's `main`, not yet on
+  PyPI.
+- #173 (mcrit#163) and #174 (mcrit#169): still gated. #174's adapter takes the typed search
+  where the client has one and the dict otherwise, so it also runs against today's release.
+
+This fork's `main` is untouched: 0 ahead of upstream `main`, 13 behind, for §9's reasons.
+
+### 10.6 Mistakes, recorded
+
+- §9's absorption check, above.
+- Pushing #115's merge to its twin, `fix/51-malformed-job-payload`, re-created that branch
+  on the remote after it had been deleted there: the push went through a stale local
+  tracking ref. No PR points at it, and it is identical to `fix/51-job-search`. **It is
+  left for the owner to delete.** Since then every push is preceded by `git fetch --prune`
+  and `git ls-remote` for the branch. #160's twin, `fix/70-selected-rows-follow-the-theme`,
+  does not exist on the remote and was not pushed.
+- The script that runs the suite was edited while background runs were using it, which
+  corrupted those runs. They were repeated.
+- A copy command failed (there is no `rsync` here) and the commands after it ran in the
+  live #174 worktree during a suite run. That run was stopped and repeated rather than
+  trusted.
+
+### 10.7 Found along the way, open
+
+- `data.submit` writes every submitted binary to `temp/uploads/<sha256>` before handing it
+  to mcrit, and nothing reads it again: the only reader of that directory is the query
+  upload path, which names files by job id (#169). That is an unbounded second copy of every
+  submitted sample, usually malware, on the web host - and the 1.5.0 notes tell operators
+  the sha256-named files there are orphans they can delete, while this route keeps making
+  new ones. The name itself is safe: on that branch it is always a digest of the upload.
+- `AGENTS.md` links two ADRs by the number they had before the renumbering (the link text
+  says ADR-0003 for 0014, table reloads, and for 0010, search results as dicts), and carries
+  two "Uploads" bullets: the pre-#169 one, "named by SHA-256", kept beside the one that
+  replaced it and contradicting it.
+- Thirteen check/cross icons across eight templates put the tag's closing `>` inside the
+  `{% else %}` branch, so when the condition is true the markup is
+  `<i … class="fa-solid fa-square-check" </i>`: the `</i>` is read as attributes and the
+  `<i>` element is never closed.
+- `index()` asks for finished `getMatchesForSample` jobs only, which never carry a
+  `family_id`, so its `getFamily` branch cannot run.
