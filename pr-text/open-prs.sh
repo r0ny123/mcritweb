@@ -15,7 +15,7 @@ TEXTS=claude/admiring-turing-4ihzfx
 # branch on the fork | PR text | issue text to file first, if the PR needs a new issue
 BRANCHES='
 fix/182-cross-compare-lazy-tabs|fix-182-cross-compare-lazy-tabs.md|
-fix/183-job-page-poll|fix-183-job-page-poll.md|
+fix/183-poll-job-status|fix-183-poll-job-status.md|
 fix/184-unique-blocks-cache|fix-184-unique-blocks-cache.md|
 fix/186-function-diff-cache|fix-186-function-diff-cache.md|
 fix/187-link-hunt-clusters|fix-187-link-hunt-clusters.md|
