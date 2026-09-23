@@ -52,5 +52,5 @@ A proposed `[Unreleased]` entry. It isn't in the branch, so that this PR and the
 > - `PUT /samples/<id>` and `PUT /families/<id>` refused `""` and one-character family names although their messages allow 0-64 characters, so a version or component could not be cleared once set, and no sample could be moved into family 0. A value ending in a newline, which `$` let through, is now refused ([#EDITS]).
 
 ## Merge conflicts
-- None textually. The branch merges cleanly with every open PR, including #177 and #178, which touch `SampleResource.py` and `FamilyResource.py`, and #183, which adds docstrings to both responders.
+- None of its own. Against the 22 open PRs, it has only the conflicts main (2ac8d7b) already has since #163 and #169 were merged: #177 and #206 in `tests/testClientErrors.py`, and #183 in `mcrit/client/McritClient.py`. It merges with #177's and #178's changes to `SampleResource.py` and `FamilyResource.py`, and with #183's docstrings for both responders.
 - In meaning: see the note on #RENAMEPR above. And #183's new docstring for `SampleResource.on_put` gives `version` and `component` as 1-64 printable characters; with this change it should say 0-64.

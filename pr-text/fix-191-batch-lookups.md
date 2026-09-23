@@ -50,7 +50,9 @@ The loops were serial because mcrit had no batch read, as #221 describes. The st
 - The cross result pages still spend their time rendering; the lookups were a small share of it.
 
 ## Merge conflicts
-- Everything #221 conflicts with, as its text describes.
-- Four more, all in `job_by_id`, next to the block this replaces: #133, #145, #149 and #214.
+Against the open PRs:
+- **#221's own**, as its text describes: #115, #142, #159, #160 and #174, and the `data.py` import lines it shares with the #182 branch, which are #213's and #226's now (#226 is on #213's branch). In those import lines, keep both sides' names, and this branch's `get_family_entries` with them.
+- **Four more**, all in `job_by_id`, next to the block this replaces: #133, #145, #149 and #214.
   - Keep this branch's two lines for the samples and families. They also cover #145's `not in families_by_id` guard, since the helper asks for each family once.
   - Keep the other PR's changes to the `render_template` call, and anything it adds after it, such as #214's `job_state`.
+- Every other open PR merges cleanly, and so do the other two follow-ups.

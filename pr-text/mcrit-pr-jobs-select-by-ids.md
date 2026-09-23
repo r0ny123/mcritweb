@@ -7,21 +7,21 @@ Fixes #SELECTOR.
 
 ## What changed
 - **`MongoQueue.get_jobs`** takes `sample_ids` and `job_ids`, and a new `_get_jobs_filter` builds the query:
-  - `sample_ids` selects the jobs of `method` whose first positional argument is one of the ids. It matches `payload.descriptor` with two anchored regexes per id, in an `$in`; Why has the reason. Without `method`, or with no id left, it selects nothing.
+  - `sample_ids` selects the jobs of `method` whose first positional argument is one of the ids. It matches `payload.descriptor` with two anchored regexes per id, in an `$in`; Why has the reason. An id that doesn't parse as an int is dropped. Without `method`, or with no id left, it selects nothing.
   - `job_ids` becomes `{"_id": {"$in": [...]}}`, of the ids that parse as `ObjectId`.
   - Both apply before the `state` branch and before paging.
-- **`LocalQueue.get_jobs`** takes the same two and applies them in Python: the first argument from `payload.params`' `"0"` key, and set membership on the job id.
+- **`LocalQueue.get_jobs`** takes the same two and applies them in Python: the first argument from `payload.params`' `"0"` key, and set membership on the job id. Like MongoQueue, it selects nothing for `sample_ids` without `method`.
 - **`QueueRemoteCalls.getQueueData`** forwards both, by keyword, because the two queues' `get_jobs` order their positional parameters differently.
 - **`JobResource.on_get_collection`** parses `sample_ids` as comma-separated ints and `job_ids` as comma-separated strings, and drops the items that don't parse. `sample_ids` without `method` answers 400.
 - **`McritClient.getQueueData`** takes `sample_ids` and `job_ids` after the existing parameters, whose order is unchanged, and sends them as comma-separated values.
 - `MongoQueue.get_jobs` is annotated `List["Job"]` instead of `Optional[List["Job"]]`. It never returned None, and `ty` flagged the new tests' iteration over its result.
 - **Tests**:
-  - `testMongoQueue.py`, 12:
+  - `testMongoQueue.py`, 13:
     - first argument only, and `getMatchesForSample` never picking up `getMatchesForSampleVs`;
     - negative ids, paging after the selection, the `state` branch;
-    - empty and invalid selectors selecting nothing, and both selectors combined;
+    - empty and invalid selectors selecting nothing, ids that don't parse, and both selectors combined;
     - the index keys a selection reads.
-  - New `testLocalQueue.py`, 10: the same rules on LocalQueue.
+  - New `testLocalQueue.py`, 11: the same rules on LocalQueue, `sample_ids` without `method` included.
   - `testJobResource.py`, 7: the 400, parsing, empty selectors forwarded as empty, and both together with `state` and `filter`.
   - `testClientErrors.py`, 4: what the client sends, an empty list included, and raw mode.
 
@@ -37,8 +37,8 @@ Fixes #SELECTOR.
 - **`job_ids` is validated in `MongoQueue`**, not in the resource, because LocalQueue's ids are uuid strings. What counts as valid depends on the queue.
 
 ## Validation
-- **Without the change** (the five non-test files as on main), 31 of the 33 new tests fail. The other two check that nothing changes when neither selector is given.
-- **Full suite** against MongoDB 8.0: 352 passed, 49 subtests (main at 2ac8d7b: 319 passed, 49 subtests). `ruff format --check`, `ruff check` and `ty check` are clean.
+- **Without the change** (the five non-test files as on main), 33 of the 35 new tests fail. The other two check that nothing changes when neither selector is given.
+- **Full suite** against MongoDB 8.0: 354 passed, 49 subtests (main at 2ac8d7b: 319 passed, 49 subtests). `ruff format --check`, `ruff check` and `ty check` are clean.
 - **At scale**, on a synthetic queue of 60,000 jobs for 6,000 samples on MongoDB 8.0, with `get_jobs`'s own `_id` sort, median of 5:
 
   | selection | jobs | this change | one regex with an alternation | one regex per id, ending in `[,}]` |
@@ -69,8 +69,9 @@ A proposed `[Unreleased]` entry. It isn't in the branch, so that this PR and the
 > - `GET /jobs` takes `sample_ids` (with `method`) and `job_ids`, applied in the query before paging, and `McritClient.getQueueData` passes them on. On a 60,000-job queue, selecting the jobs of 25 samples read 102-124 index keys in under 2 ms ([#SELECTOR]).
 
 ## Merge conflicts
-- 20 of the 22 open PRs merge cleanly.
-- **#183** rewrites every client method's signature and docstring. The conflict is in `getQueueData`'s signature and docstring only. Keep the two new parameters, typed `Optional[List[int]]` and `Optional[List[str]]` in #183's style, and mention them in its one-line docstring. #183's `_passthrough` change merges in on its own.
+Against the 22 open PRs:
+- **#177 and #206** conflict only as they already do with main (2ac8d7b) since #163 and #169 were merged, in `tests/testClientErrors.py`.
+- **#183** rewrites every client method's signature and docstring. This change's part of the conflict is in `getQueueData`'s signature and docstring only. Keep the two new parameters, typed `Optional[List[int]]` and `Optional[List[str]]` in #183's style, and mention them in its one-line docstring. #183's `_passthrough` change merges in on its own, and its conflict with main in the search methods is unchanged by this.
 - **#168** moves `filter` and `state` into the query, through a `_job_query` helper, and adds `/jobs/count`. It conflicts in the five files both change. To resolve:
   - add this change's two conditions to #168's `_job_query` (MongoQueue) and `_matching_jobs` (LocalQueue), and the two parameters to `get_jobs` and `get_job_count`;
   - forward them through its `getQueueData` and `getQueueCount`;
@@ -78,3 +79,4 @@ A proposed `[Unreleased]` entry. It isn't in the branch, so that this PR and the
   - pass them through its client query builder.
 
   Two test details change once #168 is in. `_matching_jobs` sorts by `number`, which the hand-built jobs in `testLocalQueue.py` then need. And #168's `urlencode` percent-encodes the commas, which `testClientErrors.py` then decodes.
+- The other 18 merge cleanly.

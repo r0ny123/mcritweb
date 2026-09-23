@@ -10,15 +10,16 @@ This is based on #232's branch, which rewrote `specific_export`; its base here i
 ## What changed
 `mcritweb/views/data.py`:
 - New `fetch_export(sample_ids=None)`. It calls `get_client(raw_responses=True).getExportData(sample_ids)`.
-  - For a 200 whose body is mcrit's export envelope, `{"status": "successful", "data": ` … `}`, it answers the export in between as a generator of 1 MiB `bytes` pieces, cut from a `memoryview` of the body. No second copy of the export is made.
+  - For a 200 whose body is mcrit's export envelope, `{"status": "successful", "data": ` … `}`, it answers the export in between as a generator of 1 MiB `bytes` pieces, cut from a `memoryview` of the body, with their total length. No second copy of the export is made.
   - For a client that answers the parsed dict even in raw mode, as mcrit 1.9.0's does for exports, it answers `json.dumps` of it, exactly as before.
   - For anything else (a failed envelope, a non-200, a body that isn't an envelope, no response), it answers None.
-- `export_view`, for both all samples and a listed selection, and the family branch of `specific_export` use it.
+- New `export_download` builds the download from that, with its `Content-Length`: Werkzeug counts a list body itself, but not pieces still to be cut, and without the header a browser shows neither size nor progress.
+- `export_view`, for both all samples and a listed selection, and the family branch of `specific_export` use them. The filenames and the content type are the same as before.
   - An export the backend didn't make is now reported with a flash. The export page used to download it as a file holding `null`; the family button already reported it.
   - The single-sample branch still parses, because #232 reads the export's `num_samples` to tell an unknown sample from an empty export. A single sample's export is small.
 
 New `tests/testExportPassthrough.py`:
-- the file is exactly the bytes between the envelope, for all samples, a listed selection and a family;
+- the file is exactly the bytes between the envelope, with that length as its `Content-Length`, for all samples, a listed selection and a family;
 - the client was asked in raw mode;
 - an export larger than the piece size arrives whole;
 - a failed envelope, a 500, a body that isn't an envelope and a 502 are each reported and not downloaded, on both routes;
@@ -44,13 +45,15 @@ New `tests/testExportPassthrough.py`:
   - With 1.9.0's client the files are the same serialisation as master's.
   - With the raw-mode client they are the backend's own key order.
   - The time is the backend's to spend: 23.5 s for all samples on master, 15.9 s here with the raw-mode client, with the backend's own export dominating both.
+- **Live, through a running instance**, family 5's export downloaded with the same `Content-Length` as the body, 1,984,064 bytes, with the raw-mode client and with 1.9.0's, as on master. The filename and content type are master's.
 
 ## Limitations
 - `requests` still reads the whole response before the view gets it, because the client calls it without `stream=True`. So one copy of the export remains, down from two.
 - The single-sample export still parses, as described above.
 
 ## Merge conflicts
-- The same as #232's, in the same places, and no others: #130, in the family export and in `match_functions`, and #145, in the `samid` hunk.
+Against the open PRs:
+- **#232's own, in the same places**: #130, in the family export and in `match_functions`, and #145, in the `samid` hunk.
   - Resolve them as #232's text describes.
   - In the family export, keep this branch's `fetch_export` line.
-- It merges cleanly with #229 and with every other open PR.
+- Every other open PR merges cleanly, #229 included, and so do the other two follow-ups.

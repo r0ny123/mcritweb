@@ -51,16 +51,16 @@ BATCH_TITLE = "Expose a batch sample lookup"
 PRS = [
     ("rename", "fix/family-rename-same-name", "2e368678cfa32171324fa35f6f4f1a0ec3f8b16e", "mcrit-pr-family-rename-same-name.md"),
     ("edits", "fix/edit-length-checks", "c7481df3c7110b36c301b9cde364aade78fa7a0b", "mcrit-pr-edit-length-checks.md"),
-    ("batch", "feat/batch-sample-lookup", "BATCH_SHA", "mcrit-pr-batch-sample-lookup.md"),
-    ("selector", "feat/jobs-select-by-ids", "SELECTOR_SHA", "mcrit-pr-jobs-select-by-ids.md"),
+    ("batch", "feat/batch-sample-lookup", "cb5eea250f918ca5c171bf04ebd0be2441166794", "mcrit-pr-batch-sample-lookup.md"),
+    ("selector", "feat/jobs-select-by-ids", "6e7913d90ae22f351d67d2bd7e4d88408663bfb0", "mcrit-pr-jobs-select-by-ids.md"),
 ]
 
 #: the MCRITweb follow-ups, pushed from r0ny123/mcritweb to familiary/mcritweb under the same name
 #: and opened there, in this order: key, branch, head, base branch, head the base must have, text, draft
 FOLLOWUPS = [
-    ("f202", "fix/202-export-bytes", "F202_SHA", "fix/207-check-then-fetch", "4cb8db7fe4969fcd47d4122a437c89b8e1c0f490", "fix-202-export-bytes.md", False),
-    ("f191", "fix/191-batch-lookups", "F191_SHA", "fix/191-serial-entry-fetches", "a25e2df60e7a350d3a3cb333436da1ae0e9ae65e", "fix-191-batch-lookups.md", True),
-    ("f192", "fix/192-queue-reads-by-sample", "F192_SHA", "fix/192-bounded-collections", "59c7da11aeb91bc4d9c4847734ad64bbee36812c", "fix-192-queue-reads-by-sample.md", True),
+    ("f202", "fix/202-export-bytes", "a59bb22bd3767e8d06840dc881564b09177cd618", "fix/207-check-then-fetch", "4cb8db7fe4969fcd47d4122a437c89b8e1c0f490", "fix-202-export-bytes.md", False),
+    ("f191", "fix/191-batch-lookups", "7ee74db70225a3592a4cd761484a259eb9faa8f2", "fix/191-serial-entry-fetches", "a25e2df60e7a350d3a3cb333436da1ae0e9ae65e", "fix-191-batch-lookups.md", True),
+    ("f192", "fix/192-queue-reads-by-sample", "1696ebfe942666bd00c54c6562cffa96cc8b9883", "fix/192-bounded-collections", "59c7da11aeb91bc4d9c4847734ad64bbee36812c", "fix-192-queue-reads-by-sample.md", True),
 ]
 
 #: what to search for before filing, per issue; the related PRs that are not duplicates are listed

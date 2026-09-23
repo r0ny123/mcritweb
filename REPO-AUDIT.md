@@ -1002,7 +1002,7 @@ unfiltered ones.
   library family 4 appears under two names, `''` and `MSVC`. Whether live data can produce that
   (a family whose samples carry different names, e.g. after a rename) is not established.
 
-## 13. The PR set for familiary (2026-09-23, from 12:10 UTC; last updated 20:00 UTC)
+## 13. The PR set for familiary (2026-09-23, from 12:10 UTC; last updated 20:40 UTC)
 
 Daniel has granted write access to branches on familiary/mcritweb; `master` is protected, so
 every change goes through a PR. This session cannot push there: it is bound to the r0ny123
@@ -1254,3 +1254,42 @@ It was run end to end against a stand-in `gh` and `git` holding the real texts: 
 re-runs, the #201 and closed-issue skips, and an injected footer all behaved as described. Run again
 with the `followups` step: the three pushes went to new branches only, the drafts came out as
 drafts on the right bases, and every rendered text was free of placeholders.
+
+### 13.9 The follow-ups and the mcrit branches, as pushed
+
+| branch | repository | head | on | suite | PR |
+|---|---|---|---|---|---|
+| `fix/family-rename-same-name` | r0ny123/mcrit | `2e36867` | main 2ac8d7b | 325 passed | ready |
+| `fix/edit-length-checks` | r0ny123/mcrit | `c7481df` | main 2ac8d7b | 324 passed | ready, after the rename PR |
+| `feat/batch-sample-lookup` | r0ny123/mcrit | `cb5eea2` | main 2ac8d7b | 345 passed | ready |
+| `feat/jobs-select-by-ids` | r0ny123/mcrit | `6e7913d` | main 2ac8d7b | 354 passed | ready |
+| `fix/202-export-bytes` | r0ny123/mcritweb | `a59bb22` | #232's branch | 1015 passed | ready |
+| `fix/191-batch-lookups` | r0ny123/mcritweb | `7ee74db` | #221's branch | 1016 passed | draft until the mcrit release |
+| `fix/192-queue-reads-by-sample` | r0ny123/mcritweb | `1696ebf` | #222's branch | 1008 passed | draft until the mcrit release |
+
+mcrit main at 2ac8d7b passes 319 tests. `finish-upstream.py` opens all seven PRs (13.8).
+
+Two adversarial reviews ran on the final branches, one per repository. What they found, all fixed and
+re-verified before pushing:
+- **Batch lookups**: MemoryStorage's `getFamily` hands out the stored entry, which `GET /families/<id>`
+  attaches its sample list to, so the batch read answered that list afterwards. It now copies each
+  entry without the list, with a test. The older side of it, `?with_samples=false` answering the list
+  after one such GET on MemoryStorage, is described in the PR and left alone. The revert count in the
+  text was wrong; it is now exact (21 of 26 tests, plus the four subtests of a fifth).
+- **Selectors**: LocalQueue did not select nothing for `sample_ids` without `method`, as MongoQueue does;
+  it does now, and `_get_jobs_filter` drops ids that don't parse instead of raising. Tests for both.
+- **Conflict counts**: since #163 and #169 were merged, main itself conflicts with #177, #183 and #206.
+  Every branch inherits exactly those, in the same files, and the texts now say which conflicts are a
+  branch's own.
+- **#202 follow-up**: the streamed download lost its `Content-Length`, which Werkzeug counts only for a
+  list body. `export_download` sets it; checked live with both clients against master's.
+- **#192 follow-up**: the `/api` passthrough parsed `sample_ids` more strictly than the backend; it now
+  parses each item with `int()`, as the backend does.
+- **#191 follow-up**: its conflict list named #221's conflicts by reference, and #221's own text calls
+  #213 "the #182 branch". It now names every PR; the conflicts themselves were as described.
+
+On the live corpus, twice something went through the stock 1.9.0 worker that shouldn't have: two
+`modifyFamily(0, {"family_name": ""})` jobs from the family-0 checks (family 0 was empty, so the
+doubling they cause changed nothing), and a family "fam" that a storage probe created through the
+default configuration, removed at once. Both times the corpus was checked afterwards: 16 families,
+66 samples, every family's counters equal to its samples and functions.

@@ -18,13 +18,13 @@ This adds `POST /samples/ids` and `POST /families/ids`, and `McritClient.getSamp
 - **Storage**: `getFamilyEntriesByIds`, the family counterpart of `getSampleEntriesByIds`:
   - declared in `StorageInterface`;
   - one `$in` query in `MongoDbStorage`;
-  - a loop over `getFamily` in `MemoryStorage`.
+  - a loop in `MemoryStorage`, over copies without a sample list: its `getFamily` hands out the stored entry itself, and `GET /families/{id}` attaches its sample list to that.
 
   Family entries carry no sample lists, as with `GET /families/{id}?with_samples=false`.
 - **Index**: `MinHashIndex.getSamplesByIds` and `getFamiliesByIds` sit next to their singular counterparts. They read storage directly, as `getSampleById` does.
 - **Client**: `getSamplesByIds` and `getFamiliesByIds` return `{id: SampleEntry}` and `{id: FamilyEntry}`. They honour `raw_responses` and both error modes, like `getFunctionsByIds`, except that an empty list answers `{}` without a request.
 - **Tests**:
-  - the storage batch reads, on both storages, covering negative ids, unknown ids, an empty list and duplicates;
+  - the storage batch reads, on both storages, covering negative ids, unknown ids, an empty list, duplicates, and a family that `GET /families/{id}` has attached a sample list to;
   - `MinHashIndex`'s delegation;
   - both resources, with a mocked index;
   - the router: the new paths reach the new responders, and `/samples/{id}` and `/samples/sha256/{sha256}` resolve as before;
@@ -37,7 +37,7 @@ This adds `POST /samples/ids` and `POST /families/ids`, and `McritClient.getSamp
 - **Empty lists.** An empty list skips the request, because there is nothing to ask. `getFunctionsByIds` is left as it is.
 
 ## Validation
-- Without the change, every new test fails except `testGetSampleEntriesByIds`, which covers the existing #111 storage read that the endpoint now exposes.
+- Without the change, 21 of the 26 new tests fail, and so do the four subtests of the malformed-body test, which pytest counts as passed itself. The other four pass either way: the two checks that the existing sample and family routes still resolve, and `testGetSampleEntriesByIds` on both storages, which covers the existing #111 read the endpoint exposes. Without the copy, the attached-sample-list case fails on MemoryStorage.
 - Full suite against MongoDB 8.0: 345 passed, 53 subtests (main at 2ac8d7b: 319 passed, 49 subtests). `ruff format --check`, `ruff check` and `ty check` are clean.
 - Live, with a server on this branch in front of a 1.9.0 corpus of 66 samples, 16 families and one query sample, read-only:
   - `POST /samples/ids` for ids 0-65, two unknown ids and -1 answered 67 entries, without the unknown ones. Each matched `GET /samples/{id}` field for field.
@@ -48,6 +48,7 @@ This adds `POST /samples/ids` and `POST /families/ids`, and `McritClient.getSamp
 ## Limitations
 - MCRITweb's side is a separate change: its per-request lookup helper would send its misses through these. It needs a release with this in it, since it raises MCRITweb's `mcrit` floor.
 - The `mcrit client` CLI gets no subcommand; `getFunctionsByIds` has none either.
+- On MemoryStorage, `GET /families/{id}?with_samples=false` still answers the sample list a previous `GET /families/{id}` attached, because `getFamily` hands out the stored entry. That is older than this change and left alone; the batch read copies around it.
 - The router test checks dispatch through the 400 and 405 paths only. `falcon.testing` validates the WSGI stream, and `req.stream.read()` without a size, as `FunctionResource` calls it, fails that check for any POST with a body. The full parse-and-answer path is covered at the resource level.
 
 ## Changelog
@@ -57,7 +58,9 @@ A proposed `[Unreleased]` entry. It isn't in the branch, so that this PR and the
 > - `POST /samples/ids` and `POST /families/ids`, with `McritClient.getSamplesByIds` and `getFamiliesByIds`, answer several entries in one request. All 66 samples of a corpus took 5.2 ms in one request, against 206.9 ms in 66 ([#BATCH]).
 
 ## Merge conflicts
-- 19 of the 22 open PRs merge cleanly.
-- #178, #179 and #183 each touch `McritClient.py` right beside where this adds its two methods; the conflicts are only textual:
+Against the 22 open PRs:
+- **#177 and #206** conflict only as they already do with main (2ac8d7b) since #163 and #169 were merged, in `tests/testClientErrors.py`.
+- **#178, #179 and #183** each touch `McritClient.py` right beside where this adds its two methods; these conflicts are only textual:
   - **#178, #179:** each adds a method after `getSampleById`, where `getSamplesByIds` goes. Keep both methods.
-  - **#183:** it rewrites every method's signature and docstring. Keep the two new methods, and take #183's version of `getFamilies` and `getSamples` after them.
+  - **#183:** it rewrites every method's signature and docstring. Keep the two new methods, and take #183's version of `getFamilies` and `getSamples` after them. #183's conflict with main in the search methods is its own, and unchanged by this.
+- The other 17 merge cleanly.

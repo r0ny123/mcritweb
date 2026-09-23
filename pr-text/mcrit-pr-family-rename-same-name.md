@@ -45,5 +45,6 @@ A proposed `[Unreleased]` entry. It isn't in the branch, so that this PR and the
 > - Renaming a family to its own name deleted it on MongoDB, while its samples and functions kept its id, and raised `KeyError` on MemoryStorage; for family 0, named `""`, it doubled the counters. MemoryStorage also failed an ordinary rename whenever the renamed family's samples were not the last ones stored ([#RENAME]).
 
 ## Merge conflicts
-- None. The branch merges cleanly with every open PR, including #176, #177 and #178, which also touch the storages and `tests/testStorage.py`.
+- None of its own. Against the 22 open PRs, it has only the conflicts main (2ac8d7b) already has since #163 and #169 were merged: #177 and #206 in `tests/testClientErrors.py`, and #183 in `mcrit/client/McritClient.py`; none of them touch what this changes.
+- It merges with #176, #177 and #178, which also touch the storages and `tests/testStorage.py`.
 - #177 merges the actor lists inside the rename block. With this change a rename to the family's own name skips that block, which leaves the family's own actors as they are.
