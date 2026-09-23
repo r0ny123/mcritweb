@@ -16,6 +16,7 @@ maintenance job type".
 """
 
 import logging
+import re
 
 import pytest
 from mcrit.queue.LocalQueue import Job
@@ -33,12 +34,15 @@ SCHEDULERS = [
     ("/admin/schedule_rebuild_picblockhash_index", "rebuildPicBlockHashIndex"),
 ]
 
-#: every scheduling route on the admin page, old and new
-ALL_SCHEDULERS = [path for path, _ in SCHEDULERS] + [
-    "/admin/schedule_rebuild_index",
-    "/admin/schedule_recalc_minhashes",
-    "/admin/schedule_recalc_pichashes",
+#: the three scheduling routes the server page already had, the same way
+OLDER_SCHEDULERS = [
+    ("/admin/schedule_rebuild_index", "rebuildIndex"),
+    ("/admin/schedule_recalc_minhashes", "recalculateMinHashes"),
+    ("/admin/schedule_recalc_pichashes", "recalculatePicHashes"),
 ]
+
+#: every scheduling route on the admin page, old and new
+ALL_SCHEDULERS = [path for path, _ in SCHEDULERS + OLDER_SCHEDULERS]
 
 REPORTS = {
     "repairMinHashes()": {
@@ -92,6 +96,44 @@ def test_the_button_for_it_is_on_the_server_page(client, as_role, path, method):
     page = client.get("/admin/server")
 
     assert path.encode() in page.data, f"nothing on the server page posts to {path}"
+
+
+@pytest.mark.parametrize("path, method", OLDER_SCHEDULERS)
+def test_the_older_routes_queue_the_methods_listed_for_them(client, as_role, fake_mcrit, path, method):
+    """The table the jobs-page test below reads, checked against the routes."""
+    as_role("admin")
+
+    client.post(path)
+
+    assert call_to(fake_mcrit, method), f"{path} did not queue {method}"
+
+
+@pytest.mark.parametrize("path, method", SCHEDULERS + OLDER_SCHEDULERS)
+def test_the_jobs_page_files_the_job_under_its_own_type(client, as_role, path, method):
+    """A job the server page starts has to be findable by its type afterwards: the jobs
+    menu links the type, and `JOB_CATEGORIES` accepts it while the queue holds none of
+    it - the case the backend's statistics cannot vouch for. The two older maintenance
+    types always were; the three new ones could only be found in the unfiltered list,
+    and ?active=repairMinHashes answered that it was not a job type."""
+    from mcritweb.views.data import JOB_CATEGORIES
+
+    as_role("admin")
+
+    assert method in JOB_CATEGORIES, f"?active={method} is refused whenever the queue holds none"
+    page = client.get("/data/jobs").get_data(as_text=True)
+    assert f"/data/jobs?active={method}" in page, f"the jobs menu has no entry for {method}"
+
+
+@pytest.mark.parametrize("path, method", SCHEDULERS + OLDER_SCHEDULERS)
+def test_the_tab_that_holds_the_job_is_the_one_marked_open(client, as_role, path, method):
+    """?active=<type> marks the tab the type is filed under. The Minhashing tab named
+    only its first three entries, so the maintenance jobs filed under it - the two
+    older ones as well - opened the page with no tab marked at all."""
+    as_role("admin")
+
+    page = client.get(f"/data/jobs?active={method}").get_data(as_text=True)
+
+    assert re.search(r'class="nav-link dropdown-toggle active"[^>]*id="navbarDropdown-minhashing"', page)
 
 
 @pytest.mark.parametrize("path", ALL_SCHEDULERS)
