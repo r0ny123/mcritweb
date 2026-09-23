@@ -28,6 +28,7 @@ fix/192-bounded-collections|fix-192-bounded-collections.md|
 fix/193-jobs-for-sample-once|fix-193-jobs-for-sample-once.md|
 fix/194-result-view-passes|fix-194-result-view-passes.md|
 fix/197-link-hunt-links|fix-197-link-hunt-links.md|
+fix/198-cross-tooltips-job-grouping|fix-198-cross-tooltips-job-grouping.md||fix/182-cross-compare-lazy-tabs
 fix/199-users-page-single-pass|fix-199-users-page-single-pass.md|
 fix/200-api-passthrough-bytes|fix-200-api-passthrough-bytes.md|
 fix/202-result-cache-size|fix-202-result-cache-size.md|
