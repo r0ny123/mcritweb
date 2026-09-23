@@ -31,6 +31,7 @@ fix/197-link-hunt-links|fix-197-link-hunt-links.md|
 fix/199-users-page-single-pass|fix-199-users-page-single-pass.md|
 fix/200-api-passthrough-bytes|fix-200-api-passthrough-bytes.md|
 fix/202-result-cache-size|fix-202-result-cache-size.md|
+fix/204-cfg-loops|fix-204-cfg-loops.md|
 fix/206-admin-account-handlers|fix-206-admin-account-handlers.md|
 fix/207-check-then-fetch|fix-207-check-then-fetch.md|
 fix/linkhunt-empty-family-count|fix-linkhunt-empty-family-count.md|issue-new-linkhunt-family-count.md
