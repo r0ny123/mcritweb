@@ -1,12 +1,20 @@
 #!/bin/bash
 # One-time setup of the live stack on a fresh machine:
 #   - MongoDB 8.0 with the corpus from data/mcrit-db.archive.gz restored into it;
-#   - a Python venv with mcrit (1.9.0 by default), gunicorn and MCRITweb's requirements;
+#   - a Python venv with mcrit (1.12.0 by default), gunicorn and MCRITweb's requirements, as
+#     $LIVE/venv-<version> with $LIVE/venv linking to it;
 #   - a MCRITweb instance folder in the given checkout, pointing at the local mcrit.
 #
 # usage: setup-live-stack.sh <mcritweb checkout>
 # env:   LIVE           where the stack keeps its data, logs and venv (default ~/live-stack)
-#        MCRIT_VERSION  the mcrit release to install (default 1.9.0)
+#        MCRIT_VERSION  the mcrit release to install (default 1.12.0). It comes from PyPI, or from
+#                       its tag in danielplohmann/mcrit while PyPI doesn't have it yet
+#        PYTHON         the interpreter for the venv (default python3.12: mcrit declares
+#                       requires-python >=3.12 since 1.10.0)
+#
+# Every version gets a venv of its own, and $LIVE/venv links to the last one set up, which is what
+# start-live-stack.sh runs. Going back is `ln -sfn venv-<version> $LIVE/venv` and a restart; a
+# venv from before this layout, a directory at $LIVE/venv, is moved to venv-<its mcrit version>.
 #
 # MongoDB: a mongod and mongorestore already on PATH are used as they are. Otherwise the official
 # mongo:8.0 image runs through Docker, with host networking: fastdl.mongodb.org is refused by some
@@ -16,7 +24,8 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 MCRITWEB=$(cd "${1:?usage: setup-live-stack.sh <mcritweb checkout>}" && pwd)
 LIVE=${LIVE:-$HOME/live-stack}
-MCRIT_VERSION=${MCRIT_VERSION:-1.9.0}
+MCRIT_VERSION=${MCRIT_VERSION:-1.12.0}
+PYTHON=${PYTHON:-python3.12}
 mkdir -p "$LIVE/db" "$LIVE/logs" "$LIVE/pids"
 
 wait_for() {  # wait_for <what> <command...>
@@ -46,11 +55,25 @@ wait_for "MongoDB on 27017" python3 -c "import socket; socket.create_connection(
 restore
 echo "restored data/mcrit-db.archive.gz ($(cat "$LIVE/mongo-mode") MongoDB)"
 
-echo "== Python venv ($LIVE/venv)"
-[ -x "$LIVE/venv/bin/python" ] || python3 -m venv "$LIVE/venv"
-"$LIVE/venv/bin/pip" install -q --upgrade pip
-"$LIVE/venv/bin/pip" install -q "mcrit==$MCRIT_VERSION" gunicorn requests -r "$MCRITWEB/requirements.txt"
-"$LIVE/venv/bin/python" -c "from importlib.metadata import version; print('mcrit', version('mcrit'), '| flask', version('flask'), '| smda', version('smda'))"
+VENV=$LIVE/venv-$MCRIT_VERSION
+echo "== Python venv ($VENV)"
+if [ -d "$LIVE/venv" ] && [ ! -L "$LIVE/venv" ]; then
+    # the old layout. Its scripts name $LIVE/venv in their shebangs, and keep working while the
+    # link points back at it
+    old=$("$LIVE/venv/bin/python" -c "from importlib.metadata import version; print(version('mcrit'))" 2>/dev/null || echo unknown)
+    [ -e "$LIVE/venv-$old" ] && { echo "$LIVE/venv is a directory and $LIVE/venv-$old exists; move one of them" >&2; exit 1; }
+    mv "$LIVE/venv" "$LIVE/venv-$old"
+    echo "moved the existing venv (mcrit $old) to $LIVE/venv-$old"
+fi
+command -v "$PYTHON" >/dev/null || { echo "$PYTHON not found; set PYTHON to an interpreter mcrit $MCRIT_VERSION supports" >&2; exit 1; }
+[ -x "$VENV/bin/python" ] || "$PYTHON" -m venv "$VENV"
+"$VENV/bin/pip" install -q --upgrade pip
+if ! "$VENV/bin/pip" install -q "mcrit==$MCRIT_VERSION" gunicorn requests -r "$MCRITWEB/requirements.txt" 2>/dev/null; then
+    echo "mcrit $MCRIT_VERSION is not on PyPI (yet); installing its tag from danielplohmann/mcrit"
+    "$VENV/bin/pip" install -q "mcrit @ git+https://github.com/danielplohmann/mcrit@v$MCRIT_VERSION" gunicorn requests -r "$MCRITWEB/requirements.txt"
+fi
+ln -sfn "venv-$MCRIT_VERSION" "$LIVE/venv"
+"$LIVE/venv/bin/python" -c "import sys; from importlib.metadata import version; print('python', sys.version.split()[0], '| mcrit', version('mcrit'), '| flask', version('flask'), '| smda', version('smda'))"
 
 echo "== The corpus"
 "$LIVE/venv/bin/python" "$HERE/tools/check_corpus.py"

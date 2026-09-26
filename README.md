@@ -36,7 +36,15 @@ testbed/start-live-stack.sh mcritweb
 - MongoDB on 127.0.0.1:27017, mcrit on http://127.0.0.1:8000, MCRITweb on http://127.0.0.1:5000.
 - Login `analyst1` / `Passw0rd-live!` (admin). A local test login only; everything binds to
   127.0.0.1.
-- Everything lives in `$LIVE`, by default `~/live-stack`: `db`, `logs`, `venv`, `pids`.
+- Everything lives in `$LIVE`, by default `~/live-stack`: `db`, `logs`, `pids`, and a venv per
+  mcrit version, `venv-<version>`, with `venv` linking to the one in use.
+- The setup installs mcrit 1.12.0 on Python 3.12 (mcrit requires 3.12 since 1.10.0); set
+  `MCRIT_VERSION` and `PYTHON` for another. A version PyPI doesn't have yet comes from its tag in
+  danielplohmann/mcrit. Switching back to an earlier venv is `ln -sfn venv-<version> $LIVE/venv`
+  and a restart.
+- The corpus was dumped from mcrit 1.9.0. A newer server builds its new indexes on its first start
+  (1.12.0 adds some on `samples`, `families`, `functions` and the band collections) and changes
+  no documents: after the upgrade, the counts and a full crawl matched 1.9.0's exactly.
 - MongoDB comes from a `mongod` and `mongorestore` on `PATH` if there are any. Otherwise it runs
   as the official `mongo:8.0` image through Docker, with host networking, and the setup starts
   `dockerd` when it isn't running. Some environments' network policy refuses
