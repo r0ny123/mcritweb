@@ -1,13 +1,13 @@
 #!/bin/bash
 # One-time setup of the live stack on a fresh machine:
 #   - MongoDB 8.0 with the corpus from data/mcrit-db.archive.gz restored into it;
-#   - a Python venv with mcrit (1.12.0 by default), gunicorn and MCRITweb's requirements, as
+#   - a Python venv with mcrit (1.13.0 by default), gunicorn and MCRITweb's requirements, as
 #     $LIVE/venv-<version> with $LIVE/venv linking to it;
 #   - a MCRITweb instance folder in the given checkout, pointing at the local mcrit.
 #
 # usage: setup-live-stack.sh <mcritweb checkout>
 # env:   LIVE           where the stack keeps its data, logs and venv (default ~/live-stack)
-#        MCRIT_VERSION  the mcrit release to install (default 1.12.0). It comes from PyPI, or from
+#        MCRIT_VERSION  the mcrit release to install (default 1.13.0). It comes from PyPI, or from
 #                       its tag in danielplohmann/mcrit while PyPI doesn't have it yet
 #        PYTHON         the interpreter for the venv (default python3.12: mcrit declares
 #                       requires-python >=3.12 since 1.10.0)
@@ -24,7 +24,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 MCRITWEB=$(cd "${1:?usage: setup-live-stack.sh <mcritweb checkout>}" && pwd)
 LIVE=${LIVE:-$HOME/live-stack}
-MCRIT_VERSION=${MCRIT_VERSION:-1.12.0}
+MCRIT_VERSION=${MCRIT_VERSION:-1.13.0}
 PYTHON=${PYTHON:-python3.12}
 mkdir -p "$LIVE/db" "$LIVE/logs" "$LIVE/pids"
 

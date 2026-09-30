@@ -38,13 +38,19 @@ testbed/start-live-stack.sh mcritweb
   127.0.0.1.
 - Everything lives in `$LIVE`, by default `~/live-stack`: `db`, `logs`, `pids`, and a venv per
   mcrit version, `venv-<version>`, with `venv` linking to the one in use.
-- The setup installs mcrit 1.12.0 on Python 3.12 (mcrit requires 3.12 since 1.10.0); set
+- The setup installs mcrit 1.13.0 on Python 3.12 (mcrit requires 3.12 since 1.10.0); set
   `MCRIT_VERSION` and `PYTHON` for another. A version PyPI doesn't have yet comes from its tag in
   danielplohmann/mcrit. Switching back to an earlier venv is `ln -sfn venv-<version> $LIVE/venv`
   and a restart.
 - The corpus was dumped from mcrit 1.9.0. A newer server builds its new indexes on its first start
-  (1.12.0 adds some on `samples`, `families`, `functions` and the band collections) and changes
-  no documents: after the upgrade, the counts and a full crawl matched 1.9.0's exactly.
+  (1.12.0 adds some on `samples`, `families`, `functions` and the band collections, 1.13.0 two
+  more on `samples`) and changes no documents: after each upgrade, the counts and a full crawl
+  matched the version before exactly.
+- 1.13.0's release notes follow the upgrade with three repair jobs, in this order:
+  `recalculatePicHashes`, `rebuildPicBlockHashIndex`, `repairMinHashes`. The setup doesn't run
+  them, and on this corpus they change no hash: the four samples from smda 1.5.12 are recomputed
+  to the same PicHashes and only gain `picblockhash_version`, and the index is rebuilt with the
+  same 61,046 entries. They add three jobs to the queue.
 - MongoDB comes from a `mongod` and `mongorestore` on `PATH` if there are any. Otherwise it runs
   as the official `mongo:8.0` image through Docker, with host networking, and the setup starts
   `dockerd` when it isn't running. Some environments' network policy refuses
@@ -70,7 +76,11 @@ The other tools:
   `$LIVE/crawl/crawl_<tag>.json`. On familiary/mcritweb master (e4bfa55), 1,695 of the 1,849
   pages answer 200 and five answer 500. Two are GET `/admin/change_password` and
   `/admin/change_username`, rendering a documented 400 in debug mode. Three are the result pages
-  of the 1.9.0 repair jobs, where `data.result()` falls off its end.
+  of the 1.9.0 repair jobs, where `data.result()` falls off its end. Four of the pages submit a job
+  when opened (`/analyze/compare/8`, `/analyze/compare/8/12`, `/analyze/blocks/sample/16`,
+  `/analyze/blocks/family/2`). The backend answers them from its job cache, except on the first
+  crawl after moving to 1.13.0, whose cache keys on a new results version: that crawl adds four
+  jobs, with the same results as before.
 - `tools/check_corpus.py`: counts and family counters, read-only; exits nonzero if they changed.
 - `tools/selector_live.py`: the `/jobs` selectors of danielplohmann/mcrit#214, against a server
   running that branch.
