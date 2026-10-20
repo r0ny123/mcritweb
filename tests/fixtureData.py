@@ -24,6 +24,7 @@ from mcrit.minhash.MinHash import MinHash
 from mcrit.queue.LocalQueue import Job
 from mcrit.storage.FamilyEntry import FamilyEntry
 from mcrit.storage.FunctionEntry import FunctionEntry
+from mcrit.storage.FunctionLabelEntry import FunctionLabelEntry
 from mcrit.storage.SampleEntry import SampleEntry
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
@@ -164,6 +165,16 @@ class RawResponse:
     def json(self):
         return {"status": "successful", "data": self._payload}
 
+def _descriptor_sample_id(document):
+    """The first positional argument as mcrit's descriptor regex reads it: the integer
+    that directly follows `["<method>", {"0": `, or None."""
+    descriptor = document.get("payload", {}).get("descriptor")
+    if not isinstance(descriptor, str):
+        return None
+    match = re.match(r'^\["[^"]*", \{"0": (-?\d+)[,}]', descriptor)
+    return int(match.group(1)) if match else None
+
+
 def _job_state(document):
     """mongoqueue._identifyJobState, transcribed - `state=` is filtered on it."""
     if document["started_at"] and document["locked_by"] and not (document["finished_at"] or document["terminated"]):
@@ -197,6 +208,8 @@ class CorpusMcritClient:
         self.raw = bool(kwargs.get("raw_responses"))
         self.calls = []
         self._samples = {int(k): SampleEntry.fromDict(v) for k, v in load("samples").items()}
+        # families carry their samples, as `getFamily` answers - see getFamilies()
+        # below for why the collection endpoint is served from a trimmed copy
         self._families = {int(k): FamilyEntry.fromDict(v) for k, v in load("families").items()}
         # two pools: reference-sample functions keep their control flow graph, the
         # by-id lookup pool does not. See tests/fixtures/regenerate.py.
@@ -209,6 +222,10 @@ class CorpusMcritClient:
         self._functions.update({int(k): FunctionEntry.fromDict(v) for k, v in load("functions_matched").items()})
         self._jobs = {job_id_of(report): (load(f"{report}.job"), load(f"{report}.result")) for report in REPORTS}
         self._queue = load("queue")
+        # the queue holds every job, the report pool only the five with a captured
+        # result - a real backend answers getJobData for both, and the cross compare
+        # page asks it for each of its five children
+        self._queue_by_id = {job["_id"]["$oid"]: job for job in self._queue}
 
     def raw_variant(self):
         """The same backend answering in raw mode - see FakeMcritClient.raw_variant."""
@@ -238,13 +255,32 @@ class CorpusMcritClient:
 
     # --- families ----------------------------------------------------------------
 
-    def getFamilies(self, *args, **kwargs):
-        self._record("getFamilies", *args, **kwargs)
-        return self._families
+    @staticmethod
+    def _without_samples(family_entry):
+        overview = family_entry.toDict()
+        overview.pop("samples", None)
+        return FamilyEntry.fromDict(overview)
 
-    def getFamily(self, family_id, *args, **kwargs):
-        self._record("getFamily", family_id, *args, **kwargs)
-        return self._families.get(int(family_id))
+    def getFamilies(self, *args, **kwargs):
+        """`/families` answers without the samples.
+
+        The collection reads `MinHashIndex.getFamilies()`, and storage does not keep
+        a family's sample list; `FamilyResource.on_get` is the only place that fills
+        `samples` in, for one family at a time. The fixture holds that richer shape,
+        so serving it from here too would let a view that only works when the samples
+        happen to be there pass against a backend where they are not.
+        """
+        self._record("getFamilies", *args, **kwargs)
+        return {family_id: self._without_samples(entry) for family_id, entry in self._families.items()}
+
+    def getFamily(self, family_id, with_samples=True, *args, **kwargs):
+        """`/families/{id}` fills in the family's samples, and the client asks for
+        them unless told not to - `explore.family` is the one caller that does."""
+        self._record("getFamily", family_id, *args, with_samples=with_samples, **kwargs)
+        entry = self._families.get(int(family_id))
+        if entry is None or with_samples:
+            return entry
+        return self._without_samples(entry)
 
     def getFamiliesByIds(self, family_ids, *args, **kwargs):
         """Without sample lists, as mcrit answers `POST /families/ids`; unknown ids absent."""
@@ -306,6 +342,18 @@ class CorpusMcritClient:
     def isFunctionId(self, function_id, *args, **kwargs):
         self._record("isFunctionId", function_id, *args, **kwargs)
         return int(function_id) in self._functions
+
+    def modifyFunction(self, function_id, function_name, *args, **kwargs):
+        # McritClient.modifyFunction (mcrit >= 1.10.0): the backend sets the name and records
+        # it as a label by the requesting user
+        self._record("modifyFunction", function_id, function_name, *args, **kwargs)
+        function_entry = self._functions.get(int(function_id))
+        if function_entry is None or int(function_id) < 0:
+            return None
+        function_entry.function_name = function_name
+        if function_name:
+            function_entry.function_labels.append(FunctionLabelEntry(function_name, self.kwargs.get("username") or "tester"))
+        return {"message": "Function modified."}
 
     # --- direct matching ---------------------------------------------------------
 
@@ -401,7 +449,10 @@ class CorpusMcritClient:
     def getJobData(self, job_id, *args, **kwargs):
         self._record("getJobData", job_id, *args, **kwargs)
         entry = self._jobs.get(job_id)
-        return Job(entry[0], None) if entry else None
+        if entry:
+            return Job(entry[0], None)
+        job = self._queue_by_id.get(job_id)
+        return Job(job, None) if job else None
 
     def getResultForJob(self, job_id, *args, **kwargs):
         self._record("getResultForJob", job_id, *args, **kwargs)
@@ -437,7 +488,11 @@ class CorpusMcritClient:
         if method is not None:
             documents = [entry for entry in documents if entry["payload"]["method"] == method]
         if sample_ids is not None:
-            documents = [entry for entry in documents if Job(entry, None).sample_id in set(sample_ids)]
+            # matched on payload.descriptor the way mcrit's _sample_ids_condition does, not
+            # by parsing each job - a job whose params cannot be parsed is still answered
+            # if its descriptor names the sample, and the views have to cope with it (#115)
+            wanted = {int(sample_id) for sample_id in sample_ids}
+            documents = [entry for entry in documents if _descriptor_sample_id(entry) in wanted]
         if job_ids is not None:
             documents = [entry for entry in documents if _job_id(entry) in {str(job_id) for job_id in job_ids}]
         if state is not None:
@@ -446,7 +501,13 @@ class CorpusMcritClient:
         documents = documents[start:start + limit] if isinstance(limit, int) and limit > 0 else documents[start:]
         jobs = [Job(entry, None) for entry in documents]
         if isinstance(filter, str):
-            jobs = [job for job in jobs if filter in job.parameters]
+            # the backend tests `filter` against every job's rendered parameters, so a job
+            # whose payload cannot be read fails the whole request - a 500, which the real
+            # client hands back as None. Reproduced for the same reason as the paging above.
+            try:
+                jobs = [job for job in jobs if filter in job.parameters]
+            except Exception:
+                return None
         return jobs
 
     def getQueueStatistics(self, *args, **kwargs):
