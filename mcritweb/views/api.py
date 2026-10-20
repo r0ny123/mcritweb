@@ -1,12 +1,23 @@
 import re
 
+import requests
 from flask import Blueprint, Response, abort, current_app, g, request
 
+from mcritweb import backend_errors
 from mcritweb.views.authentication import token_required
 from mcritweb.views.client import get_client
 from mcritweb.views.utility import get_username, mcrit_server_required, read_smda_report
 
 bp = Blueprint('api', __name__, url_prefix='/api')
+
+
+@bp.errorhandler(requests.RequestException)
+def backend_unreachable(error):
+    """A backend call that never completed, answered as a gateway: 502, or 504 for a
+    timeout. Body-less, as handle_raw_response is for a failure without a JSON body: a caller
+    of the API cannot read the page the app-wide handler renders (#43)."""
+    current_app.logger.warning("MCRIT backend call failed on the API: %r", error)
+    return Response(status=backend_errors.status_for(error))
 
 # Paths that add to the corpus rather than read from it or queue a job against it.
 # The web UI puts the same operation behind contributor_required (data.submit), and
@@ -14,6 +25,7 @@ bp = Blueprint('api', __name__, url_prefix='/api')
 # read or a job submission, which the UI grants to visitors.
 CONTRIBUTOR_ONLY = [
     (re.compile("samples$"), "POST"),   # addReport
+    (re.compile(r"functions/\d+$"), "PUT"),   # modifyFunction (explore.modifyFunction is contributor_required)
 ]
 
 
@@ -78,11 +90,15 @@ def handle_raw_response(response):
     return Response(status=response.status_code)
 
 
-@bp.route('/<path:api_path>', methods=['GET','POST'])
+@bp.route('/<path:api_path>', methods=['GET','POST','PUT'])
 @token_required
 @mcrit_server_required
 def api_router(api_path):
     api_path = api_path.rstrip("/")
+    # PUT is routed here for modifyFunction only; every other branch below reads or
+    # submits and ignores the method, so a PUT to it would be answered as a GET
+    if request.method == "PUT" and not re.match(r"functions/\d+$", api_path):
+        abort(405)
     if requires_contributor(api_path, request.method) and g.api_user.role not in ('contributor', 'admin'):
         abort(403)
     username = get_username(request)
@@ -126,9 +142,17 @@ def api_router(api_path):
     # getFamilies
     elif re_match := re.match(r"families$", api_path):
         return handle_raw_response(client.getFamilies())
-    # getFunctionById, isFunctionId
+    # getFunctionById, isFunctionId; modifyFunction by PUT (fkie-cad/mcritweb#72)
     elif re_match := re.match(r"functions/(?P<function_id>\d+)$", api_path):
         function_id = int(re_match.group("function_id"))
+        if request.method == "PUT":
+            if not callable(getattr(client, "modifyFunction", None)):
+                abort(501)
+            body = request.get_json(silent=True) or request.form
+            function_name = body.get("function_name") if hasattr(body, "get") else None
+            if not isinstance(function_name, str):
+                abort(400)
+            return handle_raw_response(client.modifyFunction(function_id, function_name))
         forward_with_xcfg = request.args.get("with_xcfg", "").lower() in ["1", "true"]
         return handle_raw_response(client.getFunctionById(function_id, with_xcfg=forward_with_xcfg))
     # getFunctions

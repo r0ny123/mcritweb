@@ -1,15 +1,16 @@
 import re
 
 from flask import Blueprint, current_app, flash, g, json, redirect, render_template, request, url_for
-from mcrit.storage.SampleEntry import SampleEntry
 from smda.common.SmdaReport import SmdaReport
 
+from mcritweb.backend_errors import require_result, with_server_errors
 from mcritweb.db import remember_query_filename
 from mcritweb.views.authentication import visitor_required
 from mcritweb.views.client import get_client, get_sample_entries, remember_samples
 from mcritweb.views.cursor_pagination import CursorPagination
 from mcritweb.views.pagination import Pagination
 from mcritweb.views.params import parse_band_range, parse_checkbox_query_param, parse_integer_list_query_param
+from mcritweb.views.search import search_page
 from mcritweb.views.utility import mcrit_server_required, query_upload_path
 
 bp = Blueprint('analyze', __name__, url_prefix='/analyze')
@@ -24,23 +25,11 @@ MAX_SELECTED_SAMPLES = 250
 
 
 def get_unique_samples_from_search_result(search_result):
-    samples = []
-    sample_ids = set()
-    for sample_dict in search_result['search_results'].values():
-        sample_entry = SampleEntry.fromDict(sample_dict)
-        if sample_entry.sample_id not in sample_ids:
-            samples.append(sample_entry)
-            sample_ids.add(sample_entry.sample_id)
-    id_match = search_result['id_match']
-    if id_match is not None:
-        # deserialize before reading the id, as the loop above does and as
-        # explore.search does with the same value. `id_match` is a wire dict, and its
-        # keys equalling the entry's attribute names is a coincidence this repository
-        # does not control. See issue #64.
-        id_match_entry = SampleEntry.fromDict(id_match)
-        if id_match_entry.sample_id not in sample_ids:
-            samples.append(id_match_entry)
-    return samples
+    """the page's samples, then the id / sha256 direct matches not already among them"""
+    unique = {sample_entry.sample_id: sample_entry for sample_entry in search_result.entries}
+    for direct_match in search_result.direct_matches:
+        unique.setdefault(direct_match.sample_id, direct_match)
+    return list(unique.values())
 
 
 @bp.route('/blocks/family/<int:family_id>')
@@ -50,7 +39,7 @@ def blocks_family(family_id):
     client = get_client()
     family_samples = client.getSamplesByFamilyId(family_id)
     if family_samples:
-        job_id = client.requestUniqueBlocksForFamily(family_id)
+        job_id = require_result(with_server_errors(client).requestUniqueBlocksForFamily(family_id), "a job for the unique blocks of this family")
         return redirect(url_for('data.job_by_id', job_id=job_id, refresh=3))
     else:
         flash("Can't locate unique blocks for a family without samples", category="error")
@@ -62,7 +51,7 @@ def blocks_family(family_id):
 @mcrit_server_required
 def blocks_sample(sample_id):
     client = get_client()
-    job_id = client.requestUniqueBlocksForSamples([sample_id])
+    job_id = require_result(with_server_errors(client).requestUniqueBlocksForSamples([sample_id]), "a job for the unique blocks of this sample")
     return redirect(url_for('data.job_by_id', job_id=job_id, refresh=3))
 
 
@@ -92,7 +81,7 @@ def unique_blocks():
     query = request.args.get('query', "")
     samples = []
     pagination = CursorPagination(request, default_sort="sample_id")
-    results = client.search_samples(query, **pagination.getSearchParams(), limit=pagination.limit)
+    results = search_page(client, "samples", query, **pagination.getSearchParams(), limit=pagination.limit)
     pagination.read_cursor_from_result(results)
     if results is not None:
         samples = get_unique_samples_from_search_result(results)
@@ -256,7 +245,7 @@ def cross_compare():
     query = request.args.get('query', "")
     samples = []
     pagination = CursorPagination(request, default_sort="sample_id")
-    results = client.search_samples(query, **pagination.getSearchParams(), limit=pagination.limit)
+    results = search_page(client, "samples", query, **pagination.getSearchParams(), limit=pagination.limit)
     pagination.read_cursor_from_result(results)
     if results is not None:
         samples = get_unique_samples_from_search_result(results)
@@ -331,7 +320,9 @@ def start_cross_compare():
         else:
             flash('Please select at least one sample to cross compare.', category='error')
         return redirect(url_for('analyze.cross_compare'))
-    job_id = client.requestMatchesCross(selected_list, force_recalculation=rematch, sample_group_only=only_selected, band_matches_required=minhash_band_range)
+    job_id = require_result(
+        with_server_errors(client).requestMatchesCross(selected_list, force_recalculation=rematch, sample_group_only=only_selected, band_matches_required=minhash_band_range),
+        "a job for this cross comparison")
     return redirect(url_for('data.job_by_id', job_id=job_id, refresh=3))
 
 
@@ -344,7 +335,7 @@ def compare():
     query = request.args.get('query', "")
     samples = []
     pagination = CursorPagination(request, default_sort="sample_id")
-    results = client.search_samples(query, **pagination.getSearchParams(), limit=pagination.limit)
+    results = search_page(client, "samples", query, **pagination.getSearchParams(), limit=pagination.limit)
     pagination.read_cursor_from_result(results)
     if results is None:
         flash(f"Ups, search for {query} in MCRIT's samples failed!", category="error")
@@ -371,9 +362,9 @@ def compare_versus():
     parameters = {}
     for a_or_b in "ab":
         query = request.args.get(f'query_{a_or_b}', "")
-        samples = {}
+        samples = []
         pagination = CursorPagination(request, default_sort="sample_id", query_param_prefix=a_or_b)
-        results = client.search_samples(query, **pagination.getSearchParams(), limit=pagination.limit)
+        results = search_page(client, "samples", query, **pagination.getSearchParams(), limit=pagination.limit)
         pagination.read_cursor_from_result(results)
         if results is None:
             flash(f"Ups, search for {query} in MCRIT's samples failed!", category="error")
@@ -399,7 +390,9 @@ def compare_all(sample_id_a):
     # queued a fresh job on every visit. See issue #97.
     rematch = parse_checkbox_query_param(request, 'rematch')
     minhash_band_range = parse_band_range(request)
-    job_id = client.requestMatchesForSample(sample_id_a, force_recalculation=rematch, band_matches_required=minhash_band_range)
+    job_id = require_result(
+        with_server_errors(client).requestMatchesForSample(sample_id_a, force_recalculation=rematch, band_matches_required=minhash_band_range),
+        "a job for this comparison")
     return redirect(url_for('data.job_by_id', job_id=job_id, refresh=3))
 
 @bp.route('/compare_function/<int:function_id>')
@@ -421,7 +414,8 @@ def compare_function(function_id):
     negatively and have no sample in the database to match against.
     """
     client = get_client()
-    function_entry = client.getFunctionById(function_id)
+    # a failure on the backend's side raises here rather than reading as "no function"
+    function_entry = with_server_errors(client).getFunctionById(function_id)
     if function_entry is None:
         flash(f"There is no function with id {function_id}.", category='error')
         return redirect(url_for('explore.functions'))
@@ -436,13 +430,10 @@ def compare_function(function_id):
         # cannot build the rule without it and raises BuildError. That is a 500 with a
         # traceback where a sentence was owed.
         #
-        # Every sibling route in this module needs the same guard and gets it from
-        # issue #43's `require_result`. This route is the one that fix could not cover,
-        # because it does not exist on that branch - it arrives with this one.
-        #
-        # The fallback is the listing rather than this function's own page, so a backend
-        # that is genuinely down does not answer with a second, wrong message ("There is
-        # no function with id N") stacked on top of this one.
+        # The sibling routes in this module answer that with `require_result`'s page.
+        # This one keeps its message, and falls back to the listing rather than this
+        # function's own page, so a backend that is genuinely down does not answer with
+        # a second, wrong message ("There is no function with id N") on top of it.
         flash('Ups, MCRIT would not start the job.', category='error')
         return redirect(url_for('explore.functions'))
     # forward=1 so a job that is already finished goes straight to the report; while it
@@ -456,7 +447,9 @@ def compare_vs(sample_id_a, sample_id_b):
     client = get_client()
     rematch = parse_checkbox_query_param(request, 'rematch')
     minhash_band_range = parse_band_range(request)
-    job_id = client.requestMatchesForSampleVs(sample_id_a, sample_id_b, force_recalculation=rematch, band_matches_required=minhash_band_range)
+    job_id = require_result(
+        with_server_errors(client).requestMatchesForSampleVs(sample_id_a, sample_id_b, force_recalculation=rematch, band_matches_required=minhash_band_range),
+        "a job for this comparison")
     return redirect(url_for('data.job_by_id', job_id=job_id, refresh=3))
 
 #: What a query upload may declare beyond the role's cap on the file itself: the other
