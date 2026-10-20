@@ -38,8 +38,9 @@ testbed/start-live-stack.sh mcritweb
   127.0.0.1.
 - Everything lives in `$LIVE`, by default `~/live-stack`: `db`, `logs`, `pids`, and a venv per
   mcrit version, `venv-<version>`, with `venv` linking to the one in use.
-- The setup installs mcrit 1.13.0 on Python 3.12 (mcrit requires 3.12 since 1.10.0); set
-  `MCRIT_VERSION` and `PYTHON` for another. A version PyPI doesn't have yet comes from its tag in
+- The setup installs mcrit 1.16.0 with smda 4.11.0 on Python 3.12 (mcrit requires 3.12 since
+  1.10.0); set `MCRIT_VERSION`, `SMDA_VERSION` and `PYTHON` for others. mcrit asks only for
+  `smda>=4.2.13`, so the smda pin is what keeps two setups alike. A version PyPI doesn't have yet comes from its tag in
   danielplohmann/mcrit. Switching back to an earlier venv is `ln -sfn venv-<version> $LIVE/venv`
   and a restart.
 - The corpus was dumped from mcrit 1.9.0. A newer server builds its new indexes on its first start
@@ -51,6 +52,16 @@ testbed/start-live-stack.sh mcritweb
   them, and on this corpus they change no hash: the four samples from smda 1.5.12 are recomputed
   to the same PicHashes and only gain `picblockhash_version`, and the index is rebuilt with the
   same 61,046 entries. They add three jobs to the queue.
+- 1.16.0 (with smda 4.11.0, from 1.13.0 and 4.9.0) also changes no document on its first start. It
+  adds the indexes of 1.15.0 and 1.16.0 (on `samples`, and on `pichash_counts`, `function_ranges`,
+  `smda_extras`, `query_smda_extras` and the `sample_binaries` bucket, all empty here), and a full
+  crawl gave the same status for all 1,849 pages, with no new job. smda 4.11.0 escapes every
+  architecture as 4.9.0 did (the escaper fingerprints in `/status` are unchanged), so no MinHash
+  or PicHash goes stale. `/status` counts the four smda 1.5.12 samples as having stale PicHashes,
+  a counter new in 1.15.0: one `recalculatePicHashes` recomputes their 23 PicHashes and 477
+  PicBlockHashes to the same values, only stamps `pichash_smda_version` on them, and adds one
+  job. As no PicHash changed, `pichash_counts` needs no rebuild; it stays empty, which only
+  `MINHASH_PICHASH_MAX_MATCHES` (off by default) would read.
 - MongoDB comes from a `mongod` and `mongorestore` on `PATH` if there are any. Otherwise it runs
   as the official `mongo:8.0` image through Docker, with host networking, and the setup starts
   `dockerd` when it isn't running. Some environments' network policy refuses
@@ -73,10 +84,11 @@ and ports taken out. Set `BASE_PORT` and `BASE_PROXY` for another base.
 The other tools:
 - `tools/crawl.py urls`, then `tools/crawl.py <base url> <tag>`: every listing, detail, result,
   download, link-hunt, CFG and admin page for this corpus, as `analyst1`; status codes go to
-  `$LIVE/crawl/crawl_<tag>.json`. On familiary/mcritweb master (e4bfa55), 1,695 of the 1,849
-  pages answer 200 and five answer 500. Two are GET `/admin/change_password` and
-  `/admin/change_username`, rendering a documented 400 in debug mode. Three are the result pages
-  of the 1.9.0 repair jobs, where `data.result()` falls off its end. Four of the pages submit a job
+  `$LIVE/crawl/crawl_<tag>.json`. On familiary/mcritweb master 6564602, 1,697 of the 1,849 pages
+  answer 200, 150 redirect and none answers 500; GET `/admin/change_password` and
+  `/admin/change_username` answer 405. On master e4bfa55, 1,695 answered 200 and five answered 500:
+  those two, then rendering a documented 400 in debug mode, and the result pages of the 1.9.0
+  repair jobs, where `data.result()` fell off its end. Four of the pages submit a job
   when opened (`/analyze/compare/8`, `/analyze/compare/8/12`, `/analyze/blocks/sample/16`,
   `/analyze/blocks/family/2`). The backend answers them from its job cache, except on the first
   crawl after moving to 1.13.0, whose cache keys on a new results version: that crawl adds four

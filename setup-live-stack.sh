@@ -1,14 +1,16 @@
 #!/bin/bash
 # One-time setup of the live stack on a fresh machine:
 #   - MongoDB 8.0 with the corpus from data/mcrit-db.archive.gz restored into it;
-#   - a Python venv with mcrit (1.13.0 by default), gunicorn and MCRITweb's requirements, as
+#   - a Python venv with mcrit (1.16.0 by default), smda (4.11.0), gunicorn and MCRITweb's requirements, as
 #     $LIVE/venv-<version> with $LIVE/venv linking to it;
 #   - a MCRITweb instance folder in the given checkout, pointing at the local mcrit.
 #
 # usage: setup-live-stack.sh <mcritweb checkout>
 # env:   LIVE           where the stack keeps its data, logs and venv (default ~/live-stack)
-#        MCRIT_VERSION  the mcrit release to install (default 1.13.0). It comes from PyPI, or from
+#        MCRIT_VERSION  the mcrit release to install (default 1.16.0). It comes from PyPI, or from
 #                       its tag in danielplohmann/mcrit while PyPI doesn't have it yet
+#        SMDA_VERSION   the smda release to install next to it (default 4.11.0); mcrit only asks
+#                       for smda>=4.2.13, so without a pin the venv gets whatever is newest that day
 #        PYTHON         the interpreter for the venv (default python3.12: mcrit declares
 #                       requires-python >=3.12 since 1.10.0)
 #
@@ -24,7 +26,8 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 MCRITWEB=$(cd "${1:?usage: setup-live-stack.sh <mcritweb checkout>}" && pwd)
 LIVE=${LIVE:-$HOME/live-stack}
-MCRIT_VERSION=${MCRIT_VERSION:-1.13.0}
+MCRIT_VERSION=${MCRIT_VERSION:-1.16.0}
+SMDA_VERSION=${SMDA_VERSION:-4.11.0}
 PYTHON=${PYTHON:-python3.12}
 mkdir -p "$LIVE/db" "$LIVE/logs" "$LIVE/pids"
 
@@ -68,9 +71,9 @@ fi
 command -v "$PYTHON" >/dev/null || { echo "$PYTHON not found; set PYTHON to an interpreter mcrit $MCRIT_VERSION supports" >&2; exit 1; }
 [ -x "$VENV/bin/python" ] || "$PYTHON" -m venv "$VENV"
 "$VENV/bin/pip" install -q --upgrade pip
-if ! "$VENV/bin/pip" install -q "mcrit==$MCRIT_VERSION" gunicorn requests -r "$MCRITWEB/requirements.txt" 2>/dev/null; then
+if ! "$VENV/bin/pip" install -q "mcrit==$MCRIT_VERSION" "smda==$SMDA_VERSION" gunicorn requests -r "$MCRITWEB/requirements.txt" 2>/dev/null; then
     echo "mcrit $MCRIT_VERSION is not on PyPI (yet); installing its tag from danielplohmann/mcrit"
-    "$VENV/bin/pip" install -q "mcrit @ git+https://github.com/danielplohmann/mcrit@v$MCRIT_VERSION" gunicorn requests -r "$MCRITWEB/requirements.txt"
+    "$VENV/bin/pip" install -q "mcrit @ git+https://github.com/danielplohmann/mcrit@v$MCRIT_VERSION" "smda==$SMDA_VERSION" gunicorn requests -r "$MCRITWEB/requirements.txt"
 fi
 ln -sfn "venv-$MCRIT_VERSION" "$LIVE/venv"
 "$LIVE/venv/bin/python" -c "import sys; from importlib.metadata import version; print('python', sys.version.split()[0], '| mcrit', version('mcrit'), '| flask', version('flask'), '| smda', version('smda'))"
