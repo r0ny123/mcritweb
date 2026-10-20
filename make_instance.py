@@ -54,5 +54,7 @@ with app.app_context():
         user.password = generate_password_hash(PASSWORD)
         user.role = "admin"
         user.apitoken = generate_apitoken()
-        user.saveToDb(withPassword=True)
+        # a new user is an INSERT, which writes the password on every master; the
+        # withPassword argument the old UPDATE path took is gone since #278
+        user.saveToDb()
     print(f"instance {instance}: server {ServerInfo.fromDb().url}, login {USERNAME} / {PASSWORD} (admin)")
