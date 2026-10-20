@@ -1,11 +1,16 @@
 import copy
 import hashlib
+import inspect
 import os
 import re
 import types
-from urllib.parse import quote
+import uuid
+from urllib.parse import quote, urlencode
 
 from flask import Blueprint, Response, current_app, flash, json, redirect, render_template, request, send_from_directory, session, url_for
+from mcrit.client.McritClient import McritClient
+from mcrit.config.MinHashConfig import MinHashConfig
+from mcrit.config.StorageConfig import StorageConfig
 from mcrit.libs.utility import decode_two_complement
 from mcrit.queue.LocalQueue import Job
 from mcrit.queue.QueueRemoteCalls import to_binary as canonicalise_queue_json
@@ -13,33 +18,84 @@ from mcrit.storage.FunctionEntry import FunctionEntry
 from mcrit.storage.MatchedFunctionEntry import MatchedFunctionEntry
 from mcrit.storage.MatchingResult import MatchingResult
 from mcrit.storage.SampleEntry import SampleEntry
-from mcrit.storage.UniqueBlocksResult import UniqueBlocksResult
+from mcrit.storage.UniqueBlocksResult import UniqueBlocksResult, wrap_string
 from smda.common.SmdaReport import SmdaReport
+from werkzeug.exceptions import NotFound
 
 from mcritweb.db import UserColumnSettings, UserFilters, get_query_filename, utc_now
 from mcritweb.views.analyze import query as analyze_query
 from mcritweb.views.authentication import contributor_required, visitor_required
 from mcritweb.views.client import get_client, get_family_entries, get_sample_entries
-from mcritweb.views.cross_compare import get_sample_to_job_id, score_to_color
+from mcritweb.views.cross_compare import CROSS_ORDERINGS, get_sample_to_job_id, lazy_cross_panes, order_sample_ids, score_to_color
 from mcritweb.views.functiondiff import get_function_diff
-from mcritweb.views.MatchReportRenderer import MatchReportRenderer
+from mcritweb.views.MatchReportRenderer import MatchReportRenderer, count_diagram_blocks, stacked_diagram_size
 from mcritweb.views.memo import app_memo
 from mcritweb.views.pagination import Pagination
 from mcritweb.views.params import (
     parse_checkbox_query_param,
+    parse_choice_query_param,
     parse_integer_list_query_param,
     parse_integer_query_param,
     parse_str_query_param,
     parseBaseAddrAndBitnessFromFilename,
+    slider_position_for_band_range,
 )
 from mcritweb.views.ScoreColorProvider import ScoreColorProvider
-from mcritweb.views.utility import get_session_user_id, mcrit_server_required, query_upload_path
+from mcritweb.views.utility import (
+    describable_jobs,
+    get_session_user_id,
+    job_parameters_or_blank,
+    job_parameters_or_none,
+    mcrit_server_required,
+    query_upload_path,
+)
 
 bp = Blueprint('data', __name__, url_prefix='/data')
 
 ################################################################
 # Helper functions
 ################################################################
+
+#: A job id as the backend hands it out: a mongo ObjectId (24 hex) or, on a local
+#: queue, a uuid4. A cached report is named after its job id, and the id arrives
+#: straight from the URL - so keep it to characters that cannot leave the cache
+#: directory (no os.sep, no ".."), and to a length a filename can hold. `\Z`, not `$`,
+#: which also matches before a trailing newline - the convention master's own
+#: JOB_ID_PATTERN states for the download route.
+JOB_ID_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}\Z")
+
+
+def is_cacheable_job_id(job_id):
+    """Whether `job_id` may be pasted into a cache filename.
+
+    Anything else is simply not cached and not looked up - the report is then
+    fetched from the backend, which is slower but always correct.
+    """
+    return isinstance(job_id, str) and JOB_ID_RE.match(job_id) is not None
+
+
+#: The diagram filenames create_match_diagram writes and the four result templates
+#: ask for: "<job_id>.png", or "<job_id>-famid_7.png" / "-samid_7" / "-funid_7".
+#: The job id is lazy so that the optional filter suffix is preferred over letting
+#: the id swallow it - a uuid4 job id contains dashes, so a greedy id would read
+#: "<uuid>-famid_7.png" as one long unfiltered id. Query reports number their
+#: functions negatively, hence the optional sign.
+#: The filter id is exactly how str(int) spells it, because the whole point of
+#: recognising the name is to render the file that was asked for: "0001" and "-0"
+#: would be rendered as "-famid_1" and "-funid_0", leaving the requested name still
+#: missing and the report re-parsed on every hit for as long as anyone asked. Off
+#: this grammar they are simply part of a job id nobody has, which is a backend miss
+#: and no report parse - the same as any other name the app never wrote.
+DIAGRAM_FILENAME_RE = re.compile(
+    r"^(?P<job_id>[0-9A-Za-z_-]{1,64}?)"
+    r"(?:-(?P<filter_kind>famid|samid|funid)_(?P<filter_id>0|-?[1-9][0-9]{0,17}))?"
+    r"\.png\Z"
+)
+
+
+#: The width of the strftime prefix cache_result puts in front of the job id.
+CACHE_TIMESTAMP_LENGTH = len("20260806-104636")
+
 
 def quote_backend_query_value(value):
     """Percent-encode one value for a query string `McritClient` builds by hand.
@@ -60,37 +116,214 @@ def quote_backend_query_value(value):
     return quote(str(value), safe="")
 
 
-def load_cached_result(app, job_id):
-    matching_result = {}
+def trim_result_cache(app):
+    """Evict the oldest cached reports until instance/cache/results/ is back within
+    RESULT_CACHE_MAX_BYTES and RESULT_CACHE_MAX_FILES.
+
+    Oldest by modification time, which is when cache_result wrote the file. The
+    timestamp in the filename says the same to the second; mtime breaks the ties that
+    leaves within a second, and orders a file cache_result did not name as well. That is
+    oldest-written rather than least-recently-used, because a cache hit does not touch
+    the file; evicting a report that is still popular costs one fetch from the backend,
+    after which it is the newest again. A single report larger than the byte bound is
+    evicted straight away - the page it was fetched for is rendered from memory anyway.
+    Called after every write, so the directory never holds more than one report past
+    its bounds. A deployment upgrading with more reports than that is trimmed in full
+    by its first write.
+
+    The directory is shared by concurrent requests and, under a multi-process server, by
+    other processes, so nothing is kept in memory between calls. Two trims racing for the
+    same victim is harmless: whichever comes second finds it gone. A request still
+    reading an evicted report keeps its open file on POSIX; only one that has listed the
+    directory but not yet opened the file misses it.
+    """
+    max_bytes = app.config.get("RESULT_CACHE_MAX_BYTES")
+    max_files = app.config.get("RESULT_CACHE_MAX_FILES")
+    if max_bytes is None and max_files is None:
+        return
     cache_path = os.sep.join([app.instance_path, "cache", "results"])
-    for filename in os.listdir(cache_path):
-        if job_id in filename and filename.endswith("json"):
-            with open(cache_path + os.sep + filename) as fin:
-                matching_result = json.load(fin)
-    return matching_result
+    cached = []
+    with os.scandir(cache_path) as entries:
+        for entry in entries:
+            try:
+                if entry.is_file():
+                    stat = entry.stat()
+                    cached.append((stat.st_mtime_ns, entry.name, stat.st_size))
+            except FileNotFoundError:
+                # evicted by a concurrent trim since the listing
+                continue
+    num_bytes = sum(size for _, _, size in cached)
+    num_files = len(cached)
+    for _, filename, size in sorted(cached):
+        if (max_bytes is None or num_bytes <= max_bytes) and (max_files is None or num_files <= max_files):
+            break
+        try:
+            os.remove(os.sep.join([cache_path, filename]))
+        except FileNotFoundError:
+            # a concurrent trim got there first, which is just as good
+            pass
+        except OSError:
+            # Windows refuses to remove a file that is open for reading; the next
+            # trim will have another go at it
+            app.logger.warning("Could not evict cached result %s", filename, exc_info=True)
+            continue
+        num_bytes -= size
+        num_files -= 1
+
+
+def load_cached_result(app, job_id):
+    """The most recently cached report for `job_id`, or {} if there is none.
+
+    Cache files are named "<utc timestamp>-<job id>.json", which the old code looked
+    for with `job_id in filename`. That answered for any id occurring anywhere in a
+    name - inside a longer id, or inside the timestamp, where "2026" matches every
+    file ever written - and, having no reason to stop, it json.load()ed every match
+    and kept the last. A job re-fetched a handful of times therefore cost a full
+    parse of its report per cached copy. Matching the id against exactly the part of
+    the name it occupies, and reading only the newest hit, fixes both. See issue #68.
+    """
+    if not is_cacheable_job_id(job_id):
+        return {}
+    cache_path = os.sep.join([app.instance_path, "cache", "results"])
+    suffix = f"-{job_id}.json"
+    # the length test is what keeps a *partial* id from matching on a dash boundary,
+    # which "endswith" alone would allow for the uuid4 ids a local queue hands out
+    expected_length = CACHE_TIMESTAMP_LENGTH + len(suffix)
+    cached = [name for name in os.listdir(cache_path) if len(name) == expected_length and name.endswith(suffix)]
+    # the timestamp prefix is fixed-width, so lexical order is chronological order
+    for name in sorted(cached, reverse=True):
+        path = os.sep.join([cache_path, name])
+        try:
+            with open(path) as fin:
+                return json.load(fin)
+        except (OSError, ValueError):
+            # a cache file we cannot read is not a reason to fail the page - fall
+            # through to the next one, and ultimately to fetching from the backend
+            app.logger.exception("Ignoring unreadable cached result %s", path)
+    return {}
 
 
 def find_cached_result_filename(app, job_id):
     """Name of the newest cached report for a job, or None if none is cached.
 
-    Matches the whole `<timestamp>-<job_id>.json` name that cache_result writes,
-    rather than a substring of it as load_cached_result does: this file is handed to
-    the caller as-is, so a short or crafted job_id must not be able to select a
-    report that merely contains it. The timestamp prefix sorts chronologically, so
-    the newest capture wins for a job that has been fetched more than once.
+    Matches the whole `<timestamp>-<job_id>.json` name that cache_result writes, as
+    load_cached_result does: this file is handed to the caller as-is, so a short or
+    crafted job_id must not be able to select a report that merely contains it. The
+    timestamp prefix sorts chronologically, so the newest capture wins for a job that
+    has been fetched more than once.
     """
     cache_path = os.sep.join([app.instance_path, "cache", "results"])
-    candidates = [filename for filename in os.listdir(cache_path) if filename.endswith(f"-{job_id}.json")]
+    suffix = f"-{job_id}.json"
+    # the length test too, as in load_cached_result: `endswith` alone lets the tail of
+    # a uuid4 job id - which has dashes of its own - select another job's report
+    expected_length = CACHE_TIMESTAMP_LENGTH + len(suffix)
+    candidates = [filename for filename in os.listdir(cache_path) if len(filename) == expected_length and filename.endswith(suffix)]
     return max(candidates) if candidates else None
 
 
 def cache_result(app, job_info, matching_result):
-    # TODO potentially implement a cache control that manages maximum allowed cache size?
-    if job_info.result is not None:
+    if job_info.result is not None and is_cacheable_job_id(job_info.job_id):
         cache_path = os.sep.join([app.instance_path, "cache", "results"])
         timestamped_filename = utc_now().strftime(f"%Y%m%d-%H%M%S-{job_info.job_id}.json")
-        with open(cache_path + os.sep + timestamped_filename, "w") as fout:
-            json.dump(matching_result, fout, indent=1)
+        # the filename is only second-resolution, so two requests for the same job can
+        # pick the same one - write elsewhere and rename, or a reader gets half a file
+        # compact: the file is only ever parsed, or streamed as the download, and
+        # indentation made it about 1.5 times the size on disk and on the wire
+        write_atomically(app, cache_path, timestamped_filename, lambda fout: json.dump(matching_result, fout, separators=(",", ":")), "w")
+        try:
+            trim_result_cache(app)
+        except Exception:
+            # bookkeeping: the report is written and the page is rendered from memory,
+            # so a trim that fails (an unreadable directory, say) must not fail it
+            app.logger.exception("Could not trim the result cache")
+
+
+#: The permissions a cached file is asked for with, before the process umask is
+#: applied to them. The same 0666 a plain `open(path, "w")` asks for, so a cached
+#: report or diagram keeps the mode the in-place writes left it with - 0644 under a
+#: default umask, and whatever the operator chose otherwise. `tempfile.mkstemp`
+#: cannot do this job: it hard-codes 0600 because it is built for files that are
+#: secrets, and neither of these is one - both are derived from a report the app
+#: serves. The umask cannot be read back either, only temporarily set to zero, which
+#: is process-wide and would hand a concurrent request a world-writable file.
+CACHE_FILE_MODE = 0o666
+
+
+def incomplete_cache_path(app):
+    """Where a cache file lives until it is complete.
+
+    A sibling of the two cache directories rather than a subdirectory of either,
+    because `diagram_file` serves every name under cache/diagrams: a temporary file
+    there is fetchable under its own name for the whole render window, and after a
+    SIGKILL forever - the partial file this is all here to prevent, in a new shape.
+    Being under the same instance/cache is also what keeps os.replace a rename
+    rather than a copy, so the two must stay on one filesystem.
+    """
+    return os.sep.join([app.instance_path, "cache", "incomplete"])
+
+
+def write_atomically(app, directory, filename, write, mode="wb"):
+    """Hand `write` a handle on a temporary file, then rename it into place.
+
+    Both caches are written while other requests are reading them, and a diagram in
+    particular takes long enough to render that a reader can easily catch a partial
+    file - which would then be served, and browser-cached, as a truncated image.
+    os.replace is atomic, so a reader sees either no file or a complete one.
+    """
+    temp_directory = incomplete_cache_path(app)
+    os.makedirs(temp_directory, exist_ok=True)
+    temp_path = os.sep.join([temp_directory, uuid.uuid4().hex + ".part"])
+    try:
+        # opened through `open` rather than tempfile, so that the permissions come out
+        # the way the in-place writes left them; the opener adds O_EXCL, so a name
+        # that somehow already exists is an error rather than a silent clobber
+        # newline="" for the text modes. The cached report is served back verbatim as
+        # the raw result, so it has to be byte-for-byte what json.dump wrote - and text
+        # mode rewrites the newline on the way out, which on Windows makes every one a
+        # CRLF and the served file stop matching the bytes it claims to be. Harmless on
+        # Linux, where text mode translates nothing, so CI cannot see this either way.
+        # `newline` is not a valid argument in binary mode, hence the conditional.
+        text_kwargs = {} if "b" in mode else {"newline": ""}
+        with open(temp_path, mode, opener=lambda path, flags: os.open(path, flags | os.O_EXCL, CACHE_FILE_MODE), **text_kwargs) as fout:
+            write(fout)
+        os.replace(temp_path, os.sep.join([directory, filename]))
+    finally:
+        # os.replace consumed it on the success path; this is the failure path
+        if os.path.isfile(temp_path):
+            os.remove(temp_path)
+
+
+def match_diagram_size(result_json):
+    """The pixel size the diagram of `result_json` renders to, or None if unknown.
+
+    The diagram is no longer drawn during the page request - the browser fetches it
+    from data.diagram_file afterwards - so the page has to reserve the box it will
+    land in, or the tables below it jump down when it arrives. That box is decided
+    entirely by how many instruction blocks the reference sample's matchable
+    functions add up to, and the report already carries the instruction count of
+    every one of them: mcrit's `_summarizeMatches` writes an entry per function of
+    the reference sample, matched or not. So the size is known without asking the
+    backend anything.
+
+    MatchReportRenderer reads those instruction counts from
+    `getFunctionsBySampleId(reference sample)` instead, which is the same list - it
+    is what the matcher summarised the report from (mcrit MatcherSample/MatcherVs).
+    The two can only disagree if the sample was deleted after the job ran, and then
+    the reservation is merely the wrong size: the browser takes the image's own
+    dimensions once it has loaded.
+
+    None for a query report, whose reference sample is not stored: the renderer then
+    has no function entries at all and draws an empty diagram, and pinning a size to
+    that is not worth the guess.
+    """
+    function_summaries = result_json.get("matches", {}).get("functions") if isinstance(result_json, dict) else None
+    if not function_summaries:
+        return None
+    # same test MatchingResult.fromDict decides is_query by - a query's functions are
+    # numbered negatively, and its reference sample is not one the backend stores
+    if any(function_summary["fid"] < 0 for function_summary in function_summaries):
+        return None
+    return stacked_diagram_size(count_diagram_blocks([function_summary["num_instructions"] for function_summary in function_summaries]))
 
 
 def create_match_diagram(app, job_id, matching_result, filtered_family_id=None, filtered_sample_id=None, filtered_function_id=None):
@@ -102,15 +335,64 @@ def create_match_diagram(app, job_id, matching_result, filtered_family_id=None, 
         filter_suffix = f"-samid_{filtered_sample_id}"
     elif filtered_function_id is not None:
         filter_suffix = f"-funid_{filtered_function_id}"
-    output_path = cache_path + os.sep + job_id + filter_suffix + ".png"
+    output_filename = job_id + filter_suffix + ".png"
+    output_path = cache_path + os.sep + output_filename
     if not os.path.isfile(output_path):
         renderer = MatchReportRenderer()
         renderer.processReport(matching_result)
         image = renderer.renderStackedDiagram(filtered_family_id=filtered_family_id, filtered_sample_id=filtered_sample_id, filtered_function_id=filtered_function_id)
-        image.save(output_path)
+        write_atomically(app, cache_path, output_filename, lambda fout: image.save(fout, format="PNG"))
         # `app`, not `current_app`: this function takes an app precisely so it does
         # not depend on a request context, and uses app.instance_path fifteen lines up.
         app.logger.debug("stored new MCRIT diagram: %s", output_path)
+
+
+def render_missing_match_diagram(app, filename_match):
+    """Render the diagram `filename_match` names, so that diagram_file can serve it.
+
+    Rendering used to happen inline in result_matches_for_sample_or_query, before
+    render_template, which put the whole PIL render plus a getFunctionsBySampleId
+    round trip in front of the HTML of the first view of every result page - by far
+    the largest part of it (issue #68). The image already had its own route and its
+    own <img> request, so the work belongs here: the page now returns immediately
+    and the browser fetches the diagram alongside it.
+
+    The report is re-read rather than passed along, which is sound because the
+    renderer only ever looks at the unfiltered `function_matches`, `library_matches`
+    and `reference_sample_entry` - the filtering the view applies before rendering
+    today does not reach any of them. tests/testMatchDiagrams.py pins that down.
+    """
+    job_id = filename_match.group("job_id")
+    filter_kind = filename_match.group("filter_kind")
+    filter_id = int(filename_match.group("filter_id")) if filter_kind else None
+    client = get_client()
+    result_json = load_cached_result(app, job_id)
+    if not result_json:
+        result_json = client.getResultForJob(job_id)
+    if not isinstance(result_json, dict) or not result_json:
+        return
+    matching_result = MatchingResult.fromDict(result_json)
+    # only a family or sample this report matched, which is every filter the result
+    # page offers a link for - so a hand-written URL cannot fill the unbounded diagram
+    # cache with one render per family or sample in the corpus for each job. The
+    # report answers it without the isFamilyId/isSampleId round trips this replaced.
+    if filter_kind == "famid" and filter_id not in {sample_match.family_id for sample_match in matching_result.sample_matches}:
+        return
+    if filter_kind == "samid" and filter_id not in {sample_match.sample_id for sample_match in matching_result.sample_matches}:
+        return
+    # the same for a function id, which the report can answer by itself. A query
+    # report additionally has no stored functions to lay a diagram out over, so the
+    # function-filtered variant was never generated for one and still is not
+    if filter_kind == "funid" and (matching_result.is_query or filter_id not in matching_result.function_id_to_family_ids_matched):
+        return
+    create_match_diagram(
+        app,
+        job_id,
+        matching_result,
+        filtered_family_id=filter_id if filter_kind == "famid" else None,
+        filtered_sample_id=filter_id if filter_kind == "samid" else None,
+        filtered_function_id=filter_id if filter_kind == "funid" else None,
+    )
 
 # https://stackoverflow.com/a/39842765
 # https://stackoverflow.com/a/26972238
@@ -119,6 +401,19 @@ def create_match_diagram(app, job_id, matching_result, filtered_family_id=None, 
 @visitor_required
 def diagram_file(filename):
     cache_path = os.sep.join([current_app.instance_path, "cache", "diagrams"])
+    filename_match = DIAGRAM_FILENAME_RE.match(filename)
+    # only a name this route itself could have produced is worth rendering; anything
+    # else - including a diagram cached under a name we no longer generate - is left
+    # to send_from_directory, which serves it if it is there and 404s if it is not
+    if filename_match is not None and not os.path.isfile(os.sep.join([cache_path, filename])):
+        try:
+            render_missing_match_diagram(current_app, filename_match)
+        except Exception:
+            # a diagram is decoration on a page that has already been served, and
+            # every reason it can fail (a job id naming a report of some other kind,
+            # a backend that went away, a report referring to a deleted sample) ends
+            # in a broken image rather than the 500 on the whole page it used to be
+            current_app.logger.exception("Could not render match diagram %s", filename)
     return send_from_directory(cache_path, filename)
 
 
@@ -418,15 +713,21 @@ def download_result(job_id):
         # the backend answered, so this costs no parse and re-encode of a report that
         # can run to tens of megabytes, and the download cannot disagree with the
         # page that was rendered from the same file. Nothing goes stale by preferring
-        # it - a finished job's result never changes, which is also why the cache is
-        # never invalidated.
+        # it - a finished job's result never changes, which is why nothing is ever
+        # evicted for being stale, only for size (see trim_result_cache).
         cache_path = os.sep.join([current_app.instance_path, "cache", "results"])
-        return send_from_directory(
-            cache_path,
-            cached_filename,
-            mimetype='application/json',
-            as_attachment=True,
-            download_name=f"mcrit_result_{job_id}.json")
+        try:
+            return send_from_directory(
+                cache_path,
+                cached_filename,
+                mimetype='application/json',
+                as_attachment=True,
+                download_name=f"mcrit_result_{job_id}.json")
+        except (NotFound, FileNotFoundError):
+            # evicted by trim_result_cache since it was looked up: NotFound if that
+            # happened before send_from_directory checked for the file, and the bare
+            # error if it happened between that check and the open. Fetch it again.
+            pass
     result_json = client.getResultForJob(job_id)
     if not result_json:
         # unfinished, failed, or a job type that produces nothing - the report page
@@ -436,10 +737,10 @@ def download_result(job_id):
     cache_result(current_app, job_info, result_json)
     # the fetch above already holds the whole report as a dict, so serialising it
     # once more is the cheap half of a cache miss; it is the cached path that keeps
-    # every later download off the heap. indent=1 as cache_result writes it, so both
+    # every later download off the heap. Compact, as cache_result writes it, so both
     # paths answer with the same bytes.
     return Response(
-        json.dumps(result_json, indent=1),
+        json.dumps(result_json, separators=(",", ":")),
         mimetype='application/json',
         headers={"Content-disposition":
                 f"attachment; filename=mcrit_result_{job_id}.json"})
@@ -469,21 +770,24 @@ def result(job_id):
         # re-format result report for visualization and choose respective template
         if job_info is None:
             return render_template("result_invalid.html", job_id=job_id)
+        # the diagram's size, while the raw report is still in hand - MatchingResult
+        # drops the per-function instruction counts it is worked out from
+        diagram_size = match_diagram_size(result_json)
         if job_info.parameters.startswith("getMatchesForSampleVs"):
             matching_result = MatchingResult.fromDict(result_json)
-            return result_matches_for_sample_or_query(job_info, matching_result)
+            return result_matches_for_sample_or_query(job_info, matching_result, diagram_size)
         elif job_info.parameters.startswith("getMatchesForSample"):
             matching_result = MatchingResult.fromDict(result_json)
-            return result_matches_for_sample_or_query(job_info, matching_result)
+            return result_matches_for_sample_or_query(job_info, matching_result, diagram_size)
         elif job_info.parameters.startswith("getMatchesForSmdaReport"):
             matching_result = MatchingResult.fromDict(result_json)
-            return result_matches_for_sample_or_query(job_info, matching_result)
+            return result_matches_for_sample_or_query(job_info, matching_result, diagram_size)
         elif job_info.parameters.startswith("getMatchesForMappedBinary"):
             matching_result = MatchingResult.fromDict(result_json)
-            return result_matches_for_sample_or_query(job_info, matching_result)
+            return result_matches_for_sample_or_query(job_info, matching_result, diagram_size)
         elif job_info.parameters.startswith("getMatchesForUnmappedBinary"):
             matching_result = MatchingResult.fromDict(result_json)
-            return result_matches_for_sample_or_query(job_info, matching_result)
+            return result_matches_for_sample_or_query(job_info, matching_result, diagram_size)
         elif job_info.parameters.startswith("combineMatchesToCross"):
             return result_matches_for_cross(job_info, result_json)
         # NOTE: 'updateMinHashes' is the start of 'updateMinHashesForSample'.
@@ -505,7 +809,16 @@ def result(job_id):
             return redirect(url_for('explore.families'))
         elif job_info.parameters.startswith("modifyFamily"):
             return redirect(url_for('explore.families'))
-        elif job_info.parameters in ["rebuildIndex()", "recalculatePicHashes()", "recalculateMinHashes()"]:
+        elif job_info.parameters in [
+            "rebuildIndex()",
+            "recalculatePicHashes()",
+            "recalculateMinHashes()",
+            # mcrit 1.9.0. Leave one of these three out and the result of a job MCRITweb
+            # itself scheduled never reaches the maintenance report.
+            "repairMinHashes()",
+            "recomputeFamilyStats()",
+            "rebuildPicBlockHashIndex()",
+        ]:
             return render_template("result_maintenance.html", result=result_json, job_info=job_info)
         else:
             # a job type this dispatch has never been taught. Falling off the end of the
@@ -627,7 +940,58 @@ def build_yara_rule(job_id, blocks_result, yara_params):
     block_cover = memo.get((job_id,) + tuple(yara_params[name] for name in cover_params), generate_cover)
     if not block_cover["block_hashes"]:
         return None, block_cover
-    return ubr.renderRule(block_cover, yara_params["condition_required"], wrap_at=40), block_cover
+    yara_rule = ubr.renderRule(block_cover, yara_params["condition_required"], wrap_at=40)
+    # each block's comment also says which function it came from - see
+    # name_functions_in_rule and issue #80
+    return name_functions_in_rule(yara_rule, ubr.unique_blocks, block_cover), block_cover
+
+
+def name_functions_in_rule(yara_rule, unique_blocks, block_cover):
+    """Name the function each picblock was taken from, in its comment in the rule.
+
+    Issue #80 asks for either function_id in the rule or a cover spread over a
+    variety of function_ids. mcrit builds the cover greedily by how many uncovered
+    samples a block adds, tie-broken on score, with no notion of which function a
+    block sits in - so nothing stops a rule from fingerprinting a single function,
+    and `condition: N of them` fails the moment that function is recompiled. Which
+    blocks to pick is mcrit's decision; what can be said here is where each of them
+    came from, so a reader can see the spread before shipping the rule.
+
+    The comment is rebuilt exactly as `renderRule` writes it and replaced by name.
+    A format change upstream therefore leaves the rule as it was rather than
+    mangling it - the test on this is what says the annotation still lands.
+    """
+    for pichash in block_cover["block_hashes"]:
+        entry = unique_blocks[pichash]
+        rendered = f"/* picblockhash: {pichash} - coverage: {len(entry['samples'])}/{block_cover['num_samples_covered']} samples"
+        yara_rule = yara_rule.replace(f"{rendered}.", f"{rendered}, function_id: {entry['function_id']}.")
+    return yara_rule
+
+
+def get_sample_versions(family_entry, sample_ids):
+    """Map sample_id -> version for the samples a unique blocks report covers.
+
+    The report carries no version of its own - `statistics["by_sample_id"]` is block
+    counts and nothing else - so it has to be looked up. A family job needs no extra
+    request for it: `getFamily` already answers with the family's samples and the
+    caller is holding that entry. Whatever the family did not supply is fetched in one
+    batch through `get_sample_entries` (#191), not one request per row of the table.
+
+    A lookup that comes back None leaves that row's version blank. It does not say
+    the sample is gone: `handle_response` in `McritClient` collapses a 404 and a 500
+    into the same None, so a blank cell means "no version to show" and nothing more.
+    Telling the two apart would take the raw response, which this seam does not
+    carry - and neither of them is worth failing a whole report over.
+    """
+    versions = {}
+    family_samples = getattr(family_entry, "samples", None) or {}
+    for sample_entry in family_samples.values():
+        versions[sample_entry.sample_id] = sample_entry.version
+    missing = [sample_id for sample_id in sample_ids if sample_id not in versions]
+    for sample_id, sample_entry in get_sample_entries(missing).items():
+        if sample_entry is not None:
+            versions[sample_id] = sample_entry.version
+    return versions
 
 def result_unique_blocks(job_info, blocks_result: dict):
     client = get_client()
@@ -653,6 +1017,7 @@ def result_unique_blocks(job_info, blocks_result: dict):
     # first view of a job could show another rule than every view after it, and the
     # memoized cover would depend on which of the two happened to compute it (issue #184)
     blocks_result["unique_blocks"] = dict(sorted(blocks_result["unique_blocks"].items()))
+    sample_versions = get_sample_versions(family_entry, [entry["sample_id"] for entry in blocks_statistics["by_sample_id"].values()])
     yara_params = parse_yara_rule_params(request)
     yara_rule, yara_cover = build_yara_rule(job_info.job_id, blocks_result, yara_params)
     # only what the caller actually changed, so the forms can carry the rule parameters
@@ -690,7 +1055,11 @@ def result_unique_blocks(job_info, blocks_result: dict):
                 for ins in result["instructions"]:
                     yarafied += f" * {ins[1]:{maxlen_ins}} | {ins[2]} {ins[3]}\n"
                 yarafied += " */\n"
-                yarafied += "{ " + re.sub(r"(.{80})", "\\1\n", result["escaped_sequence"], flags=re.DOTALL) + " }"
+                # Wrapped between bytes, the way the rule itself is. Breaking every
+                # 80th character instead cut hex bytes in half - "6a33" became "6a3"
+                # and "3" - so a block copied out of this column was not valid YARA
+                # once the sequence was long enough to wrap at all. See issue #80.
+                yarafied += "{ " + wrap_string(result["escaped_sequence"], max_column_length=80) + " }"
                 unique_blocks[pichash]["yarafied"] = yarafied
                 paginated_block = result
                 paginated_block["key"] = pichash
@@ -698,12 +1067,30 @@ def result_unique_blocks(job_info, blocks_result: dict):
                 paginated_blocks.append(paginated_block)
             index += 1
     # TODO pass the new result objects as single arguments and then render them in page tabs on the template
-    return render_template("result_unique_blocks.html", job_info=job_info, family_entry=family_entry, sample_id=sample_id, sample_ids=sample_ids, yara_rule=yara_rule, yara_cover=yara_cover, yara_params=yara_params, yara_query=yara_query, statistics=blocks_statistics, results=paginated_blocks, blkp=block_pagination, active_tab=active_tab)
+    return render_template("result_unique_blocks.html", job_info=job_info, family_entry=family_entry, sample_id=sample_id, sample_ids=sample_ids, yara_rule=yara_rule, yara_cover=yara_cover, yara_params=yara_params, yara_query=yara_query, statistics=blocks_statistics, sample_versions=sample_versions, results=paginated_blocks, blkp=block_pagination, active_tab=active_tab)
 
 #: Shown when a stored result names something the backend can no longer resolve. The
 #: cross-compare path has said this about samples for a long time; issue #96 is the
 #: same situation one level down, where the missing thing is a function.
 MISSING_ENTRIES_REASON = "MCRIT was not able to retrieve information for all functions referenced by this result. This might be a result of having deleted samples from the database since it was processed. Please consider starting a new job."
+
+
+def count_aggregated_function_matches(matching_result, unfiltered=False):
+    """How many rows the aggregated function table has.
+
+    The pagination needs the row count and nothing else, but asking
+    getAggregatedFunctionMatches() for it aggregated every function match in the
+    report - a dict and several set unions per match - and threw the result away,
+    only for the template to build it a second time for the page slice. It groups by
+    function_id and does not drop any group, so the row count is the number of
+    distinct function_ids. tests/testResultPages.py asserts the two agree.
+
+    `unfiltered` counts the whole report, as getAggregatedFunctionMatches(unfiltered=True)
+    does - the total a filtered page prints its "filtered" figure against, which
+    would otherwise aggregate the entire report a second time just to be counted.
+    """
+    function_matches = matching_result.function_matches if unfiltered else matching_result.filtered_function_matches
+    return len({function_match.function_id for function_match in function_matches})
 
 
 def assign_matched_offsets(client, function_matches):
@@ -750,6 +1137,39 @@ def aggregate_function_matches_page(matching_result: MatchingResult, pagination:
     return page_result.getAggregatedFunctionMatches()
 
 
+def recover_score_divisors(matching_result):
+    """The two totals the sample score columns are percentages of.
+
+    mcrit normalises the plain columns against the reference sample's *matchable*
+    bytes and the `nonlib_` ones against that total minus its library-matching
+    functions, and puts neither on the wire - so the hover text used to divide by
+    `binweight`, which is a third number, and state a percentage that was not the
+    quotient it had just shown (issue #7, docs/adr/0009-nonlib-frequency-score.md).
+
+    Both are exactly recoverable as `100 * bytes / percent` from any row that scored
+    above zero, because the divisor is a property of the reference sample rather than
+    of the match. Recovered from the unfiltered matches so that a filtered page shows
+    the same totals as the unfiltered one.
+
+    A report whose every row scores zero in one group leaves that group's divisor
+    unrecoverable. The fallbacks keep the fraction consistent with the percentage
+    anyway, since a zero numerator reads as 0% over any total.
+    """
+    divisors = {}
+    for group, prefix in (("matchable", ""), ("nonlibrary", "nonlib_")):
+        for sample_match in matching_result.sample_matches:
+            for kind in ("unweighted", "score_weighted", "frequency_weighted"):
+                percent = getattr(sample_match, f"matched_percent_{prefix}{kind}", 0)
+                if percent:
+                    divisors[group] = 100.0 * getattr(sample_match, f"matched_bytes_{prefix}{kind}") / percent
+                    break
+            if group in divisors:
+                break
+    divisors.setdefault("matchable", matching_result.reference_sample_entry.binweight)
+    divisors.setdefault("nonlibrary", divisors["matchable"])
+    return divisors
+
+
 def name_query_sample(job_info, matching_result: MatchingResult):
     """Fill in the filename of a queried binary, in place.
 
@@ -770,9 +1190,10 @@ def name_query_sample(job_info, matching_result: MatchingResult):
         sample_entry.filename = get_query_filename(job_info.job_id) or ""
 
 
-def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult):
+def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult, diagram_size=None):
     name_query_sample(job_info, matching_result)
     score_color_provider = ScoreColorProvider()
+    score_divisors = recover_score_divisors(matching_result)
     filtered_family_id = parse_integer_query_param(request, "famid")
     filtered_sample_id = parse_integer_query_param(request, "samid")
     filtered_function_id = parse_integer_query_param(request, "funid")
@@ -879,20 +1300,18 @@ def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult
     # filtered for family
     if filtered_family_id is not None and client.isFamilyId(filtered_family_id):
         matching_result.filterToFamilyId(filtered_family_id)
-        create_match_diagram(current_app, job_info.job_id, matching_result, filtered_family_id=filtered_family_id)
         sample_pagination = Pagination(request, matching_result.num_sample_matches, limit=10, query_param="samp", limit_param="sampl")
-        function_pagination = Pagination(request, len(matching_result.getAggregatedFunctionMatches()), limit=100, query_param="funp", limit_param="funl")
+        function_pagination = Pagination(request, count_aggregated_function_matches(matching_result), limit=100, query_param="funp", limit_param="funl")
         # result_compare_family.html and result_compare_all.html draw one row per matched
         # function of the reference sample, aggregated over the samples it matched, and print
         # "filtered" as the rest of the report beside it. That subtraction only means anything
         # if both sides count the same thing, so the total goes in aggregated too - taken off
         # the raw match count, it read as a four-figure "filtered" with no filter applied.
-        num_original_aggregated_functions = len(matching_result.getAggregatedFunctionMatches(unfiltered=True))
-        return render_template("result_compare_family.html", famid=filtered_family_id, job_info=job_info, samp=sample_pagination, funp=function_pagination, function_rows=aggregate_function_matches_page(matching_result, function_pagination), num_original_aggregated_functions=num_original_aggregated_functions, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_all)
+        num_original_aggregated_functions = count_aggregated_function_matches(matching_result, unfiltered=True)
+        return render_template("result_compare_family.html", diagram_size=diagram_size, divisors=score_divisors, famid=filtered_family_id, job_info=job_info, samp=sample_pagination, funp=function_pagination, function_rows=aggregate_function_matches_page(matching_result, function_pagination), num_original_aggregated_functions=num_original_aggregated_functions, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_all)
     # filtered for sample
     elif filtered_sample_id is not None and (filtered_sample_entry := client.getSampleById(filtered_sample_id)) is not None:
         matching_result.filterToSampleId(filtered_sample_id)
-        create_match_diagram(current_app, job_info.job_id, matching_result, filtered_sample_id=filtered_sample_id)
         matching_result.other_sample_entry = filtered_sample_entry
         # get offsets for matched functions
         if not assign_matched_offsets(client, matching_result.filtered_function_matches):
@@ -904,11 +1323,9 @@ def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult
         # this sample that one query function can match, and paginating over that count left the
         # tail of the table on no page at all.
         function_pagination = Pagination(request, matching_result.num_function_matches, limit=100, query_param="funp", limit_param="funl")
-        return render_template("result_compare_sample.html", samid=filtered_sample_id, job_info=job_info, samp=sample_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_sample) 
+        return render_template("result_compare_sample.html", diagram_size=diagram_size, divisors=score_divisors, samid=filtered_sample_id, job_info=job_info, samp=sample_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_sample) 
     # filter for function - treat family/sample part as if there was no filter
     elif filtered_function_id is not None and filtered_function_id in matching_result.function_id_to_family_ids_matched:
-        if not matching_result.is_query:
-            create_match_diagram(current_app, job_info.job_id, matching_result, filtered_function_id=filtered_function_id)
         matching_result.filterToFunctionId(filtered_function_id)
         matching_result.filtered_function_matches = sorted(matching_result.filtered_function_matches, key=lambda x: (x.matched_score, x.match_is_pichash, x.matched_family_id, x.matched_sample_id, x.matched_function_id), reverse=True)
         # pull all function_entries, as we want to have their offsets
@@ -917,7 +1334,7 @@ def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult
         # set up pagination
         family_pagination = Pagination(request, matching_result.num_family_matches, limit=10, query_param="famp", limit_param="fampl")
         function_pagination = Pagination(request, matching_result.num_function_matches, limit=100, query_param="funp", limit_param="funl")
-        return render_template("result_compare_function.html", funid=filtered_function_id, job_info=job_info, famp=family_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_function) 
+        return render_template("result_compare_function.html", diagram_size=diagram_size, funid=filtered_function_id, job_info=job_info, famp=family_pagination, funp=function_pagination, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_function) 
     # 1 vs 1 result
     elif job_info.parameters.startswith("getMatchesForSampleVs("):
         # get offsets for matched functions
@@ -925,20 +1342,43 @@ def result_matches_for_sample_or_query(job_info, matching_result: MatchingResult
             return render_template("result_corrupted.html", reason=MISSING_ENTRIES_REASON, job_info=job_info)
         # we need to slice function matches ourselves based on pagination
         function_pagination = Pagination(request, matching_result.num_function_matches, limit=100, query_param="funp", limit_param="funl")
-        return render_template("result_compare_vs.html", job_info=job_info, matching_result=matching_result, funp=function_pagination, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_sample)
+        return render_template("result_compare_vs.html", divisors=score_divisors, job_info=job_info, matching_result=matching_result, funp=function_pagination, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_sample)
     # unfiltered / default -> also 1 vs group
     else:
-        create_match_diagram(current_app, job_info.job_id, matching_result)
         family_pagination = Pagination(request, matching_result.num_family_matches, limit=10, query_param="famp", limit_param="fampl")
         library_pagination = Pagination(request, matching_result.num_library_matches, limit=10, query_param="libp", limit_param="libl")
-        function_pagination = Pagination(request, len(matching_result.getAggregatedFunctionMatches()), limit=100, query_param="funp", limit_param="funl")
+        function_pagination = Pagination(request, count_aggregated_function_matches(matching_result), limit=100, query_param="funp", limit_param="funl")
         # the total behind the "filtered" figure, aggregated to match the rows - see above
-        num_original_aggregated_functions = len(matching_result.getAggregatedFunctionMatches(unfiltered=True))
+        num_original_aggregated_functions = count_aggregated_function_matches(matching_result, unfiltered=True)
         # a query can be promoted to a sample (issue #9), but only while the file it
         # was run for is still on this host - the page has to say which it is. The file
         # is filed under the job's own id, so this costs no round trip either
         is_query_result = job_info.method in QUERY_UPLOAD_KINDS
-        return render_template("result_compare_all.html", job_info=job_info, famp=family_pagination, libp=library_pagination, funp=function_pagination, function_rows=aggregate_function_matches_page(matching_result, function_pagination), num_original_aggregated_functions=num_original_aggregated_functions, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_all, is_query_result=is_query_result, can_promote_query=is_query_result and query_upload_exists(current_app, job_info.job_id))
+        return render_template("result_compare_all.html", diagram_size=diagram_size, divisors=score_divisors, job_info=job_info, famp=family_pagination, libp=library_pagination, funp=function_pagination, function_rows=aggregate_function_matches_page(matching_result, function_pagination), num_original_aggregated_functions=num_original_aggregated_functions, matching_result=matching_result, scp=score_color_provider, ucs_famlib=user_column_setup_family_library, ucs_functions=user_column_setup_function_all, is_query_result=is_query_result, can_promote_query=is_query_result and query_upload_exists(current_app, job_info.job_id))
+
+
+def order_samples(samples, order):
+    """`samples` in the order `order` names them, or None if it names one that is not
+    there, or one more than once.
+
+    The ordering used to scan `samples` for every id in `order`, which made laying
+    out n samples cost O(n^2) - and the cross-compare page does it once per matching
+    method, so six times over. Both sides are compared as strings because `order` is
+    either the report's clustered sequence or the `custom` query parameter, neither
+    of which is guaranteed to arrive as an int. See issue #68.
+
+    A repeated id is refused rather than drawn twice: every row of the matrix is a row
+    and a column, so `?custom=` naming one sample a few thousand times would have the
+    page render millions of cells for anyone who can view the job.
+    """
+    samples_by_id = {str(sample.sample_id): sample for sample in samples}
+    ordered_samples = []
+    for order_sample_id in order:
+        sample = samples_by_id.pop(str(order_sample_id), None)
+        if sample is None:
+            return None
+        ordered_samples.append(sample)
+    return ordered_samples
 
 
 def result_matches_for_cross(job_info, result_json):
@@ -953,35 +1393,34 @@ def result_matches_for_cross(job_info, result_json):
             reason = "MCRIT was not able to retrieve information for all samples specified in the original job task. This might be a result of having deleted samples from the database since it was processed. Please consider starting a new job."
             return render_template("result_corrupted.html", reason=reason, job_info=job_info)
     custom_order = request.args.get('custom','')
+    # a drag-and-drop order is the more specific request, so it wins over a named one
+    ordering = parse_choice_query_param(request, 'order', CROSS_ORDERINGS, default="clustered")
     samples_by_method = {}
     sample_indices = {}
     for method, method_results in result_json.items():
         if custom_order:
             order = custom_order.split(',')
-        elif "clustered_sequence" in method_results:
-            order = method_results["clustered_sequence"]
         else:
-            order = None
+            order = order_sample_ids(samples, ordering, method_results.get("clustered_sequence"))
         ordered_samples = []
         if order:
-            for order_sample_id in order:
-                for sample in samples:
-                    if str(sample.sample_id) == str(order_sample_id):
-                        ordered_samples.append(sample)
-                        break
-                else:
-                    reason = "MCRIT was not able to produce the chosen custom ordering, as some sample_ids are not part of the cross compare originally specified."
-                    # job_info, not result_json: the template reads job_info.job_id for
-                    # its heading and for the delete link, and a result dict has neither.
-                    # The sibling corrupted branch above already passes the Job.
-                    return render_template("result_corrupted.html", reason=reason, job_info=job_info)
+            ordered_samples = order_samples(samples, order)
+            if ordered_samples is None:
+                reason = "MCRIT was not able to produce the chosen custom ordering, as some sample_ids are repeated or not part of the cross compare originally specified."
+                # job_info, not result_json: the template reads job_info.job_id for
+                # its heading and for the delete link, and a result dict has neither.
+                # The sibling corrupted branch above already passes the Job.
+                return render_template("result_corrupted.html", reason=reason, job_info=job_info)
         if ordered_samples != []:
             samples_by_method[method] = ordered_samples
         else:
             samples_by_method[method] = samples
         sample_indices[method] = [x for index, x in enumerate([sample.sample_id for sample in samples_by_method[method]]) if (index+1) % 5 == 0]
+    # only the tab shown on load is rendered, the others are filled from lazy_panes on first click
+    rendered_method = "unweighted" if "unweighted" in result_json else next(iter(result_json))
     return render_template('result_cross.html',
         is_corrupted=False,
+        active_order="custom" if custom_order else ordering,
         samples=samples_by_method,
         sample_indices = sample_indices,
         job_info=job_info,
@@ -989,6 +1428,8 @@ def result_matches_for_cross(job_info, result_json):
         matching_matches={method: result_json[method]["matching_matches"] for method in result_json.keys()},
         matching_percent={method: result_json[method]["matching_percent"] for method in result_json.keys()},
         score_to_color=score_to_color,
+        rendered_method=rendered_method,
+        lazy_panes=lazy_cross_panes(samples_by_method, result_json, rendered_method),
     )
 
 
@@ -1151,15 +1592,31 @@ def linkhunt_for_sample_or_query(job_info, matching_result: MatchingResult):
 # Listing Job information
 ################################################################
 
+#: Shown on job_corrupted.html. The job document is the backend's, so there is nothing
+#: to do about it here beyond naming it and offering to delete it.
+UNREADABLE_PAYLOAD_REASON = (
+    "The parameters this job was submitted with cannot be read back from its stored "
+    "payload, so there is nothing to show for it and no request to repeat."
+)
+
+
 #: The job types this front end knows the names of. Not the authority on what a job type
 #: is - the backend is, and `known_job_category` below defers to it. This is only the
 #: fallback for a type the backend is not currently reporting, because it has no jobs of
 #: that kind. `Job.method_types["all"]` is not even the whole local list: it omits
-#: recalculatePicHashes and recalculateMinHashes, which the admin maintenance routes
-#: create and which the menu does render.
+#: every job the admin maintenance routes create - recalculatePicHashes and
+#: recalculateMinHashes, and the three repairs mcrit 1.9.0 added - all of which the
+#: menu does render.
 JOB_CATEGORIES = tuple(Job(None, None).method_types["all"]) + (
     "recalculatePicHashes",
     "recalculateMinHashes",
+    # the per-sample jobs a cross compare runs, which Job.method_types never learned
+    # about either; data.jobs gives them a tab (#51), so its own link has to be accepted
+    # on an installation that has not run a cross compare yet
+    "getMatchesForSampleVsGroup",
+    "repairMinHashes",
+    "recomputeFamilyStats",
+    "rebuildPicBlockHashIndex",
 )
 
 
@@ -1178,17 +1635,30 @@ def known_job_category(category, statistics):
     return category in statistics or category in JOB_CATEGORIES
 
 
-@bp.route('/jobs',methods=('GET', 'POST'))
+@bp.route('/jobs')
 @visitor_required
 @mcrit_server_required
 def jobs():
-    query = None
-    if request.method == 'POST':
-        query = request.form['Search']
-    # used for job/method collections
+    # a search is a read, so it travels in the URL: the result is linkable, survives a
+    # refresh, and is carried by the pagination links, which build from request.args.
+    # It used to be a POST whose value was read and then never used - see issue #51.
+    query = request.args.get('Search', '').strip()
     client = get_client()
-    # sort order
+    # sort order. Job creation order is the only thing mcrit can sort a queue by, but it
+    # does sort the whole queue: mongoqueue's get_jobs orders by _id *before* it skips
+    # and limits, so `ascending` reorders the category rather than the page. Nothing in
+    # the chain from getQueueData down to the collection accepts a sort key, so Type,
+    # Started, Finished and Progress cannot be ordered across pages at all - see the note
+    # in jobs.html on why they are not offered as a client-side sort instead. Issue #51.
     ascending = request.args.get('ascending', 'false').lower() == "true"
+    # Carry what the page understands rather than all of request.args: the page number
+    # is deliberately dropped, because page 3 of one order is an unrelated slice of the
+    # other, and forwarding arbitrary keys would hand url_for its own reserved ones
+    # (`_method`, `_scheme`, ...) straight from the query string.
+    order_args = {key: value for key, value in request.args.items()
+                  if key in ("Search", "active", "state", "plimit", "l")}
+    order_args["ascending"] = "false" if ascending else "true"
+    order_toggle = url_for('data.jobs', **order_args)
     statistics = client.getQueueStatistics()
     if statistics is None:
         # `handle_response` answers None for every non-200 - a backend that is down, one
@@ -1199,6 +1669,15 @@ def jobs():
         flash("Ups, reading MCRIT's job queue failed - the queue could not be summarized.", category="error")
         statistics = {}
     job_template = Job(None, None)
+    # A cross compare runs as one getMatchesForSampleVsGroup job per sample plus a
+    # combineMatchesToCross job that merges them once they have all finished. mcrit's
+    # Job.method_types never learned about the group jobs, so without this they have no
+    # tab at all: browsing cannot reach them, the search cannot narrow them, and the
+    # "Matching" count leaves them out while the totals row above it counts them.
+    # This is issue #51's "what about cross jobs?" - the jobs a cross compare actually
+    # does the work in were the ones the page could not list.
+    for group in ("matching", "all"):
+        job_template.method_types[group].append("getMatchesForSampleVsGroup")
     # dynamically create the job page with nested menu based on groups from statistics and Job.method_types
     active_category = request.args.get('active', None)
     # checked before "totals" is added to statistics below, so ?active=totals is not
@@ -1222,6 +1701,16 @@ def jobs():
     state_category = request.args.get('state', None)
     if state_category:
         active_category = None
+    elif request.method != 'POST' and active_category is not None and request.args.get('active') != active_category:
+        # the category picked above is derived from the live queue statistics, so a URL
+        # that does not name it means something different on every request: a refresh
+        # or a step back in history then lands on a different tab (issue #36).
+        # redirect to the URL that does name it, so the browser can reproduce this page.
+        # the query is rebuilt rather than handed to url_for as keyword arguments,
+        # because the names url_for reserves for itself are user input here
+        canonical_args = request.args.to_dict()
+        canonical_args['active'] = active_category
+        return redirect(f"{url_for('data.jobs')}?{urlencode(canonical_args)}")
     totals = {"queued": 0, "in_progress": 0, "finished": 0, "failed": 0, "terminated": 0}
     for category, status_dict in statistics.items():
         for state, count in status_dict.items():
@@ -1234,9 +1723,10 @@ def jobs():
     pagination = None
     menu_configuration = {
         "menu": [
-            {"group": "matching", "title": f"Matching ({summarized_groups['matching']})", "active": active_category in ["getMatchesForSample", "getMatchesForSampleVs", "combineMatchesToCross"], "available": True, "submenu": [
+            {"group": "matching", "title": f"Matching ({summarized_groups['matching']})", "active": active_category in ["getMatchesForSample", "getMatchesForSampleVs", "getMatchesForSampleVsGroup", "combineMatchesToCross"], "available": True, "submenu": [
                 {"name": "getMatchesForSample", "title": f"getMatchesForSample ({sum(statistics['getMatchesForSample'].values()) if 'getMatchesForSample' in statistics else 0})", "active": "getMatchesForSample" == active_category, "available": "getMatchesForSample" in statistics},
                 {"name": "getMatchesForSampleVs", "title": f"getMatchesForSampleVs ({sum(statistics['getMatchesForSampleVs'].values()) if 'getMatchesForSampleVs' in statistics else 0})", "active": "getMatchesForSampleVs" == active_category, "available": "getMatchesForSampleVs" in statistics},
+                {"name": "getMatchesForSampleVsGroup", "title": f"getMatchesForSampleVsGroup ({sum(statistics['getMatchesForSampleVsGroup'].values()) if 'getMatchesForSampleVsGroup' in statistics else 0})", "active": "getMatchesForSampleVsGroup" == active_category, "available": "getMatchesForSampleVsGroup" in statistics},
                 {"name": "combineMatchesToCross", "title": f"combineMatchesToCross ({sum(statistics['combineMatchesToCross'].values()) if 'combineMatchesToCross' in statistics else 0})", "active": "combineMatchesToCross" == active_category, "available": "combineMatchesToCross" in statistics},
             ]}, 
             {"group": "query", "title": f"Query ({summarized_groups['query']})", "active": active_category in ["getMatchesForUnmappedBinary", "getMatchesForMappedBinary", "getMatchesForSmdaReport"], "available": True, "submenu": [
@@ -1245,12 +1735,17 @@ def jobs():
                 {"name": "getMatchesForSmdaReport", "title": f"getMatchesForSmdaReport ({sum(statistics['getMatchesForSmdaReport'].values()) if 'getMatchesForSmdaReport' in statistics else 0})", "active": "getMatchesForSmdaReport" == active_category, "available": "getMatchesForSmdaReport" in statistics},
             ]}, 
             {"group": "getUniqueBlocks", "title": f"Blocks ({summarized_groups['blocks']})", "active": "getUniqueBlocks" == active_category, "available": "getUniqueBlocks" in statistics},
-            {"group": "minhashing", "title": f"Minhashing ({summarized_groups['minhashing']})", "active": active_category in ["updateMinHashesForSample", "updateMinHashes", "rebuildIndex"], "available": True, "submenu": [
+            # the admin page's maintenance jobs are filed here too, pichash and family
+            # statistics included; the tab is active for every entry it opens onto
+            {"group": "minhashing", "title": f"Minhashing ({summarized_groups['minhashing']})", "active": active_category in ["updateMinHashesForSample", "updateMinHashes", "rebuildIndex", "recalculateMinHashes", "recalculatePicHashes", "repairMinHashes", "recomputeFamilyStats", "rebuildPicBlockHashIndex"], "available": True, "submenu": [
                 {"name": "updateMinHashesForSample", "title": f"updateMinHashesForSample ({sum(statistics['updateMinHashesForSample'].values()) if 'updateMinHashesForSample' in statistics else 0})", "active": "updateMinHashesForSample" == active_category, "available": "updateMinHashesForSample" in statistics},
                 {"name": "updateMinHashes", "title": f"updateMinHashes ({sum(statistics['updateMinHashes'].values()) if 'updateMinHashes' in statistics else 0})", "active": "updateMinHashes" == active_category, "available": "updateMinHashes" in statistics},
                 {"name": "rebuildIndex", "title": f"rebuildIndex ({sum(statistics['rebuildIndex'].values()) if 'rebuildIndex' in statistics else 0})", "active": "rebuildIndex" == active_category, "available": "rebuildIndex" in statistics},
                 {"name": "recalculateMinHashes", "title": f"recalculateMinHashes ({sum(statistics['recalculateMinHashes'].values()) if 'recalculateMinHashes' in statistics else 0})", "active": "recalculateMinHashes" == active_category, "available": "recalculateMinHashes" in statistics},
                 {"name": "recalculatePicHashes", "title": f"recalculatePicHashes ({sum(statistics['recalculatePicHashes'].values()) if 'recalculatePicHashes' in statistics else 0})", "active": "recalculatePicHashes" == active_category, "available": "recalculatePicHashes" in statistics},
+                {"name": "repairMinHashes", "title": f"repairMinHashes ({sum(statistics['repairMinHashes'].values()) if 'repairMinHashes' in statistics else 0})", "active": "repairMinHashes" == active_category, "available": "repairMinHashes" in statistics},
+                {"name": "recomputeFamilyStats", "title": f"recomputeFamilyStats ({sum(statistics['recomputeFamilyStats'].values()) if 'recomputeFamilyStats' in statistics else 0})", "active": "recomputeFamilyStats" == active_category, "available": "recomputeFamilyStats" in statistics},
+                {"name": "rebuildPicBlockHashIndex", "title": f"rebuildPicBlockHashIndex ({sum(statistics['rebuildPicBlockHashIndex'].values()) if 'rebuildPicBlockHashIndex' in statistics else 0})", "active": "rebuildPicBlockHashIndex" == active_category, "available": "rebuildPicBlockHashIndex" in statistics},
             ]}, 
             {"group": "collection", "title": f"Collection ({summarized_groups['collection']})", "active": active_category in ["addBinarySample", "deleteSample", "modifySample", "deleteFamily", "modifyFamily"], "available": True, "submenu": [
                 {"name": "addBinarySample", "title": f"addBinarySample ({sum(statistics['addBinarySample'].values()) if 'addBinarySample' in statistics else 0})", "active": "addBinarySample" == active_category, "available": "addBinarySample" in statistics},
@@ -1262,27 +1757,45 @@ def jobs():
         ],
         "statistics": statistics
     }
-    if active_category is None:
-        max_count = statistics["totals"][state_category] if state_category in statistics["totals"] else 0
-        pagination = Pagination(request, max_count, limit=25, query_param="p", limit_param="l")
+    limit_param = "l" if active_category is None else "plimit"
+    if query:
+        # The backend's own `filter` cannot be used together with paging: it slices the
+        # page first and filters what is left (mcrit QueueRemoteCalls.getQueueData), so
+        # `start=0, limit=25, filter=x` answers "the matches among jobs 0-24", not "the
+        # first 25 matches". Asking for page 2 of a search would then skip matches, and
+        # page 1 of a search whose only hit is job 60 renders empty. Fetch the category
+        # unpaged and filter here, where the count that drives pagination is the count
+        # of things actually shown. `getQueueData(method=...)` with no start/limit is
+        # already how delete_job_by_id enumerates a category.
+        queue = client.getQueueData(method=active_category, state=state_category, ascending=ascending)
+        if queue is None:
+            # a failed read is not an empty result: "0 jobs matching" would be a claim
+            # about the queue that nobody could check
+            flash("Ups, reading MCRIT's job queue failed - the search could not be run.", category="error")
+        matches = [job for job in queue or [] if query.casefold() in job_parameters_or_blank(job).casefold()]
+        pagination = Pagination(request, len(matches), limit=25, query_param="p", limit_param=limit_param)
+        jobs = matches[pagination.start_index:pagination.end_index]
     else:
-        # getQueueStatistics only reports categories that have at least one job, so a
-        # type that has never run - or whose jobs were all deleted through this page's
-        # own per-category delete - is absent, and indexing it was a 500
-        max_count = sum(statistics.get(active_category, {}).values()) if active_category else 0
-        pagination = Pagination(request, max_count, limit=25, query_param="p")
-    jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, ascending=ascending)
+        if active_category is None:
+            max_count = statistics["totals"][state_category] if state_category in statistics["totals"] else 0
+        else:
+            # getQueueStatistics only reports categories that have at least one job, so a
+            # type that has never run - or whose jobs were all deleted through this page's
+            # own per-category delete - is absent, and indexing it was a 500
+            max_count = sum(statistics.get(active_category, {}).values())
+        pagination = Pagination(request, max_count, limit=25, query_param="p", limit_param=limit_param)
+        jobs = client.getQueueData(start=pagination.start_index, limit=pagination.limit, method=active_category, state=state_category, ascending=ascending)
     samples_by_id = {}
     families_by_id = {}
-    if jobs:
-        for job in jobs:
-            if job.sample_ids is not None:
-                for sample_id in [sid for sid in job.sample_ids if sid not in samples_by_id]:
-                    samples_by_id[sample_id] = client.getSampleById(sample_id)
-        for job in jobs:
-            if job.family_id is not None:
-                families_by_id[job.family_id] = client.getFamily(job.family_id)
-    return render_template('jobs.html', families=families_by_id, samples=samples_by_id, active=active_category, state=state_category, jobs=jobs, menu_configuration=menu_configuration, p=pagination, query=query)
+    described_jobs = describable_jobs(jobs)
+    for job in described_jobs:
+        if job.sample_ids is not None:
+            for sample_id in [sid for sid in job.sample_ids if sid not in samples_by_id]:
+                samples_by_id[sample_id] = client.getSampleById(sample_id)
+    for job in described_jobs:
+        if job.family_id is not None and job.family_id not in families_by_id:
+            families_by_id[job.family_id] = client.getFamily(job.family_id)
+    return render_template('jobs.html', families=families_by_id, samples=samples_by_id, active=active_category, state=state_category, ascending=ascending, order_toggle=order_toggle, jobs=jobs, menu_configuration=menu_configuration, p=pagination, query=query, match_count=len(matches) if query and queue is not None else None)
 
 
 @bp.route('/jobs/<job_id>')
@@ -1306,9 +1819,24 @@ def job_by_id(job_id):
     if job_info is None:
         return render_template("job_invalid.html", job_id=job_id)
 
+    # Before anything reads the parameters, because everything below does and the
+    # overview template does too - its h1 and the job_column_table macro both print
+    # them. Rendering the overview anyway would fail two ways depending on the shape:
+    # a JSONDecodeError or TypeError out of Jinja for some, and for the ones that
+    # raise AttributeError a blank name, which Jinja's getattr swallows into a page
+    # indistinguishable from a job that simply has no parameters. This is also where
+    # a great many redirects land - every job submitter, and any route that refuses a
+    # job and sends the caller back to it - and a refusal that lands on a 500 has not
+    # refused anything, because the flash it set is never rendered.
+    parameters = job_parameters_or_none(job_info)
+    if parameters is None:
+        return render_template("job_corrupted.html", job_info=job_info, reason=UNREADABLE_PAYLOAD_REASON)
+
     if job_info.finished_at is not None:
         if auto_forward:
-            if 'addBinarySample' in job_info.parameters:
+            # not forwarded for an unreadable job: data.result dispatches on the same
+            # parameters, so it would only move the failure one page on
+            if 'addBinarySample' in parameters:
                 suppress_processing_message = True
                 flash('Sample submitted successfully!', category='success')
             # `analyze.compare_function` asks for the parent sample's job but wants the
@@ -1319,7 +1847,7 @@ def job_by_id(job_id):
             if filtered_function_id is not None:
                 return redirect(url_for('data.result', job_id=job_id, funid=filtered_function_id))
             return redirect(url_for('data.result', job_id=job_id))
-    if 'addBinarySample' in job_info.parameters and not suppress_processing_message and auto_refresh:
+    if 'addBinarySample' in parameters and not suppress_processing_message and auto_refresh:
         flash('We received your sample, currently processing!', category='info')
     # the dependencies in a few requests, see `dependency_jobs`. One can be gone by the
     # time this page is opened - deleted through this app's own job delete, which also
@@ -1332,10 +1860,51 @@ def job_by_id(job_id):
     child_jobs = sorted(resolved_children, key=lambda x: x.number)
     samples_by_id = {}
     families_by_id = {}
-    if child_jobs:
-        samples_by_id.update(get_sample_entries(sample_id for job in child_jobs for sample_id in job.sample_ids or []))
-        families_by_id.update(get_family_entries(job.family_id for job in child_jobs if job.family_id is not None))
-    return render_template('job_overview.html', families=families_by_id, samples=samples_by_id, job_info=job_info, auto_refresh=auto_refresh, child_jobs=child_jobs, missing_children=missing_children)
+    # A child whose own payload cannot be read must not take its parent's page down:
+    # the lookups below read that payload, and so does the row macro. Both degrade to
+    # the one row rather than the page - a cross compare's children are the jobs it did
+    # the work in, so dropping one would misreport what it ran (#115).
+    described_children = describable_jobs(child_jobs)
+    if described_children:
+        samples_by_id.update(get_sample_entries(sample_id for job in described_children for sample_id in job.sample_ids or []))
+        families_by_id.update(get_family_entries(job.family_id for job in described_children if job.family_id is not None))
+    # only a page that will poll needs it, so a finished job's page never reads it
+    job_state = job_overview_state(job_info) if auto_refresh > 0 and not job_info.finished_at else None
+    return render_template('job_overview.html', families=families_by_id, samples=samples_by_id, job_info=job_info, job_state=job_state, auto_refresh=auto_refresh, child_jobs=child_jobs, missing_children=missing_children, can_rerun=is_rerunnable(job_info, child_jobs), configuration_url=configuration_url(job_info, child_jobs))
+
+
+def job_overview_state(job_info):
+    """What the overview of a running job shows that can still change, read off the job
+    alone - without its sub-jobs or the samples and families they name.
+
+    The overview polls `job_status` for this and reloads once the answer differs from
+    what it rendered. A reload fetches every sub-job and every sample they name, so it
+    should happen when there is something new to show, not on every tick. See #183.
+    """
+    return {
+        "started": job_info.started_at is not None,
+        "finished": job_info.finished_at is not None,
+        "failed": job_info.is_failed,
+        "progress": job_info.progress,
+        # the queue drops a sub-job from this list when it finishes, and also when it
+        # fails for good (out of attempts, whether by its own error or by a dead worker),
+        # so this counts the sub-jobs still to settle without asking for any of them. It
+        # is in the job document the backend sends, but mcrit's Job has no property for
+        # it, so it is read defensively: a Job without it costs this one reload trigger,
+        # not the page.
+        "unfinished_sub_jobs": len(getattr(job_info, "_data", {}).get("unfinished_dependencies") or []),
+    }
+
+
+@bp.route('/jobs/<job_id>/status')
+@visitor_required
+@mcrit_server_required
+def job_status(job_id):
+    """The job overview's polling endpoint: one getJobData, as JSON."""
+    job_info = get_client().getJobData(job_id)
+    if job_info is None:
+        return {"error": "unknown job"}, 404
+    return job_overview_state(job_info)
 
 
 #: job ids per `getQueueData(job_ids=...)` request. The ids travel in the query string,
@@ -1393,6 +1962,374 @@ def delete_job_by_id(job_id):
         client.deleteJob(job_id)
     return redirect(url_for("data.jobs"))
     
+
+
+################################################################
+# Rerunning a job
+################################################################
+#
+# A job records the call that produced it: payload["params"] is a JSON object of the
+# arguments the backend method was called with, keyed by position ("0", "1", ...) for
+# the positional ones and by name for the rest - see mcrit's QueueRemoteCalls. That is
+# enough to submit the same request again, but only where "the same request" is still
+# a well-defined thing to ask for, so the mapping below is deliberately short:
+#
+#   * the query methods (getMatchesForSmdaReport and the two binary ones) are left out
+#     because the binary they matched lives in the backend's GridFS. The job holds a
+#     reference to it, not the bytes, and McritClient cannot resubmit from a reference.
+#   * getUniqueBlocks is left out because neither of its request methods takes
+#     force_recalculation, so repeating one is answered from the cache with the very
+#     job being looked at.
+#   * the collection and minhashing methods are left out because they are not analyses
+#     to repeat - deleteSample and deleteFamily destroy, addBinarySample has no binary
+#     to resend, and the maintenance jobs have their own buttons on the admin page.
+#
+# Reconstructing the wrong request would be worse than offering no button: the user
+# would believe they had rerun what is on screen. So every step below refuses rather
+# than guesses, and a parameter that cannot be read disqualifies the whole rerun
+# instead of being dropped from it.
+
+#: job method -> the McritClient method that submits it again.
+RERUNNABLE_METHODS = {
+    "getMatchesForSample": "requestMatchesForSample",
+    "getMatchesForSampleVs": "requestMatchesForSampleVs",
+    "combineMatchesToCross": "requestMatchesCross",
+}
+
+#: The matching parameters mcrit stores on a job under their own name; McritClient
+#: takes them back as keywords of the same name. force_recalculation is deliberately
+#: not among them - QueueRemoteCalls consumes it before the payload is written, so no
+#: job records whether it was forced.
+#:
+#: Since mcrit 1.13 a job carries every one of these that applies to it, not only the
+#: ones its request named: the backend fills in the rest from its configuration before
+#: queueing (`resolveMatchingParams` in mcrit/index/MatchingParameters.py, called from
+#: `MinHashIndex._submitMatchingJob` and `server/utils.py` `getMatchingParams`). A
+#: match restricted to the samples it names (1 vs 1, 1 vs group) takes no shortlist and
+#: carries none, hence the two lists.
+RERUN_MATCHING_PARAMS = ("minhash_threshold", "pichash_size", "band_matches_required", "band_df_cutoff", "shortlist_size")
+RESTRICTED_MATCHING_PARAMS = ("minhash_threshold", "pichash_size", "band_matches_required", "band_df_cutoff")
+
+#: The matching parameters each method takes back. McritClient's requestMatchesForSample
+#: takes all of them; requestMatchesForSampleVs and requestMatchesCross take no
+#: shortlist_size (mcrit 1.16 McritClient.py:811-875).
+METHOD_MATCHING_PARAMS = {
+    "getMatchesForSample": RERUN_MATCHING_PARAMS,
+    "getMatchesForSampleVs": RESTRICTED_MATCHING_PARAMS,
+    "getMatchesForSampleVsGroup": RESTRICTED_MATCHING_PARAMS,
+}
+
+#: Recorded on a job but never sent: the backend marks a job whose shortlist it could
+#: not apply when it was queued (`shortlist_unavailable`), and no client call takes
+#: it. A rerun leaves it out, and the backend marks the new job again if the shortlist
+#: still cannot be applied.
+DERIVED_MATCHING_PARAMS = ("shortlist_unavailable",)
+
+#: The value a backend gives the knobs the analyze forms have no control for, unless
+#: its deployment configures another: mcrit's own defaults, unchanged from 1.12 to
+#: 1.16 (MinHashConfig.py:23, :32, :82, StorageConfig.py STORAGE_BAND_DF_CUTOFF).
+FORM_DEFAULT_MATCHING_PARAMS = {
+    "minhash_threshold": MinHashConfig.MINHASH_MATCHING_THRESHOLD,
+    "pichash_size": MinHashConfig.PICHASH_SIZE,
+    "band_df_cutoff": StorageConfig.STORAGE_BAND_DF_CUTOFF,
+    "shortlist_size": MinHashConfig.MINHASH_MATCHING_SHORTLIST_SIZE,
+}
+
+#: The two child methods a cross compare is built from, and what each one means for
+#: `sample_group_only` - the only place that choice survives.
+CROSS_CHILD_METHODS = {"getMatchesForSample": False, "getMatchesForSampleVsGroup": True}
+
+#: How many positional arguments each of those backend methods takes, so that a
+#: payload carrying one this does not know about can be recognised as such. Together
+#: with METHOD_MATCHING_PARAMS and DERIVED_MATCHING_PARAMS this is the complete
+#: parameter list of each method as of mcrit 1.16 (MATCHING_KNOBS in
+#: mcrit/index/MatchingParameters.py) - a version that records a further one has to
+#: be handled here, and until it is, the rerun is withheld rather than submitted
+#: without it.
+METHOD_ARITY = {
+    "getMatchesForSample": 1,
+    "getMatchesForSampleVs": 2,
+    "getMatchesForSampleVsGroup": 2,
+    "combineMatchesToCross": 1,
+}
+
+
+def job_params(job_info):
+    """A job's own parameters as {index_or_name: value}, or None if unreadable.
+
+    `Job.arguments` parses the same payload but raises on anything that is not the
+    JSON object it expects, and deciding whether to offer a rerun must not be able to
+    take the job page down.
+    """
+    try:
+        payload = job_info.payload
+    except (AttributeError, KeyError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        params = json.loads(payload.get("params", ""))
+    except (TypeError, ValueError):
+        return None
+    return params if isinstance(params, dict) else None
+
+
+def as_job_int(value):
+    """An integer parameter, or None. A bool is an int in Python and never one of these."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def matching_kwargs(params, method):
+    """The named matching parameters of a job, or None if they cannot all be honoured.
+
+    Unreadable is one way to get None; the other is a parameter this does not know
+    about, positional or named. Both would otherwise be quietly left out of the
+    resubmitted call, which is how a rerun ends up being a *different* comparison than
+    the one on screen - so either disqualifies the job instead.
+    """
+    accepted = METHOD_MATCHING_PARAMS[method]
+    known = set(accepted) | set(DERIVED_MATCHING_PARAMS) | {str(position) for position in range(METHOD_ARITY[method])}
+    if set(params) - known:
+        return None
+    kwargs = {}
+    for name in accepted:
+        if name in params:
+            value = as_job_int(params[name])
+            if value is None:
+                return None
+            kwargs[name] = value
+    return kwargs
+
+
+def cross_rerun_request(params, child_jobs):
+    """The requestMatchesCross call behind a combineMatchesToCross job, or None.
+
+    That job records only {sample_id: child_job_id}. Which comparison ran is the
+    choice between the two child methods, and the matching parameters exist only on
+    the children - so a rerun is offered exactly when every child named in the mapping
+    is still there and they all agree.
+    """
+    # this method takes the mapping and nothing else, so anything further in the
+    # payload is a parameter that would be lost on the way back out
+    if set(params) != {"0"}:
+        return None
+    sample_to_job_id = params["0"]
+    if not isinstance(sample_to_job_id, dict) or not sample_to_job_id:
+        return None
+    children_by_id = {}
+    for child in child_jobs or []:
+        try:
+            children_by_id[child.job_id] = child
+        except (AttributeError, KeyError, TypeError):
+            continue
+    sample_ids = []
+    methods = set()
+    child_kwargs = []
+    for sample_key, child_job_id in sample_to_job_id.items():
+        try:
+            sample_ids.append(int(sample_key))
+        except (TypeError, ValueError):
+            return None
+        child = children_by_id.get(child_job_id)
+        child_params = job_params(child) if child is not None else None
+        if child_params is None or child.method not in CROSS_CHILD_METHODS:
+            return None
+        methods.add(child.method)
+        kwargs = matching_kwargs(child_params, child.method)
+        if kwargs is None:
+            return None
+        # mcrit's getMatchesCross asks its 1-vs-corpus children for no shortlist, as
+        # shortlist_size=0 (MinHashIndex.py:562-573 in 1.16), and requestMatchesCross
+        # takes none. Any other size is not a child a cross compare makes.
+        if kwargs.pop("shortlist_size", 0) != 0:
+            return None
+        child_kwargs.append(kwargs)
+    if len(methods) != 1 or any(kwargs != child_kwargs[0] for kwargs in child_kwargs):
+        return None
+    sample_group_only = CROSS_CHILD_METHODS[methods.pop()]
+    return client_takes(RERUNNABLE_METHODS["combineMatchesToCross"], (sample_ids,), dict(child_kwargs[0], sample_group_only=sample_group_only))
+
+
+def client_takes(method_name, args, kwargs):
+    """(method_name, args, kwargs) if the installed McritClient takes these keywords, else None.
+
+    requirements.txt allows mcrit 1.12, whose request methods take neither
+    band_df_cutoff nor shortlist_size, and a 1.13 or later backend records both. That
+    client would raise a TypeError on the rerun; leaving a knob out instead would run
+    another comparison than the one on screen.
+    """
+    try:
+        parameters = inspect.signature(getattr(McritClient, method_name)).parameters
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if not any(parameter.kind is parameter.VAR_KEYWORD for parameter in parameters.values()):
+        if not set(kwargs) | {"force_recalculation"} <= set(parameters):
+            return None
+    return method_name, args, kwargs
+
+
+def rerun_request(job_info, child_jobs=None):
+    """The McritClient call that reproduces `job_info`, as (method_name, args, kwargs).
+
+    None means this job has no rerun: either its method is not one of the three above,
+    or its stored parameters do not describe the original request completely.
+    """
+    if job_info is None:
+        return None
+    params = job_params(job_info)
+    if params is None or job_info.method not in RERUNNABLE_METHODS:
+        return None
+    if job_info.method == "combineMatchesToCross":
+        return cross_rerun_request(params, child_jobs)
+    kwargs = matching_kwargs(params, job_info.method)
+    if kwargs is None:
+        return None
+    sample_ids = [as_job_int(params.get(str(position))) for position in range(METHOD_ARITY[job_info.method])]
+    if any(sample_id is None for sample_id in sample_ids):
+        return None
+    return client_takes(RERUNNABLE_METHODS[job_info.method], tuple(sample_ids), kwargs)
+
+
+def has_run_its_course(job_info):
+    """Whether a job is finished or failed, as opposed to queued or in progress.
+
+    Forcing a recalculation of a job that is still running queues the same work a
+    second time, so this gates both the button and the route that button posts to.
+    Withholding the button alone would only hide the door - the POST is reachable
+    without it.
+    """
+    if job_info is None:
+        return False
+    try:
+        return job_info.finished_at is not None or bool(job_info.is_failed)
+    except (AttributeError, KeyError, TypeError):
+        # a record that does not carry the fields is not one to rerun either
+        return False
+
+
+def is_rerunnable(job_info, child_jobs=None):
+    """Whether to offer a rerun of this job on its page."""
+    if not has_run_its_course(job_info):
+        return False
+    return rerun_request(job_info, child_jobs) is not None
+
+
+def configuration_url(job_info, child_jobs=None):
+    """The analyze page this job was submitted from, with its inputs filled in.
+
+    Issue #55's other half: from a finished job back to the form behind it, so the
+    parameters can be changed and the job resubmitted rather than retyped. Built on
+    `rerun_request` so there is one recovery of a job's arguments and not two - a job
+    whose request cannot be rebuilt faithfully gets no link here either.
+
+    Preselecting is not the same as passing the ids along. `analyze.compare` and
+    `analyze.compare_versus` highlight a row only when the sample is on the search
+    page in front of them, and compare.html falls back to selecting the *first* row
+    when it is not - so a bare `selected=` would quietly point the form at a
+    different sample. Each link therefore also carries the search that puts the
+    sample on the page: searching a sample id makes mcrit answer with that sample
+    (`id_match`), regardless of where it would otherwise fall in the paging.
+
+    None means no link at all, which is the honest answer whenever the form cannot
+    represent the job it claims to be showing.
+
+    Not gated on the job having finished, unlike the rerun: following a link queues
+    nothing, and reopening the form of a job still in the queue to submit a variation
+    of it is a reasonable thing to want.
+    """
+    request_to_repeat = rerun_request(job_info, child_jobs)
+    if request_to_repeat is None:
+        return None
+    method_name, args, kwargs = request_to_repeat
+    kwargs = dict(kwargs)
+    sample_group_only = kwargs.pop("sample_group_only", False)
+    # `band_matches_required` is the only matching parameter these forms have a
+    # control for (analyze.py `start_cross_compare`, `compare_all` and `compare_vs`
+    # send only it). Submitting one leaves the others to the backend, which from
+    # mcrit 1.13 on records them on every job, filled in from its configuration
+    # (`resolveMatchingParams`). So a job may carry them at mcrit's defaults, which
+    # is what the form gets again; one that ran with another value cannot be shown
+    # on the form. A job carrying no band_matches_required took the backend's own
+    # default rather than a slider position, which the slider - which always submits
+    # one - cannot reproduce either.
+    if "band_matches_required" not in kwargs:
+        return None
+    if any(kwargs[name] != FORM_DEFAULT_MATCHING_PARAMS[name] for name in kwargs if name != "band_matches_required"):
+        return None
+    slider_position = slider_position_for_band_range(kwargs["band_matches_required"])
+    if slider_position is None:
+        return None
+    # `rematch` is left at each page's default: force_recalculation is consumed by
+    # QueueRemoteCalls before the payload is written, so no job records whether it
+    # was forced and preselecting either way would be an invention.
+    if method_name == "requestMatchesCross":
+        return url_for('analyze.cross_compare', samples=",".join(str(sample_id) for sample_id in args[0]),
+                       onlySelected="true" if sample_group_only else "false", minhashBandRange=slider_position)
+    if method_name == "requestMatchesForSample":
+        return url_for('analyze.compare', query=args[0], selected=args[0], minhashBandRange=slider_position)
+    if method_name == "requestMatchesForSampleVs":
+        return url_for('analyze.compare_versus', query_a=args[0], selected_a=args[0],
+                       query_b=args[1], selected_b=args[1], minhashBandRange=slider_position)
+    # a method added to RERUNNABLE_METHODS has to say which form preselects it, and
+    # how, before it can be linked to one
+    return None
+
+
+@bp.route('/jobs/<job_id>/rerun', methods=('POST',))
+@visitor_required
+@mcrit_server_required
+def rerun_job_by_id(job_id):
+    """Submit the request a job was created from once more.
+
+    POST only, like every other route that changes something: this queues backend work
+    and an <img> tag or a prefetch must not be able to start it (issue #84).
+
+    Visitor, because it grants nothing a visitor does not already have - the same three
+    requests are reachable from /analyze/compare/<id>, /analyze/compare/<a>/<b> and
+    /analyze/start_cross_compare, `rematch` included.
+
+    Nothing from the request is forwarded to the backend except `job_id` itself, which
+    goes to the same getJobData that `job_by_id` already calls for any visitor. What is
+    submitted is rebuilt here from the stored job, not from anything the caller sent.
+    """
+    client = get_client()
+    job_info = client.getJobData(job_id)
+    if job_info is None:
+        flash('There is no job with that id.', category='error')
+        return redirect(url_for('data.jobs'))
+    if not has_run_its_course(job_info):
+        # the button is withheld for a job that is still running, but withholding it
+        # only hides the door: this POST is reachable without it, and forcing a
+        # recalculation here would queue the same work alongside the run in progress
+        flash('This job has not finished yet - wait for it rather than running it twice.', category='error')
+        return redirect(url_for('data.job_by_id', job_id=job_id))
+    child_jobs = None
+    if job_info.method == "combineMatchesToCross":
+        # only this one method needs them, so the round trips are not spent on the
+        # other two. `all_dependencies` is a bare lookup in mcrit's Job and raises for
+        # a record that does not carry the field. Read in batches, as `job_by_id`
+        # reads them; a child that is gone is missing from the answer, and
+        # `cross_rerun_request` refuses a mapping that names it.
+        try:
+            dependencies = job_info.all_dependencies
+        except (KeyError, TypeError):
+            dependencies = None
+        child_jobs = dependency_jobs(client, list(dict.fromkeys(dependencies))) if isinstance(dependencies, list) else []
+    request_to_repeat = rerun_request(job_info, child_jobs)
+    if request_to_repeat is None:
+        flash('This job cannot be rerun: its original request is not fully recorded.', category='error')
+        return redirect(url_for('data.job_by_id', job_id=job_id))
+    method_name, args, kwargs = request_to_repeat
+    # Forced, or mcrit answers from its descriptor cache with the job we started from
+    # and the rerun is indistinguishable from a reload. This is the deliberate opposite
+    # of the analyze routes, which must stay cacheable because they write on GET (#97).
+    new_job_id = getattr(client, method_name)(*args, force_recalculation=True, **kwargs)
+    if not new_job_id:
+        flash('The backend did not accept the rerun; the samples it needs may be gone.', category='error')
+        return redirect(url_for('data.job_by_id', job_id=job_id))
+    return redirect(url_for('data.job_by_id', job_id=new_job_id, refresh=3))
 
 
 ################################################################
