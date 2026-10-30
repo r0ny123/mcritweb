@@ -88,11 +88,12 @@ def create_app(test_config=None, instance_path=None):
     # import - including a test that only wants a pure-python helper. See issue #88.
     from flask_dropzone import Dropzone
 
-    from . import db, manual
+    from . import backend_errors, db, manual
     from .csrf import CsrfProtect
-    from .jobnames import job_method_name, job_task
+    from .jobnames import folded_sample_ids, job_method_name, job_task, unique_blocks_samples
     from .search_highlighting import get_highlight_terms, split_search_matches
     from .secret_key import INSECURE_DEFAULT, load_or_create_secret_key
+    from .theme import theme_context
     from .views import administration, analyze, api, authentication, data, explore
     from .views.client import get_client, get_family_entries, get_sample_entries, remember_samples
     from .views.matching_statistics import matching_statistics
@@ -134,6 +135,16 @@ def create_app(test_config=None, instance_path=None):
         # uncapped beyond MAX_CONTENT_LENGTH. Issue #19: this was hardcoded at 1 MiB for
         # visitors, which is the right default but the wrong place for it.
         QUERY_UPLOAD_LIMITS={'visitor': 1 * 2**20},
+        # Whether the API still accepts the pre-1.5.0 (32-character) API tokens. Issue
+        # #250 retired them deliberately rather than leaving them valid forever: flip
+        # this to False in instance/config.py to answer them with a 403 that says why.
+        # The default stays True for one release so operators can warn their users
+        # first - the settings page and the admin users page now point those out.
+        ACCEPT_LEGACY_APITOKENS=True,
+        # Bytes of a control flow graph that /explore/findLoops/ reads to look for loops.
+        # A larger body is answered unread, without loops, and the graph is drawn without
+        # them. A real 8000-block graph, the most loop analysis takes, is a few MB.
+        FIND_LOOPS_MAX_BYTES=32 * 2**20,
         # Seconds to reuse the backend reachability answer for. `mcrit_server_required`
         # is on 36 routes and probed on every request to each of them, so a page load
         # could pay for several round-trips to say the same thing (issue #89). Short
@@ -268,6 +279,8 @@ def create_app(test_config=None, instance_path=None):
     app.register_blueprint(administration.bp)
     app.register_blueprint(data.bp)
     app.register_blueprint(api.bp)
+    # a failed backend call answers with a page saying so, not a stack trace (#43)
+    backend_errors.register(app)
     app.config['MCRITWEB_VERSION'] = get_mcritweb_version_from_setup()
     app.config['DROPZONE_DEFAULT_MESSAGE'] = "Drop file or click here to import"
     app.config['DROPZONE_ALLOWED_FILE_CUSTOM'] = True
@@ -314,6 +327,12 @@ def create_app(test_config=None, instance_path=None):
     def job_task_filter(job):
         return job_task(job)
 
+    # the jobs list and the result page name a unique blocks job's samples the way its
+    # Task row does (issue #300)
+    app.add_template_filter(unique_blocks_samples, 'unique_blocks_samples')
+    # and the ids that line folds, which the Task row lists under it
+    app.add_template_filter(folded_sample_ids, 'folded_sample_ids')
+
     @app.template_filter('date')
     def date(input):
         if isinstance(input, datetime.datetime):
@@ -331,6 +350,13 @@ def create_app(test_config=None, instance_path=None):
     def date_time(input):
         return input[:10] + ' ' + input[11:19]
     
+
+    # the colour theme (#70): load_logged_in_user resolves it onto g.theme, and every
+    # template - base.html above all - renders it from these. A page rendered before that
+    # hook ran, or without a request, gets the default.
+    @app.context_processor
+    def colour_theme():
+        return theme_context(getattr(g, "theme", db.DEFAULT_THEME))
 
     @app.template_global()
     def join_hint_strings(list_of_strings):

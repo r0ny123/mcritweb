@@ -13,7 +13,7 @@
     {% if name_and_sample[1].sample_id is not none and name_and_sample[1].sample_id >= 0 %}{% set identity.is_stored = true %}{% endif %}
   {% endfor %}
   <table class="table table-hover">
-    <thead class="thead-light">
+    <thead class="table-light">
       <tr>
         <th scope="col">Field</th>
         {% for name_and_sample in varargs %}
@@ -39,7 +39,7 @@
           <td valign="middle">
             {{ name_and_sample[1].version or "-" }} | 
             {{ name_and_sample[1].component or "-" }} | 
-            <i {% if name_and_sample[1].is_library %} style="color:green;" class="fa-solid fa-square-check" {% else %} style="color:darkred;" class="fa-solid fa-times-circle" {% endif %}></i></td>
+            <i {% if name_and_sample[1].is_library %} style="color: var(--status-yes);" class="fa-solid fa-square-check" {% else %} style="color: var(--status-no);" class="fa-solid fa-times-circle" {% endif %}></i></td>
           {% else %}
           {# a query has none of these; an empty cell keeps the row aligned without
              claiming the queried binary is not a library, which we do not know #}
@@ -89,7 +89,7 @@
 
 {% macro function_column_table()%}
   <table class="table table-hover">
-    <thead class="thead-light">
+    <thead class="table-light">
       <tr>
         <th scope="col">Field</th>
         {% for name_fe_se_ph in varargs %}
@@ -139,7 +139,7 @@
           {% for label_entry in name_fe_se_ph[1].function_labels|sort(attribute='timestamp', reverse=True) %}
             <p>
               {{ label_entry.function_label }}<br />
-              <span style="font-size: 0.7em; color: #6c757d;">
+              <span style="font-size: 0.7em; color: var(--text-muted);">
                 {{ label_entry.username }} | {{ label_entry.timestamp }}
               </span>
             </p>
@@ -184,12 +184,12 @@
         {% for name_fe_se_ph in varargs %}
           <td valign="middle">
             {% if name_fe_se_ph[1].minhash|length > 0 %}
-              <i style="color:green;" class="fa-solid fa-square-check" title="MinHash available"></i>
+              <i style="color: var(--status-yes);" class="fa-solid fa-square-check" title="MinHash available"></i>
               <span class="font-monospace">{{ name_fe_se_ph[1].minhash.hex()[:16] }}&hellip;</span> {{ clipboard_btn(name_fe_se_ph[1].minhash.hex()) }}
               ({{ name_fe_se_ph[1].minhash|length // 4 }} x 32 bit)
             {% else %}
-              <i style="color:darkred;" class="fa-solid fa-times-circle" title="No MinHash"></i> not calculated
-              <span style="font-size: 0.8em; color: #6c757d;">(too small to be minhashed, or the MinHash job has not run yet)</span>
+              <i style="color: var(--status-no);" class="fa-solid fa-times-circle" title="No MinHash"></i> not calculated
+              <span style="font-size: 0.8em; color: var(--text-muted);">(too small to be minhashed, or the MinHash job has not run yet)</span>
             {% endif %}
           </td>
         {% endfor %}
@@ -209,7 +209,18 @@
         {# the readable form; the RPC call the queue recorded stays reachable as the tooltip (issue #40).
            It reaches the job overview and every result page through this macro, and a long one
            widens the page the way the raw string did, so it keeps the wrapping class (issue #41). #}
-        <td valign="middle" class="job-description" title="{{ job_info.parameters }}">{{ job_info|job_task }}</td>
+        {% set folded_ids = job_info|folded_sample_ids %}
+        <td valign="middle" class="job-description" title="{{ job_info.parameters }}">
+          {%- if folded_ids -%}
+            {#- a unique blocks job's samples, folded into ranges or a count: the line opens into
+                every one of them, since touch and the keyboard cannot reach a title (issue #300) -#}
+            <details><summary>{{ job_info|job_task }}</summary>
+              {%- for sample_id in folded_ids %}{% if sample_id is integer %}{{ format_sample_id(sample_id) }}{% else %}{{ sample_id }}{% endif %}{{ ", " if not loop.last }}{% endfor -%}
+            </details>
+          {%- else -%}
+            {{ job_info|job_task }}
+          {%- endif -%}
+        </td>
       </tr>
       {# the band setting is already in the Task row above, but only as an unlabelled
          trailing number - getMatchesForSample(0, 2) reads like a second sample id.
@@ -263,7 +274,7 @@
             {% if job_info.finished_at %}
               {{ job_info.finished_at|date_time }}
             {% elif job_info.is_failed %}
-              Failed</td>
+              Failed
             {% else %}
               This job hasn't finished yet
             {% endif %}

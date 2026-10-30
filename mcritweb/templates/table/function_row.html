@@ -5,7 +5,8 @@
 {% macro function_row_std_js() %}
 <script>
   $(document).ready(function(){
-    $("tr.function-row").click(function(){
+    // delegated, so rows a live search (live_search.js) swaps in follow too
+    $(document).on("click", "tr.function-row", function(){
       var function_id = $(this).children("th.function-id").text();
       window.location.href="{{ url_for('explore.functions') }}"+ "/" + function_id;
     });
@@ -26,15 +27,15 @@
     {% for column_type in column_setup %}
       {% if column_type == "function_id" %}
         {% call sortable_header_col(sort_pagination, "function_id") %}
-          <i class="fa-solid fa-project-diagram " title="Function ID"></i>
+          <i class="fa-solid fa-project-diagram " title="Function ID" aria-hidden="true"></i><span class="visually-hidden">Function ID</span>
         {% endcall %}
       {% elif column_type == "family_id" and not for_sample_view %}
         {% call sortable_header_col(sort_pagination, "family_id") %}
-          <i class="fa-solid fa-bug " title="Family ID"></i>
+          <i class="fa-solid fa-bug " title="Family ID" aria-hidden="true"></i><span class="visually-hidden">Family ID</span>
         {% endcall %}
       {% elif column_type == "sample_id" and not for_sample_view %}
         {% call sortable_header_col(sort_pagination, "sample_id") %}
-          <i class="fa-solid fa-virus " title="Sample ID"></i>
+          <i class="fa-solid fa-virus " title="Sample ID" aria-hidden="true"></i><span class="visually-hidden">Sample ID</span>
         {% endcall %}
       {% elif column_type == "pic_hash" %}
         <th style="text-align: right;" scope="col">Pichash</th>
@@ -58,7 +59,7 @@
         {% endcall %}
       {% endif %}
     {% endfor %}
-    <th scope="col"></th>
+    <th scope="col"><span class="visually-hidden">Actions</span></th>
   </tr>
 {% endmacro %}
       
@@ -67,7 +68,7 @@
   {% if column_setup is none %}
     {% set column_setup = ["function_id", "family_id", "sample_id", "pic_hash", "has_minhash", "offset", "function_name", "num_instructions", "num_blocks"] %}
   {% endif %}
-  <tr class="function-row parent_{{ kwargs['parent'] }}"{{ row_tint(row_decorations, function.function_id) }} >
+  <tr class="function-row parent_{{ kwargs['parent'] }}{{ row_tint(row_decorations, function.function_id) }}" >
     {{ badge_column_cell(row_decorations, function.function_id) }}
     {% for column_type in column_setup %}
       {% if column_type == "function_id" %}
@@ -79,7 +80,7 @@
       {% elif column_type == "pic_hash" %}
         <td align="right" valign="middle" class="font-monospace">{{ format_pichash(function.pichash) }}</td>
       {% elif column_type == "has_minhash" %}
-        <td align="center" valign="middle"><i {% if function.minhash|length > 0 %}style="color:green;" class="fa-solid fa-square-check" title="MinHash present"{% else %}style="color:darkred;" class="fa-solid fa-times-circle" title="No MinHash"{% endif %}></i></td>
+        <td align="center" valign="middle"><i {% if function.minhash|length > 0 %}style="color: var(--status-yes);" class="fa-solid fa-square-check" title="MinHash present"{% else %}style="color: var(--status-no);" class="fa-solid fa-times-circle" title="No MinHash"{% endif %}></i></td>
       {% elif column_type == "offset" %}
         <td align="right" valign="middle" class="font-monospace">{{ format_offset(function.offset) }}</td>
       {% elif column_type == "function_name" %}
